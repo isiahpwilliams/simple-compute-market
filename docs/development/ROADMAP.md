@@ -337,9 +337,15 @@ not carry; what a storefront sells and charges stays the storefront's, and
 whether listings are comparable across sellers is the registry operator's to
 enforce. That vocabulary gap is why it is a domain rather than a field.
 
-**Current state.** Nothing supports it. There is no `inference` domain
-identity, registry schema identity, filter specification, or offering mode, and
-no usage vocabulary anywhere in the repository. The nearest thing is API
+**Current state.** The vocabulary exists and nothing runs it.
+`arkhai-inference-domain` defines the `inference.v1` contract: a model card
+carrying a seller-asserted `model_id` with a derivation rule sellers should
+share, a rate card in base units of the settlement asset, provenance, an
+enumerated quantization, and an opaque attestation envelope nothing verifies;
+purchase priced at one base unit per credit; the usage record and its
+deterministic charge; secret-free signed usage evidence; and the `inference`
+filter specification, which the registry image carries. No storefront,
+authority, gateway, buyer plugin, stack, or deal exists yet. The nearest thing is API
 credits, which sells prepaid finite units for a named service and consumes one
 configured fixed amount per admitted request; its architecture companion records
 that variable-cost metering is not established. The vLLM API-credits cookbook

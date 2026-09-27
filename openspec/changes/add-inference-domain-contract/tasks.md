@@ -13,17 +13,17 @@ asset). The tasks remain as the record; no open gate remains in this change.
 
 ## 1. Domain identity and listing vocabulary
 
-- [ ] 1.1 Confirm by inspection, before writing anything, that `design.md`'s
+- [x] 1.1 Confirm by inspection, before writing anything, that `design.md`'s
       "Context" table still holds on the target branch: no `inference` identity,
       schema, or filter specification exists; `consume` still takes a variable
       `amount`; the digest strings in `credits_client.py` and `keys_model.py`
       are still literal; `RateValue.per` is still a free string. Record drift in
       `design.md` rather than working around it.
-- [ ] 1.2 Create `domains/inference/` with `__init__.py`, `pyproject.toml`
+- [x] 1.2 Create `domains/inference/` with `__init__.py`, `pyproject.toml`
       (`arkhai-inference-domain`, hatchling, `force-include` of every module as
       the API-credits domain wheel does), and a `tests/` root. Depend on
       `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-policy`, `pydantic`.
-- [ ] 1.3 `domains/inference/listings/models.py`: `INFERENCE_KIND =
+- [x] 1.3 `domains/inference/listings/models.py`: `INFERENCE_KIND =
       "inference.v1"`, `INFERENCE_OFFERING_MODE = "inference"`, and the
       `InferenceModelCard` model (`listing_resource` payload) with `model_id`
       (non-empty; characters restricted to what a filter path can carry, no
@@ -33,7 +33,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
       principal), `provenance` (required, `self-hosted` | `resold`),
       `attestation` (optional `{kind, schema_version, payload}` envelope, opaque),
       `served_model_name`, `model_family`, `context_length` (positive int),
-      `max_completion_tokens` (optional positive int), `quantization`,
+      `max_completion_tokens` (optional positive int),
       `architecture` (`modality`, `tokenizer`, `instruct_type`),
       `supported_parameters` (list of non-empty strings), `quantization` as an
       enumeration (`none`, `fp16`, `bf16`, `fp8`, `int8`, `int4`, `awq`,
@@ -43,7 +43,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
       `offering_mode` pinned to `inference`. `extra="forbid"`. Include the
       `coerce_resource_dict` and `resource_is_inference` helpers on the
       API-credits pattern.
-- [ ] 1.3a `domains/inference/listings/identity.py`: `derive_model_id(...)`,
+- [x] 1.3a `domains/inference/listings/identity.py`: `derive_model_id(...)`,
       a pure function implementing the derivation rule — public upstream owner
       and repository lowercased with revision, branch, and quantization
       suffixes stripped; the owner's namespace for private weights; the
@@ -51,12 +51,12 @@ asset). The tasks remain as the record; no open gate remains in this change.
       inputs for the same weights derive the same identifier and that the
       three suffix kinds are stripped. Sellers and the seller path call it; the
       card does not require it.
-- [ ] 1.4 `domains/inference/schema.py`: `InferenceListing` (kind,
+- [x] 1.4 `domains/inference/schema.py`: `InferenceListing` (kind,
       `listing_resource`, `accepted_escrows`, `settlement_options`, `demands`)
       with the same before-validator that normalizes a wheel-boundary model back
       to its wire form, duplicate-option-id rejection, and the required-field
       rejection the spec's "One listing is one served model" scenario names.
-- [ ] 1.5 Focused tests (`tests/test_listing_models.py`): a complete card
+- [x] 1.5 Focused tests (`tests/test_listing_models.py`): a complete card
       validates; each comparison field missing is rejected with the field named;
       `offering_mode` other than `inference` is rejected; `api_style` other than
       `openai.v1` is rejected; a listing round-trips through JSON text as the
@@ -67,9 +67,15 @@ asset). The tasks remain as the record; no open gate remains in this change.
       validate independently; a card with and without the `attestation`
       envelope validate identically; a card naming a `model_owner` validates.
 
+Done 2026-09-27: premises re-verified on `dev` at `29b84d82` with no drift;
+`domains/inference/listings/{models,identity}.py`, `schema.py`; 56 focused
+tests. `model_id` admits uppercase by design (seller-asserted); `resource_id`
+is optional on the card as on the API-credits resource, the publication path
+sets it. The rate card model landed here because the card requires it.
+
 ## 2. Rate card and pricing arithmetic
 
-- [ ] 2.1 `domains/inference/listings/models.py`: `InferenceRateCard` with
+- [x] 2.1 `domains/inference/listings/models.py`: `InferenceRateCard` with
       `prompt_credits_per_million`, `completion_credits_per_million`
       (non-negative int, required), `request_credits` (non-negative int, default
       0), `cached_prompt_credits_per_million` and `image_credits_per_unit`
@@ -77,45 +83,53 @@ asset). The tasks remain as the record; no open gate remains in this change.
       listing's settlement asset. Strict integer validation: `bool`, `float`,
       and numeric strings are rejected, matching `checked_credit_total`'s
       posture in the API-credits pricing module.
-- [ ] 2.2 `domains/inference/listings/pricing.py`: `selected_unit_price` and
+- [x] 2.2 `domains/inference/listings/pricing.py`: `selected_unit_price` and
       `extract_unit_price_from_order` accepting `per: credit` with a value of
       exactly `1` and refusing any other value or unit; the reference payment
       equals `quantity`, with the uint256 overflow guard;
       `determine_strategy_from_order` returning `maximize` for inference
       listings. Copied from the API-credits module and narrowed, not imported.
-- [ ] 2.3 Focused tests (`tests/test_pricing.py`): a unit rate scales to
+- [x] 2.3 Focused tests (`tests/test_pricing.py`): a unit rate scales to
       `quantity`; a per-credit rate other than one is rejected; `per: hour` and
-      `per: token` rejected; overflow rejected; hidden-reserve fallback to a
-      configured minimum; the rate card has no effect on the purchase price
+      `per: token` rejected; overflow rejected; a listing with no advertised rate
+      prices at one and a configured minimum other than one is refused; the rate card has no effect on the purchase price
       (spec: "Purchase is priced in settlement-asset base units").
+
+Done 2026-09-27: `listings/pricing.py`; 23 tests. The hidden-reserve fallback
+has no meaning under a fixed unit rate, so a configured minimum is admitted only
+when it is one; task 2.3's text was amended to match.
 
 ## 3. Provision intent, negotiation carriers, and codecs
 
-- [ ] 3.1 `domains/inference/negotiation/terms.py`: `InferenceProvisionTerms`
+- [x] 3.1 `domains/inference/negotiation/terms.py`: `InferenceProvisionTerms`
       (`kind: inference.v1`, `version: 1`, payload `{quantity ≥ 1, key: {mode,
       key_id?}}`) and `make_inference_provision_terms`, copied from the
       API-credits module with the kind changed. State in the module docstring
       that the shape is shared by design and that kit ownership is decided by
       `extract-access-issuance-kit`.
-- [ ] 3.2 `domains/inference/schema.py`: `InferenceMessage`, `InferenceTerms`,
+- [x] 3.2 `domains/inference/schema.py`: `InferenceMessage`, `InferenceTerms`,
       `InferenceMaterialization` (adds the pinned `rate_card`), `InferenceReceipt`,
       `InferenceResult`, each `extra="forbid"`, each carrying `kind:
       inference.v1`, with the same joint-presence rule for settlement selection
       and canonical principals API credits enforces.
-- [ ] 3.3 `domains/inference/domain_runtime.py`: `INFERENCE_MARKET_DOMAIN =
+- [x] 3.3 `domains/inference/domain_runtime.py`: `INFERENCE_MARKET_DOMAIN =
       MarketDomainContract(identity=DomainIdentity("inference.v1"),
       contract_version=MARKET_DOMAIN_CONTRACT_VERSION, codecs=...)` and
       `market_domain()`.
-- [ ] 3.4 Conformance: `tests/test_domain_conformance.py` runs
+- [x] 3.4 Conformance: `tests/test_domain_conformance.py` runs
       `assert_domain_conformance` with one valid and one invalid example per
       codec, including a materialization whose `rate_card` is absent (rejected)
       and one whose card is fractional (rejected).
-- [ ] 3.5 Focused tests for provision intent: quantity below one, existing key
+- [x] 3.5 Focused tests for provision intent: quantity below one, existing key
       without `key_id`, wrong kind, wrong version.
+
+Done 2026-09-27: `negotiation/terms.py`, the five carriers in `schema.py`,
+`domain_runtime.py`; the contract passes `assert_domain_conformance` with an
+empty capability set; 24 tests including eleven invalid-input codec cases.
 
 ## 4. Usage record, charge derivation, and evidence
 
-- [ ] 4.1 `domains/inference/usage/models.py`: `UsageOutcome` literal
+- [x] 4.1 `domains/inference/usage/models.py`: `UsageOutcome` literal
       (`completed`, `cancelled`, `failed`), `InferenceUsageRecord` (`model_id`,
       `key_id`, `request_id`, `prompt_tokens`, `completion_tokens`,
       `cached_prompt_tokens`, `image_units`, `outcome`; non-negative ints;
@@ -123,26 +137,32 @@ asset). The tasks remain as the record; no open gate remains in this change.
       implementing the ceiling formula from `design.md` with zero for `failed`.
       Integer arithmetic only: compute the sum as a rational over `10**6` and
       take the ceiling without floats.
-- [ ] 4.2 Focused tests (`tests/test_usage.py`): the two spec scenarios
+- [x] 4.2 Focused tests (`tests/test_usage.py`): the two spec scenarios
       (cancelled after 400 tokens → 1 credit; failed → 0); exact-million
       boundaries; all-zero record with a floor; cached tokens priced separately
       when a cached rate is present and ignored when absent; a property-style
       test that `derive_charge` never returns a float and never underflows.
-- [ ] 4.3 `domains/inference/usage/evidence.py`: `InferenceUsageEvidenceBodyV1`
+- [x] 4.3 `domains/inference/usage/evidence.py`: `InferenceUsageEvidenceBodyV1`
       (protocol `arkhai.inference.usage-evidence.v1`, schema version `1`,
       `domain: inference`, the record, the pinned card, the derived charge,
       `grant_id`, `fulfillment_id`, `issuer`, and an optional opaque
       `attestation` envelope that verification ignores) with canonical-JSON
       digest and signing/verification helpers on the pattern of the API-credits
       issuance evidence module. Copied and renamed, not imported.
-- [ ] 4.4 Canary test (`tests/test_usage_evidence.py`): construct evidence with
+- [x] 4.4 Canary test (`tests/test_usage_evidence.py`): construct evidence with
       a sentinel bearer secret, prompt text, and completion text available to
       the producing code and assert none appears in the canonical bytes;
       verification rejects a tampered charge and an untrusted signer.
 
+Done 2026-09-27: `usage/{models,evidence}.py`; 29 tests including the
+secret/prompt/completion canary. The request charge is added to the ceiling of
+the token sum, as the requirement and `design.md` state; the spec scenario's
+worked number was corrected from 1 to 2. Cached tokens with no cached rate
+contribute nothing, as the formula states.
+
 ## 5. Registry filter specification
 
-- [ ] 5.1 `domains/inference/registry/filter-spec.yaml`, version 1, `schema: {id:
+- [x] 5.1 `domains/inference/registry/filter-spec.yaml`, version 1, `schema: {id:
       inference, version: 1}`. `listing_shape` requires `listing_id`,
       `listing_resource`, `storefront_url`, and inside `listing_resource`
       requires `model_id` (non-empty), `artifact_ref`, `provenance` (`enum`),
@@ -157,7 +177,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
       rule is a SHOULD, that a registry operator may narrow the field to an
       `enum` or pattern by policy, and that the registry never mints or
       resolves identifiers.
-- [ ] 5.2 Filters: `model_id`, `model_family`, `quantization`, `modality`
+- [x] 5.2 Filters: `model_id`, `model_family`, `quantization`, `modality`
       (`$.listing_resource.architecture.modality`), `supported_parameter`
       (`$.listing_resource.supported_parameters[*]`), and `provenance` as `in`,
       fail-on-missing for required paths; `context_length_min` as `range` lower
@@ -169,36 +189,53 @@ asset). The tasks remain as the record; no open gate remains in this change.
       `token`, `token_exclude`, `settlement_mechanism`, `settlement_asset`,
       `funding_profile`, and `funding_interaction` projections verbatim from the
       API-credits specification.
-- [ ] 5.3 `core/registry/tests/unit/test_filter_spec.py`: add
+- [x] 5.3 `core/registry/tests/unit/test_filter_spec.py`: add
       `test_repo_inference_spec_loads` beside `test_repo_api_credits_spec_loads`,
       asserting schema identity `inference` version 1, that every filter path
       resolves against a sample listing built from Section 1's model, that a
       listing without `provenance` is refused at validation, and that no filter
       declaration names the `attestation` path.
-- [ ] 5.4 `core/registry/Dockerfile`: `COPY domains/inference/registry/filter-spec.yaml
+- [x] 5.4 `core/registry/Dockerfile`: `COPY domains/inference/registry/filter-spec.yaml
       ./filter-spec-inference.yaml` in the builder stage and the matching
       `COPY --from=builder` in the runtime stage, beside the API-credits lines.
-- [ ] 5.5 **Integration.** Publish a valid inference listing to a registry
+- [x] 5.5 **Integration.** Publish a valid inference listing to a registry
       started with `REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml`
       through the registry client; query each filter; confirm a listing under
       `offer_resource` is rejected and a listing missing `rate_card` is
       rejected. Use the existing registry integration fixtures.
 
+Done 2026-09-27: `registry/filter-spec.yaml`, two `COPY` lines, the unit load
+test, and `core/registry/tests/integration/test_inference_spec.py` (both
+sellers found by every filter; the dry run refuses each malformed card naming
+the field; the retired key is refused at publish). Registry unit 105, integration
+126. The image was built and carries all three specifications. Finding: the
+registry does not enforce the listing shape at publish by design, so the spec's
+"rejected at publication" sentence was reattributed to the storefront codec and
+the dry run.
+
 ## 6. Distribution and aggregate targets
 
-- [ ] 6.1 `domains/Makefile`: `dist-inference-domain` (wheel into `$(DIST_DIR)`
+- [x] 6.1 `domains/Makefile`: `dist-inference-domain` (wheel into `$(DIST_DIR)`
       with the `py3-none-any` assertion the other domain targets carry) and
       `test-inference`; add both to the `dist` and `test` aggregates.
-- [ ] 6.2 Root `Makefile`: `test-inference` delegating to `domains`, added to
+- [x] 6.2 Root `Makefile`: `test-inference` delegating to `domains`, added to
       the root `test` aggregate so the aggregate contract stays complete
       coverage.
-- [ ] 6.3 `domains/inference/tests/test_distribution.py` and
+- [x] 6.3 `domains/inference/tests/test_distribution.py` and
       `test_distribution_install.py` on the API-credits pattern: the wheel
       carries every module; no `[tool.uv.sources]` editable override anywhere
       under `domains/inference/`; the contract imports from the built wheel in a
       clean environment and `market_domain().identity == "inference.v1"`.
-- [ ] 6.4 Run `make dist-domains` and `make test-inference` from a clean `.dist`
+- [x] 6.4 Run `make dist-domains` and `make test-inference` from a clean `.dist`
       and record the result.
+- [x] 6.5 `.github/workflows/tests.yml`: an `inference-domain` matrix row with
+      `predist` and `no_editable`, needing no hosted artifact, so the job can pass
+      on a fork pull request.
+- [x] 6.6 `make check-reinit` passes for the new project's `reinit` target.
+
+Done 2026-09-27: `domains/inference/Makefile`, `dist-inference-domain` and
+`test-inference` in the domain and root aggregates, the wheel fixture with
+structural and install tests; `make test-inference` from the root: 136 passed.
 
 ## 7. Decision gates
 
@@ -226,44 +263,56 @@ asset). The tasks remain as the record; no open gate remains in this change.
 
 ## 8. Closeout
 
-- [ ] 8.1 **Comment hygiene.** Run `make check-comment-hygiene` and resolve every
+- [x] 8.1 **Comment hygiene.** Run `make check-comment-hygiene` and resolve every
       match. Read the copied modules directly for references to the API-credits
       change history their docstrings may have carried across.
-- [ ] 8.2 **Import placement.** Review imports this change adds; move
+- [x] 8.2 **Import placement.** Review imports this change adds; move
       function-level imports to module level where no genuine circular import or
       documented lazy-load reason applies, verified against the suite.
-- [ ] 8.3 **Documentation compliance.** Re-check accepted decisions against
+- [ ] 8.3 **Documentation compliance.** Pending post-review promotion: the
+      `inference` capability's `spec.md` and `architecture.md` are created when
+      the delta is synchronized at archival, per `AGENTS.md`'s rule that
+      promotion follows code review. Re-check accepted decisions against
       `openspec/README.md`'s placement rules; confirm the domain-versus-extension
       rationale and the copy-first rule landed in
       the `inference` capability's `architecture.md` and the normative statements in
       the `inference` capability's `spec.md`, not only here.
-- [ ] 8.4 **Narrative compression.** Compress completed-task notes to final
+- [x] 8.4 **Narrative compression.** Compress completed-task notes to final
       behavior, validation evidence, and promotion destinations; keep rejected
       alternatives in `design.md`.
-- [ ] 8.5 **Roadmap currency.** Update Goal 8's current-state prose in
+- [x] 8.5 **Roadmap currency.** Update Goal 8's current-state prose in
       `docs/development/ROADMAP.md` (the vocabulary now exists) and remove this
       change's row from its gap table; name the update in the promotion record.
-- [ ] 8.6 **Campaign index currency.** Update this change's row and the
+- [x] 8.6 **Campaign index currency.** Update this change's row and the
       campaign graph in `openspec/changes/README.md`; confirm every campaign
       link resolves to an existing directory.
-- [ ] 8.7 **Documentation citations.** Run
+- [x] 8.7 **Documentation citations.** Run
       `make check-doc-citations CHANGE=add-inference-domain-contract` and resolve
       every match.
-- [ ] 8.8 **End-to-end pipeline.** This change adds no service and no scenario,
+- [ ] 8.8 **End-to-end pipeline.** Not run locally: the development stack
+      runs under amd64 emulation on this host, which the seller quickstart
+      records as unsuitable for validation. This change adds no service and no
+      scenario; the registry integration suite and an image build ran green,
+      and the fork pull request's CI runs the new matrix job. The nightly
+      pipeline on `dev` remains the regression check for the unchanged services.
+      Treat the pipeline's validations as unrun until that run is recorded. This change adds no service and no scenario,
       so the existing pipeline is the regression check: run
       `make -C e2e-tests test-e2e` on the branch and record that the compute
       and API-credits scenarios are unaffected. If the pipeline cannot run for a
       reason unrelated to this change, record the blocker and the owning change.
-- [ ] 8.9 **Promotion.** Complete the design-promotion record below, last.
+- [ ] 8.9 **Promotion.** The record below is complete; the destination
+      documents are written at archival, after review. Complete the design-promotion record below, last.
 
 ## Design promotion record
 
 | Accepted decision | Permanent location |
 |---|---|
-| A market domain is where a credit's interpretation is pinned; inference fixes it per model, API credits leaves it to the seller | the `inference` capability's `architecture.md` — "Market shape"; one sentence in `openspec/specs/api-credits/architecture.md` — "Market shape" |
+| The domain owns the shapes a buyer compares on — model card, rate card, usage record — not what a storefront sells or charges; the payment kit converts money, the storefront prices its balance, and a registry operator decides comparability | the `inference` capability's `architecture.md` — "Market shape"; one sentence in `openspec/specs/api-credits/architecture.md` — "Market shape" |
 | One listing is one served model | the `inference` capability's `spec.md` — "One listing is one served model" |
 | One credit is one base unit of the settlement asset; the settlement rate is one; rate-card integers are prices in that asset | the `inference` capability's `spec.md` — "Purchase is priced in settlement-asset base units", "Rate card is integer-valued and pinned at issuance"; rationale in its `architecture.md` |
 | The rate card is pinned at issuance | the `inference` capability's `spec.md` — "Rate card is integer-valued and pinned at issuance" |
+| The request charge is added to the ceiling of the token sum; a failed upstream costs nothing | the `inference` capability's `spec.md` — "Usage record and deterministic charge derivation" |
+| A malformed card is refused by the storefront's codec and the registry's dry run; a registry's publish boundary refuses only retired spellings | the `inference` capability's `spec.md` — "One listing is one served model" |
 | Charge derivation is a pure function of record and card | the `inference` capability's `spec.md` — "Usage record and deterministic charge derivation" |
 | Usage evidence is secret-free | the `inference` capability's `spec.md` — "Usage evidence is secret-free" |
 | Three identities; the bearer credential is delivery | the `inference` capability's `spec.md` — "Bearer credential is delivery, not identity or payment authority" |

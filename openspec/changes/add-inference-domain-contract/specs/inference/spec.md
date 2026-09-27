@@ -34,8 +34,11 @@ whose `api_style` is `openai.v1`, a complete rate card, a `provenance` of
 `self-hosted` or `resold`, and `offering_mode` equal to `inference`; it MAY
 carry an `artifact_digest`, a mutable `display_name`, a `model_owner` principal
 distinct from the seller, and an `attestation` envelope. A listing omitting any
-required field MUST be rejected at publication rather than published with the
-field absent.
+required field MUST be refused before it is published: the domain's listing
+codec refuses it on the storefront's publication path, and a registry's dry-run
+validation refuses it against the served shape. A registry's publish boundary
+refuses only retired shape spellings, so a malformed card is stopped at the
+seller, not at the index.
 
 A listing SHOULD derive `model_id` by the domain's derivation rule — the
 upstream owner and repository name, lowercased, with revision and quantization
@@ -139,8 +142,8 @@ same integer charge.
 - **WHEN** a client stops a streamed request after 400 completion tokens were
   produced against a card of 200 credits per million completion tokens with a
   request floor of 1
-- **THEN** the record's outcome is `cancelled` and its charge is 1 credit, the
-  ceiling of 0.08 plus the floor
+- **THEN** the record's outcome is `cancelled` and its charge is 2 credits: the
+  ceiling of 0.08, which is one, plus the request charge of one
 
 #### Scenario: Upstream fails to answer
 

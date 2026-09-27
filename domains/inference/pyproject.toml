@@ -1,0 +1,49 @@
+[project]
+name = "arkhai-inference-domain"
+version = "0.1.0"
+license = "MIT"
+description = "Shared inference domain models, pricing, usage vocabulary, and market-domain contract."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "arkhai-core>=0.2.0",
+    "arkhai-kit-policy",
+    "arkhai-kit-identity==0.3.0",
+    "pydantic>=2",
+]
+
+[tool.uv]
+# Tests import this package from its installed wheel, not an editable
+# install: a directory-mapped package has no editable form that presents it
+# under its import path. The Makefile and CI set UV_NO_EDITABLE, and these
+# keys make uv rebuild that wheel whenever a module changes.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "*.py" },
+    { file = "listings/*.py" },
+    { file = "negotiation/*.py" },
+    { file = "usage/*.py" },
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+# This directory is the `domains.inference` package. The wheel maps the shared
+# modules and subpackages by directory, so a module added to one ships without
+# a packaging edit.
+include = ["/*.py", "/listings/*.py", "/negotiation/*.py", "/usage/*.py"]
+
+[tool.hatch.build.targets.wheel.sources]
+"" = "domains/inference/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]

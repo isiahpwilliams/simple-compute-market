@@ -248,6 +248,67 @@ def test_repo_api_credits_spec_loads() -> None:
     }
 
 
+def test_repo_inference_spec_loads() -> None:
+    """The third filter specification packaged in the image is valid."""
+    from jsonpath_ng import parse as parse_path
+    from jsonschema import Draft202012Validator
+
+    repo_root = Path(__file__).resolve().parents[4]
+    path = repo_root / "domains/inference/registry/filter-spec.yaml"
+
+    spec = load_filter_spec(path)
+
+    assert spec.schema_identity is not None
+    assert spec.schema_identity.id == "inference"
+    assert spec.schema_identity.version == 1
+    assert {declaration.name for declaration in spec.filters} >= {
+        "model_id",
+        "quantization",
+        "provenance",
+        "context_length_min",
+        "prompt_credits_max",
+        "completion_credits_max",
+        "settlement_asset",
+    }
+    assert not any("attestation" in declaration.path for declaration in spec.filters)
+
+    listing = {
+        "listing_id": "inference-1",
+        "storefront_url": "http://seller",
+        "listing_resource": {
+            "kind": "inference.v1",
+            "model_id": "meta-llama/llama-3.1-8b-instruct",
+            "artifact_ref": "hf://meta-llama/Llama-3.1-8B-Instruct@0e9e39f",
+            "provenance": "self-hosted",
+            "served_model_name": "llama-3.1-8b",
+            "model_family": "llama-3.1",
+            "context_length": 131072,
+            "quantization": "fp8",
+            "architecture": {"modality": "text->text"},
+            "supported_parameters": ["tools"],
+            "endpoint": {"base_url": "https://inference.example/v1", "api_style": "openai.v1"},
+            "rate_card": {"prompt_credits_per_million": 500, "completion_credits_per_million": 1500},
+            "attestation": {"kind": "tee.example", "schema_version": 1, "payload": {}},
+            "capacity_site_id": "site-a",
+            "offering_mode": "inference",
+        },
+        "accepted_escrows": [
+            {"chain_name": "anvil", "escrow_address": "0x" + "11" * 20, "literal_fields": {"token": "0x" + "22" * 20}}
+        ],
+        "settlement_options": [
+            {"option_id": "a" * 64, "mechanism": "alkahest.v1", "asset": "0x" + "22" * 20, "rates": [], "params": {}}
+        ],
+    }
+    validator = Draft202012Validator(spec.listing_shape)
+    validator.validate(listing)
+    for declaration in spec.filters:
+        if declaration.on_missing == "fail":
+            assert parse_path(declaration.path).find(listing), declaration.name
+
+    without_provenance = {**listing, "listing_resource": {k: v for k, v in listing["listing_resource"].items() if k != "provenance"}}
+    assert list(validator.iter_errors(without_provenance))
+
+
 def test_schema_identity_parses_and_defaults_version(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

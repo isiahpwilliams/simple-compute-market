@@ -1,0 +1,173 @@
+# Registry filter spec for the inference schema.
+#
+# Packaged into the shared `arkhai:registry` image and selected via
+# REGISTRY_FILTER_SPEC_PATH. The schema.id here is `inference`, which is what
+# `arkhai-inference-buyer` declares, so a buyer configured with compute,
+# API-credits, and inference registries queries only this one for models.
+#
+# Bump `version` on backwards-incompatible changes; add filters freely
+# (etag changes, clients re-fetch).
+
+version: 1
+
+schema:
+  id: inference
+  version: 1
+
+listing_shape:
+  $schema: "https://json-schema.org/draft/2020-12/schema"
+  type: object
+  additionalProperties: true
+  required: [listing_id, listing_resource, storefront_url]
+  properties:
+    listing_id: {type: string, minLength: 1}
+    storefront_url: {type: string, minLength: 1}
+    listing_resource:
+      type: object
+      # One served model at one seller. model_id is seller-asserted; the
+      # domain's derivation rule is a SHOULD. An operator who wants
+      # convergence enforced narrows this field to an enum or pattern here —
+      # the registry never mints or resolves identifiers.
+      required:
+        - model_id
+        - artifact_ref
+        - provenance
+        - served_model_name
+        - context_length
+        - quantization
+        - architecture
+        - supported_parameters
+        - endpoint
+        - rate_card
+        - offering_mode
+      additionalProperties: true
+      properties:
+        kind: {type: string}
+        model_id: {type: string, minLength: 1, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"}
+        artifact_ref: {type: string, minLength: 1}
+        artifact_digest: {type: [string, "null"], pattern: "^sha256:[0-9a-f]{64}$"}
+        display_name: {type: [string, "null"]}
+        model_owner: {type: [object, "null"]}
+        provenance: {type: string, enum: [self-hosted, resold]}
+        served_model_name: {type: string, minLength: 1}
+        model_family: {type: [string, "null"]}
+        context_length: {type: integer, minimum: 1}
+        max_completion_tokens: {type: [integer, "null"], minimum: 1}
+        quantization: {type: string, enum: [none, fp16, bf16, fp8, int8, int4, awq, gptq]}
+        architecture:
+          type: object
+          required: [modality]
+          additionalProperties: true
+          properties:
+            modality: {type: string, minLength: 1}
+            tokenizer: {type: [string, "null"]}
+            instruct_type: {type: [string, "null"]}
+        supported_parameters:
+          type: array
+          items: {type: string, minLength: 1}
+        endpoint:
+          type: object
+          required: [base_url]
+          additionalProperties: true
+          properties:
+            base_url: {type: string, minLength: 1}
+            openapi_url: {type: [string, "null"]}
+            api_style: {type: string, const: openai.v1}
+        # Prices in base units of the listing's settlement asset. A bound on
+        # one is meaningful only alongside settlement_asset; the buyer plugin
+        # pairs them until the registry can express the co-requirement.
+        rate_card:
+          type: object
+          required: [prompt_credits_per_million, completion_credits_per_million]
+          additionalProperties: true
+          properties:
+            prompt_credits_per_million: {type: integer, minimum: 0}
+            completion_credits_per_million: {type: integer, minimum: 0}
+            request_credits: {type: integer, minimum: 0}
+            cached_prompt_credits_per_million: {type: [integer, "null"], minimum: 0}
+            image_credits_per_unit: {type: [integer, "null"], minimum: 0}
+        # Admitted by shape, declared by no filter, verified by nothing.
+        attestation:
+          type: [object, "null"]
+          required: [kind, schema_version]
+          additionalProperties: true
+          properties:
+            kind: {type: string, minLength: 1}
+            schema_version: {type: integer, minimum: 1}
+            payload: {type: object}
+        capacity_site_id: {type: string, minLength: 1}
+        resource_id: {type: [string, "null"]}
+        offering_mode: {type: string, const: inference}
+    accepted_escrows:
+      type: array
+      items:
+        type: object
+        required: [chain_name, escrow_address, literal_fields]
+        additionalProperties: true
+        properties:
+          chain_name: {type: string, minLength: 1}
+          escrow_address: {type: string, minLength: 1}
+          literal_fields:
+            type: object
+            additionalProperties: true
+            properties:
+              token: {type: string}
+          rates:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+              properties:
+                field: {type: string}
+                per: {type: string}
+                value: {type: string}
+    settlement_options:
+      type: array
+      items:
+        type: object
+        required: [option_id, mechanism, asset, rates, params]
+        additionalProperties: false
+        properties:
+          option_id: {type: string, minLength: 64, maxLength: 64}
+          mechanism: {type: string}
+          asset: {type: string}
+          rates: {type: array}
+          params:
+            type: object
+            additionalProperties: true
+            properties:
+              funding_profile: {type: string}
+              interaction: {type: string}
+              country: {type: string}
+              authority_id: {type: string}
+              environment: {type: string}
+
+filters:
+  # Exact matches on the fields a buyer compares on. `op: in` covers eq via
+  # `in: [x]`; `?model_id=foo` parses to in:[foo].
+  - {name: model_id,            path: $.listing_resource.model_id,                      op: in, value_type: string, on_missing: fail}
+  - {name: model_family,        path: $.listing_resource.model_family,                  op: in, value_type: string, on_missing: pass}
+  - {name: quantization,        path: $.listing_resource.quantization,                  op: in, value_type: string, on_missing: fail}
+  - {name: modality,            path: $.listing_resource.architecture.modality,         op: in, value_type: string, on_missing: fail}
+  - {name: supported_parameter, path: "$.listing_resource.supported_parameters[*]",     op: in, value_type: string, on_missing: fail}
+  - {name: provenance,          path: $.listing_resource.provenance,                    op: in, value_type: string, on_missing: fail}
+  - {name: offering_mode,       path: $.listing_resource.offering_mode,                 op: in, value_type: string, on_missing: fail}
+
+  # Numeric bounds — sugared via alias_kind so `?context_length_min=65536`
+  # and `?prompt_credits_max=600` parse to one-sided ranges.
+  - {name: context_length_min,    query_name: context_length,    query_aliases: [context_length_min],    path: $.listing_resource.context_length,                        op: range, value_type: integer, alias_kind: lower_bound, on_missing: fail}
+  - {name: prompt_credits_max,     query_name: prompt_credits,     query_aliases: [prompt_credits_max],     path: $.listing_resource.rate_card.prompt_credits_per_million,     op: range, value_type: integer, alias_kind: upper_bound, on_missing: fail}
+  - {name: completion_credits_max, query_name: completion_credits, query_aliases: [completion_credits_max], path: $.listing_resource.rate_card.completion_credits_per_million, op: range, value_type: integer, alias_kind: upper_bound, on_missing: fail}
+
+  # Payment-token projection over accepted_escrows[*].literal_fields.token,
+  # same as the compute and API-credits specs. `on_missing: pass` keeps a
+  # seller that advertises no token from vanishing on a token-scoped query.
+  - {name: token,         path: "$.accepted_escrows[*].literal_fields.token", op: in,     value_type: string, on_missing: pass}
+  - {name: token_exclude, path: "$.accepted_escrows[*].literal_fields.token", op: not_in, value_type: string, on_missing: pass}
+
+  # Mechanism-neutral hosted projections remain independent of legacy escrow
+  # entries, so hosted-only listings are discoverable without a wallet query.
+  - {name: settlement_mechanism, path: "$.settlement_options[*].mechanism", op: in, value_type: string, on_missing: pass}
+  - {name: settlement_asset, path: "$.settlement_options[*].asset", op: in, value_type: string, on_missing: pass}
+  - {name: funding_profile, path: "$.settlement_options[*].params.funding_profile", op: in, value_type: string, on_missing: pass}
+  - {name: funding_interaction, path: "$.settlement_options[*].params.interaction", op: in, value_type: string, on_missing: pass}

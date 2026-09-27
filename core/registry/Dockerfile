@@ -21,6 +21,7 @@ COPY core/registry/src ./src
 COPY core/registry/alembic ./alembic
 COPY core/registry/filter-spec.yaml ./
 COPY domains/apicredits/registry/filter-spec.yaml ./filter-spec-apicredits.yaml
+COPY domains/inference/registry/filter-spec.yaml ./filter-spec-inference.yaml
 # The lock is used as committed: the project's pyproject and lock sit at the
 # same depth below /repo as below the repository root, so the lock's relative
 # wheelhouse path resolves to /repo/.dist. uv_project.py derives the internal
@@ -46,6 +47,7 @@ COPY --from=builder --chown=appuser:appuser /app/src ./src
 COPY --from=builder --chown=appuser:appuser /app/alembic ./alembic
 COPY --from=builder --chown=appuser:appuser /app/filter-spec.yaml ./
 COPY --from=builder --chown=appuser:appuser /app/filter-spec-apicredits.yaml ./
+COPY --from=builder --chown=appuser:appuser /app/filter-spec-inference.yaml ./
 ENV PATH="/app/.venv/bin:$PATH"
 USER appuser
 

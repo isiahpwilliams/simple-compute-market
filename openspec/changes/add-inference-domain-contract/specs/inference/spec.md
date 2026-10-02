@@ -215,10 +215,12 @@ version `1` and MUST validate and filter listings from the inference filter
 specification: exact filters on `model_id`, `model_family`, `quantization`,
 modality, `supported_parameters`, and `provenance`; range filters on
 `context_length` and on the rate card's base-unit integers; and the settlement
-mechanism, asset, and funding projections. The inference buyer plugin MUST
+mechanism, asset, and funding projections. Each rate bound MUST declare
+`settlement_asset` as a co-required filter, so a registry refuses an unpaired
+bound rather than comparing across assets. The inference buyer plugin MUST
 declare the `inference` schema identity, MUST query only registries declaring
-it, and MUST refuse to compile a rate bound that is not paired with a settlement
-asset.
+it, and MUST resolve that co-requirement from the served specification rather
+than from code.
 
 #### Scenario: Buyer bounds a rate
 
@@ -229,9 +231,9 @@ asset.
 
 #### Scenario: Buyer bounds a rate without naming an asset
 
-- **WHEN** a buyer supplies a rate bound and no settlement asset
-- **THEN** the buyer plugin refuses to compile the query and names the pairing
-  rule
+- **WHEN** a query supplies a rate bound and no `settlement_asset`
+- **THEN** the registry refuses it rather than evaluating it, and a buyer
+  plugin compiling against the served specification refuses before sending
 
 #### Scenario: Compute and API-credit registries are also configured
 

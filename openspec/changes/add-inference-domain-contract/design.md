@@ -192,18 +192,6 @@ uint256 overflow guards apply); on a fiat-cent asset the finest expressible rate
 is one cent per million tokens, which nobody undercuts. Integers remain required
 so two independent implementations of the charge arithmetic cannot disagree by
 rounding.
-
-**The card names its asset.** "Base units of the listing's settlement asset"
-presumes one asset per listing, and a listing may carry several settlement
-options: a card beside options in two assets would be read in whichever a
-buyer's bound named. The rate card therefore carries `asset`, the listing codec
-refuses any settlement option or escrow token naming another asset, and the
-discovery bounds co-require `rate_card_asset`, the card's own field, as the
-compute specification pairs `asking_rate` with its asset. The alternative, a
-codec rule that all options share one asset with the card left numeric, is
-rejected because the served shape could not express it and the bound would
-still pair through a projection over options. The pinned card thus also pins
-the asset the grant's balance is kept in.
 ### The rate card is pinned at issuance
 
 A grant carries the rate card in force when it was issued. A seller who
@@ -228,16 +216,14 @@ problem it guarded against no longer exists.
 
 What the registry filters on is therefore authoritative: `prompt_credits_max`
 and `completion_credits_max` are upper bounds on the rate card's integers, and
-`rate_card_asset` selects the asset the card denominates them in. A rate bound
-is meaningful only alongside an asset, so both bounds declare
-`requires: [rate_card_asset]` — the declarative co-requirement
-`publish-indicative-listing-rates` added to the generic registry
-(`FilterDecl.requires`) — and the registry itself refuses an unpaired bound.
-`settlement_asset` remains the projection over options a buyer uses to find
-how a listing can be paid. The buyer compiler resolves the rule from the served
-specification, as `registry-discovery` requires; nothing encodes it in code.
-Cross-asset comparison needs an exchange rate the registry must not be an
-authority on, and stays client-side, consistent with Goal 7.
+`settlement_asset` selects the asset they are denominated in. A rate bound is
+meaningful only alongside an asset, so both bounds declare
+`requires: [settlement_asset]` — the declarative co-requirement
+`publish-indicative-listing-rates` added to the generic registry — and the
+registry itself refuses an unpaired bound. The buyer compiler resolves the rule
+from the served specification, as `registry-discovery` requires; nothing
+encodes it in code. Cross-asset comparison needs an exchange rate the registry
+must not be an authority on, and stays client-side, consistent with Goal 7.
 ### Quota-backed publication in version 1
 
 An inference seller's supply is, in truth, not finite in the way a GPU is: a
@@ -437,17 +423,13 @@ usage fields under a version bump, not a reinterpretation.
 Each carries its revisit trigger. None is prescribed by a task in this change;
 where a task touches one it is an explicit decision gate.
 
-1. **Registry-side pairing of a rate bound with its asset.** Trigger:
-   `publish-indicative-listing-rates` promotes declarative filter
-   co-requirements; the rule then moves from the buyer plugin into the
-   inference filter specification.
-2. **Admitting the unbacked backing value for inference listings.** The
+1. **Admitting the unbacked backing value for inference listings.** The
    property exists; the trigger is a seller who needs it. Cost: an inference
    filter-specification bump and close-and-republish.
-3. **Whether the inference authority is the same kit-composed service binary as
+2. **Whether the inference authority is the same kit-composed service binary as
    API credits deployed twice, or a distinct distribution.** Owned by
    `compose-api-family-kit`; irrelevant to this change's vocabulary.
-4. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
+3. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
    tokenizer). Owned by `meter-inference-usage`.
 
 ## Migration Plan

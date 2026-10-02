@@ -90,12 +90,8 @@ One inference credit MUST equal one base unit of the asset the selected
 settlement option settles in. An inference settlement option MUST advertise a
 per-credit rate of exactly one base unit, provision intent's `quantity` MUST be
 read as base units purchased, and the scalar reference payment MUST equal that
-quantity. A rate card MUST name the asset its values are denominated in, and
-every settlement option and escrow token on the listing MUST identify that
-asset; rate-card values MUST be read as base units of it per million tokens
-or per request. The domain's listing codec MUST refuse, before publication, a
-listing whose settlement option or escrow advertises a per-credit rate other
-than one or names another asset.
+quantity. Rate-card values MUST be read as base units of the same asset per
+million tokens or per request.
 
 #### Scenario: Buyer purchases a balance
 
@@ -109,13 +105,6 @@ than one or names another asset.
 - **WHEN** an inference settlement option carries a per-credit rate other than
   one
 - **THEN** the listing is rejected before publication
-
-#### Scenario: Listing takes payment in a second asset
-
-- **WHEN** a listing's rate card names one asset and a settlement option or an
-  escrow token names another
-- **THEN** the listing codec rejects the listing before publication, so a rate
-  bound never reads the card in an asset the seller did not price in
 ### Requirement: Rate card is integer-valued and pinned at issuance
 
 A rate card MUST express base units per million prompt tokens and base units per
@@ -225,24 +214,26 @@ A registry serving inference listings MUST declare schema identity `inference`
 version `1` and MUST validate and filter listings from the inference filter
 specification: exact filters on `model_id`, `model_family`, `quantization`,
 modality, `supported_parameters`, and `provenance`; range filters on
-`context_length` and on the rate card's base-unit integers; an exact filter on
-the rate card's asset; and the settlement mechanism, asset, and funding
-projections. Each rate bound MUST declare `rate_card_asset` as a co-required
-filter, so a registry refuses an unpaired bound rather than comparing across
-assets. The inference buyer plugin MUST declare the `inference` schema identity
-and MUST query only registries declaring it.
+`context_length` and on the rate card's base-unit integers; and the settlement
+mechanism, asset, and funding projections. Each rate bound MUST declare
+`settlement_asset` as a co-required filter, so a registry refuses an unpaired
+bound rather than comparing across assets. The inference buyer plugin MUST
+declare the `inference` schema identity, MUST query only registries declaring
+it, and MUST resolve that co-requirement from the served specification rather
+than from code.
 
 #### Scenario: Buyer bounds a rate
 
-- **WHEN** a buyer queries with `rate_card_asset` set and a maximum of 500 base
+- **WHEN** a buyer queries with `settlement_asset` set and a maximum of 500 base
   units per million completion tokens
 - **THEN** listings in that asset whose card exceeds 500 are excluded, and a
   listing missing the rate is excluded rather than matched
 
 #### Scenario: Buyer bounds a rate without naming an asset
 
-- **WHEN** a query supplies a rate bound and no `rate_card_asset`
-- **THEN** the registry refuses it rather than evaluating it
+- **WHEN** a query supplies a rate bound and no `settlement_asset`
+- **THEN** the registry refuses it rather than evaluating it, and a buyer
+  plugin compiling against the served specification refuses before sending
 
 #### Scenario: Compute and API-credit registries are also configured
 

@@ -217,11 +217,11 @@ shared.
   Admitting the unbacked value is an inference filter-specification bump;
   `design.md` records the trigger. Its publication-hook changes mean the stack
   change copies from current `dev`.
-- [`publish-indicative-listing-rates`](../publish-indicative-listing-rates/) —
-  now design-complete and unblocked; owns the exact-decimal filter value type and declarative filter
-  co-requirements the generic registry lacks. Inference does not duplicate that
-  work; it filters on integer credit rates and the settlement asset today and
-  revisits a monetary `asking_rate` when those primitives land.
+- [`publish-indicative-listing-rates`](../archive/2026-10-01-publish-indicative-listing-rates/)
+  — archived 2026-10-01; delivered the exact-decimal filter value type and
+  declarative filter co-requirements. The inference specification uses the
+  co-requirement to pair each rate bound with `settlement_asset`; it compares
+  on integer base-unit rates within an asset and publishes no `asking_rate`.
 - [`add-future-domain-shape-validation`](../add-future-domain-shape-validation/)
   — admits a bounded fixture for an inference domain "the product does not
   have" and forbids that fixture from carrying domain design. Once this change

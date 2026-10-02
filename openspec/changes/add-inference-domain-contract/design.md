@@ -216,17 +216,13 @@ problem it guarded against no longer exists.
 What the registry filters on is therefore authoritative: `prompt_credits_max`
 and `completion_credits_max` are upper bounds on the rate card's integers, and
 `settlement_asset` selects the asset they are denominated in. A rate bound is
-meaningful only alongside an asset, and the generic registry cannot yet express
-"this filter requires that one" — `publish-indicative-listing-rates` is building
-that declarative co-requirement. Until it lands, the **buyer plugin** enforces
-the pairing: a rate bound without `--asset` is refused at query compilation, and
-the seller path documents the same rule. Cross-asset comparison needs an
-exchange rate the registry must not be an authority on, and stays client-side,
-consistent with Goal 7.
-
-**Revisit trigger:** when `publish-indicative-listing-rates` promotes filter
-co-requirements, move the pairing rule from the buyer plugin into the inference
-filter specification so the registry refuses an unpaired bound itself.
+meaningful only alongside an asset, so both bounds declare
+`requires: [settlement_asset]` — the declarative co-requirement
+`publish-indicative-listing-rates` added to the generic registry — and the
+registry itself refuses an unpaired bound. The buyer compiler resolves the rule
+from the served specification, as `registry-discovery` requires; nothing
+encodes it in code. Cross-asset comparison needs an exchange rate the registry
+must not be an authority on, and stays client-side, consistent with Goal 7.
 ### Quota-backed publication in version 1
 
 An inference seller's supply is, in truth, not finite in the way a GPU is: a
@@ -424,17 +420,13 @@ usage fields under a version bump, not a reinterpretation.
 Each carries its revisit trigger. None is prescribed by a task in this change;
 where a task touches one it is an explicit decision gate.
 
-1. **Registry-side pairing of a rate bound with its asset.** Trigger:
-   `publish-indicative-listing-rates` promotes declarative filter
-   co-requirements; the rule then moves from the buyer plugin into the
-   inference filter specification.
-2. **Admitting the unbacked backing value for inference listings.** The
+1. **Admitting the unbacked backing value for inference listings.** The
    property exists; the trigger is a seller who needs it. Cost: an inference
    filter-specification bump and close-and-republish.
-3. **Whether the inference authority is the same kit-composed service binary as
+2. **Whether the inference authority is the same kit-composed service binary as
    API credits deployed twice, or a distinct distribution.** Owned by
    `extract-access-issuance-kit`; irrelevant to this change's vocabulary.
-4. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
+3. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
    tokenizer). Owned by `meter-inference-usage`.
 
 ## Migration Plan

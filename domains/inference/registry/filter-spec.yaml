@@ -74,8 +74,8 @@ listing_shape:
             openapi_url: {type: [string, "null"]}
             api_style: {type: string, const: openai.v1}
         # Prices in base units of the listing's settlement asset. A bound on
-        # one is meaningful only alongside settlement_asset; the buyer plugin
-        # pairs them until the registry can express the co-requirement.
+        # one co-requires settlement_asset, so the registry refuses an unpaired
+        # bound rather than comparing across assets.
         rate_card:
           type: object
           required: [prompt_credits_per_million, completion_credits_per_million]
@@ -154,10 +154,11 @@ filters:
   - {name: offering_mode,       path: $.listing_resource.offering_mode,                 op: in, value_type: string, on_missing: fail}
 
   # Numeric bounds — sugared via alias_kind so `?context_length_min=65536`
-  # and `?prompt_credits_max=600` parse to one-sided ranges.
+  # and `?prompt_credits_max=600` parse to one-sided ranges. A rate bound
+  # co-requires `settlement_asset`.
   - {name: context_length_min,    query_name: context_length,    query_aliases: [context_length_min],    path: $.listing_resource.context_length,                        op: range, value_type: integer, alias_kind: lower_bound, on_missing: fail}
-  - {name: prompt_credits_max,     query_name: prompt_credits,     query_aliases: [prompt_credits_max],     path: $.listing_resource.rate_card.prompt_credits_per_million,     op: range, value_type: integer, alias_kind: upper_bound, on_missing: fail}
-  - {name: completion_credits_max, query_name: completion_credits, query_aliases: [completion_credits_max], path: $.listing_resource.rate_card.completion_credits_per_million, op: range, value_type: integer, alias_kind: upper_bound, on_missing: fail}
+  - {name: prompt_credits_max,     query_name: prompt_credits,     query_aliases: [prompt_credits_max],     path: $.listing_resource.rate_card.prompt_credits_per_million,     op: range, value_type: integer, alias_kind: upper_bound, on_missing: fail, requires: [settlement_asset]}
+  - {name: completion_credits_max, query_name: completion_credits, query_aliases: [completion_credits_max], path: $.listing_resource.rate_card.completion_credits_per_million, op: range, value_type: integer, alias_kind: upper_bound, on_missing: fail, requires: [settlement_asset]}
 
   # Payment-token projection over accepted_escrows[*].literal_fields.token,
   # same as the compute and API-credits specs. `on_missing: pass` keeps a

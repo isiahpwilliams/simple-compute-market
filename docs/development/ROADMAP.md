@@ -404,11 +404,11 @@ was archived on 2026-09-24, and version-1 inference listings carry the backed
 value — quota as a sales cap, not capacity — so admitting the unbacked value is
 an inference filter-specification bump when a seller needs it, since a model
 server's supply is not finite the way a GPU is. And a monetary `asking_rate` per
-million tokens, once
-[`publish-indicative-listing-rates`](../../openspec/changes/publish-indicative-listing-rates/)
-— now unblocked — promotes the exact-decimal filter value type and declarative
-co-requirements. Until then inference compares on integer credit rates and the
-settlement asset.
+million tokens: [`publish-indicative-listing-rates`](../../openspec/changes/archive/2026-10-01-publish-indicative-listing-rates/)
+has delivered the exact-decimal filter value type and declarative
+co-requirements, and the inference specification already uses the latter to
+pair each rate bound with its settlement asset; it compares on integer base-unit
+rates within an asset and leaves a monetary rate to a later version.
 
 **Completion test.** Two independent sellers list the same model at different
 rate cards; a buyer discovers both on an inference registry, buys credits from

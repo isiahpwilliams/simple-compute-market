@@ -182,9 +182,9 @@ contribute nothing, as the formula states.
       (`$.listing_resource.supported_parameters[*]`), and `provenance` as `in`,
       fail-on-missing for required paths; `context_length_min` as `range` lower
       bound; `prompt_credits_max` and `completion_credits_max` as `range` upper
-      bounds over the rate card's base-unit integers, with a comment that a
-      bound is meaningful only with `settlement_asset` and that the buyer
-      plugin enforces the pairing until the registry can; no filter over
+      bounds over the rate card's base-unit integers, each declaring
+      `requires: [settlement_asset]` so the registry refuses an unpaired
+      bound; no filter over
       `attestation`; `offering_mode` as `in`, fail-on-missing; the
       `token`, `token_exclude`, `settlement_mechanism`, `settlement_asset`,
       `funding_profile`, and `funding_interaction` projections verbatim from the
@@ -258,8 +258,8 @@ structural and install tests; `make test-inference` from the root: 136 passed.
       is exactly one, `quantity` is base units purchased, and rate-card integers
       are prices in that asset. The alternative — an abstract credit each seller
       denominates — was rejected because it makes rate filters compare unlike
-      units. Sections 2.1–2.3, 5.2, and the buyer plugin's rate-bound pairing
-      rule carry the resulting work.
+      units. Sections 2.1–2.3 and 5.2 carry the resulting work; the rate-bound
+      pairing is a declared co-requirement in the filter specification.
 
 ## 8. Closeout
 
@@ -319,7 +319,7 @@ structural and install tests; `make test-inference` from the root: 136 passed.
 | The authority is the singular synchronous admission decision; rating systems are downstream | the `inference` capability's `spec.md` — "Admission authority is synchronous and singular"; rationale in the `inference` capability's `architecture.md` |
 | Discovery under the `inference` schema identity | the `inference` capability's `spec.md` — "Discovery under the inference schema identity" |
 | Quota-backed publication in version 1 as the backed value of the declared backing property, quota being a sales cap | the `inference` capability's `spec.md` — "Quota-backed publication"; trigger in the `inference` capability's `architecture.md` — "Current limits" |
-| No derived discovery price; a rate bound is paired with an asset by the buyer plugin until the registry can express the co-requirement | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
+| No derived discovery price; a rate bound co-requires its settlement asset in the filter specification, so the registry refuses an unpaired bound | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
 | Attestation is reserved as an opaque envelope on the card and the evidence, unverified and unfilterable in this version | the `inference` capability's `spec.md` — "Attestation is reserved and unverified"; rationale in its `architecture.md` |
 | Copies are frozen and extraction blocks metering | `docs/development/ROADMAP.md` Goal 8 current state; the campaign section of `openspec/changes/README.md` |
 | Copy first, extract after two consumers | the `inference` capability's `architecture.md` — "Implementation composition"; `docs/development/ROADMAP.md` Goal 8 current state |

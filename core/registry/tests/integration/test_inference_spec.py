@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from registry_client import ListingRequest, ValidatePublishRequest
+from registry_client import ListingRequest, RegistryClientError, ValidatePublishRequest
 from core_registry.api import filter_spec as filter_spec_module
 from core_registry.api import validate_routes
 
@@ -110,13 +110,22 @@ async def test_a_model_card_publishes_and_each_filter_finds_it(
     assert await _ids(registry_client, modality="text->text") == {"inference-1", "inference-2"}
     assert await _ids(registry_client, supported_parameter="tools") == {"inference-1", "inference-2"}
     assert await _ids(registry_client, context_length_min="65536") == {"inference-1"}
-    assert await _ids(registry_client, prompt_credits_max="600") == {"inference-1"}
-    assert await _ids(registry_client, completion_credits_max="3000") == {"inference-1", "inference-2"}
+    assert await _ids(registry_client, prompt_credits_max="600", settlement_asset=_ASSET) == {"inference-1"}
+    assert await _ids(registry_client, completion_credits_max="3000", settlement_asset=_ASSET) == {"inference-1", "inference-2"}
     assert await _ids(registry_client, settlement_asset=_ASSET) == {"inference-1", "inference-2"}
     assert await _ids(registry_client, offering_mode="inference") == {"inference-1", "inference-2"}
 
     fetched = await registry_client.get_listing("inference-1")
     assert fetched.listing_resource["rate_card"]["prompt_credits_per_million"] == 500
+
+
+async def test_a_rate_bound_without_its_asset_is_refused(served_inference_spec, registry_client):
+    await _publish(registry_client, "inference-1", _card())
+    with pytest.raises(RegistryClientError):
+        await registry_client.list_listings(prompt_credits_max="600")
+    with pytest.raises(RegistryClientError):
+        await registry_client.list_listings(completion_credits_max="3000")
+    assert await _ids(registry_client, settlement_asset=_ASSET) == {"inference-1"}
 
 
 async def test_attestation_is_admitted_and_not_filterable(served_inference_spec, registry_client):

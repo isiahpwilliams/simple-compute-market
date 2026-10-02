@@ -271,12 +271,11 @@ payload shape. It is the right shape because the purchase layer *is* the same:
 a buyer is buying N credits onto a new or existing key. What differs between the
 domains is the listing and the consumption, not the purchase.
 
-It is bound, not copied: `domains/inference/negotiation/terms.py` binds the
-`api` family vocabulary's purchase shape under `inference.v1`, as API credits
-binds it under `api_credits.v1`, and `schema.py` binds the family's negotiation
-carriers the same way. `ARCHITECTURE.md`'s dependency layers forbid a domain
-importing a sibling, so the shared shape lives in the family, which every
-domain selling prepaid bearer access binds.
+It is copied into `domains/inference/src/arkhai_inference/negotiation/terms.py`, not imported.
+`ARCHITECTURE.md`'s dependency layers forbid a domain importing a sibling, and
+the copy is small. The `api` family vocabulary owns the shape, and the stack
+change replaces this copy with a binding of it; until then this domain carries
+its own.
 
 ### Usage record and charge derivation are domain-owned deterministic semantics
 
@@ -397,9 +396,9 @@ Filters: `model_id`, `model_family`, `quantization`, `modality`,
 `supported_parameter`, and `provenance` are exact `in` filters, fail-on-missing
 where the field is required. `context_length_min` is a lower-bound range.
 `prompt_credits_max` and `completion_credits_max` are upper-bound ranges over the
-rate card's base-unit integers, each co-requiring `rate_card_asset` as
-described above. The token, mechanism, asset, and funding projections follow
-the API-credits specification's. `offering_mode` is required and
+rate card's base-unit integers, paired with `settlement_asset` by the buyer
+plugin as described above. The token, mechanism, asset, and funding projections
+are copied from the API-credits specification. `offering_mode` is required and
 equals `inference`. The attestation envelope is **not** a filter.
 ### OpenAI-compatible surface, version 1
 
@@ -410,10 +409,10 @@ usage fields under a version bump, not a reinterpretation.
 
 ## Risks / Trade-offs
 
-- **A second consumer of a young family.** Inference is the `api` family's
-  second binder, so a gap the family left for API credits surfaces here.
-  Mitigated by binding rather than copying: a correction lands in the family
-  once, for both domains.
+- **A sibling domain before its family exists.** This change's copies of the
+  provision-intent shape and the terms module predate the `api` family
+  vocabulary. Mitigated by their size and by `compose-api-family-kit`, which
+  decides what moves into the vocabulary before the stack composes anything.
 - **Integer granularity.** On a fiat-cent asset the finest rate is one cent
   per million tokens; on an 18-decimal asset the integers are large. Neither
   prices anyone out; the overflow guards already exist.
@@ -422,8 +421,9 @@ usage fields under a version bump, not a reinterpretation.
   This is API credits' posture today and inherits its limits; the quota is a
   sales cap, and admitting the unbacked backing value later is a
   filter-specification bump, not a migration.
-- **A rate bound without an asset is meaningless.** Each bound co-requires
-  `rate_card_asset`, so the registry refuses an unpaired one.
+- **A rate bound without an asset is meaningless, and the registry cannot yet
+  refuse one.** Mitigated by the buyer plugin refusing to compile it, until
+  filter co-requirements land and the rule moves into the specification.
 - **Cross-asset comparison is client-side.** Accepted for the reasons
   `publish-indicative-listing-rates` records.
 - **Identifier convergence is a SHOULD.** Two sellers may still name the same
@@ -437,13 +437,17 @@ usage fields under a version bump, not a reinterpretation.
 Each carries its revisit trigger. None is prescribed by a task in this change;
 where a task touches one it is an explicit decision gate.
 
-1. **Admitting the unbacked backing value for inference listings.** The
+1. **Registry-side pairing of a rate bound with its asset.** Trigger:
+   `publish-indicative-listing-rates` promotes declarative filter
+   co-requirements; the rule then moves from the buyer plugin into the
+   inference filter specification.
+2. **Admitting the unbacked backing value for inference listings.** The
    property exists; the trigger is a seller who needs it. Cost: an inference
    filter-specification bump and close-and-republish.
-2. **Whether the inference authority is the same kit-composed service binary as
+3. **Whether the inference authority is the same kit-composed service binary as
    API credits deployed twice, or a distinct distribution.** Owned by
    `compose-api-family-kit`; irrelevant to this change's vocabulary.
-3. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
+4. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
    tokenizer). Owned by `meter-inference-usage`.
 
 ## Migration Plan

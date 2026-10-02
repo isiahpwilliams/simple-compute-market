@@ -11,8 +11,8 @@ from market_core import (
 )
 from pydantic import ValidationError
 
-from domains.inference.domain_runtime import market_domain
-from domains.inference.schema import (
+from arkhai_inference.domain_runtime import market_domain
+from arkhai_inference.schema import (
     InferenceListing,
     InferenceMaterialization,
     InferenceMessage,

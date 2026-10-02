@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from domains.inference.negotiation.terms import (
+from arkhai_inference.negotiation.terms import (
     INFERENCE_PROVISION_KIND,
     InferenceProvisionTerms,
     make_inference_provision_terms,

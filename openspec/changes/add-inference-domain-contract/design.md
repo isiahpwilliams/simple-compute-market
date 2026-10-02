@@ -261,7 +261,7 @@ payload shape. It is the right shape because the purchase layer *is* the same:
 a buyer is buying N credits onto a new or existing key. What differs between the
 domains is the listing and the consumption, not the purchase.
 
-It is copied into `domains/inference/negotiation/terms.py`, not imported.
+It is copied into `domains/inference/src/arkhai_inference/negotiation/terms.py`, not imported.
 `ARCHITECTURE.md`'s dependency layers forbid a domain importing a sibling, and
 the copy is small. `compose-api-family-kit` decides whether the shape moves into
 the `api` family vocabulary; until then each domain carries its own.

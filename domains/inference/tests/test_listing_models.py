@@ -9,7 +9,7 @@ from market_core.schemas import RateValue, derive_settlement_option_id
 from market_identity import Ed25519Signer
 from pydantic import ValidationError
 
-from domains.inference.listings.models import (
+from arkhai_inference.listings.models import (
     INFERENCE_KIND,
     INFERENCE_OFFERING_MODE,
     InferenceModelCard,
@@ -17,7 +17,7 @@ from domains.inference.listings.models import (
     coerce_resource_dict,
     resource_is_inference,
 )
-from domains.inference.schema import InferenceListing
+from arkhai_inference.schema import InferenceListing
 
 _OWNER = Ed25519Signer(bytes(range(32))).identity
 _RATES = [RateValue(field="amount", per="credit", value=1)]

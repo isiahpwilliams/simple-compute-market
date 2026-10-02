@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from domains.inference.listings.models import InferenceRateCard
-from domains.inference.usage.models import InferenceUsageRecord, derive_charge
+from arkhai_inference.listings.models import InferenceRateCard
+from arkhai_inference.usage.models import InferenceUsageRecord, derive_charge
 
 
 def _card(**overrides):

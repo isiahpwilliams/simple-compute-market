@@ -1,6 +1,6 @@
 """Inference usage records, charge derivation, and signed evidence."""
 
-from domains.inference.usage.evidence import (
+from arkhai_inference.usage.evidence import (
     EVIDENCE_CAPABILITY,
     EVIDENCE_PROTOCOL,
     InferenceUsageEvidenceBodyV1,
@@ -12,7 +12,7 @@ from domains.inference.usage.evidence import (
     usage_evidence_digest,
     verify_inference_usage_evidence,
 )
-from domains.inference.usage.models import (
+from arkhai_inference.usage.models import (
     USAGE_OUTCOMES,
     InferenceUsageRecord,
     derive_charge,

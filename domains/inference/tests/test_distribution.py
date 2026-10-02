@@ -26,21 +26,21 @@ def test_no_inference_project_declares_an_internal_editable_source() -> None:
 def test_domain_wheel_owns_every_module(wheels: dict[str, Path]) -> None:
     members = _members(wheels["domain"])
     assert {
-        "domains/inference/__init__.py",
-        "domains/inference/domain_runtime.py",
-        "domains/inference/schema.py",
-        "domains/inference/listings/__init__.py",
-        "domains/inference/listings/identity.py",
-        "domains/inference/listings/models.py",
-        "domains/inference/listings/pricing.py",
-        "domains/inference/negotiation/__init__.py",
-        "domains/inference/negotiation/terms.py",
-        "domains/inference/usage/__init__.py",
-        "domains/inference/usage/evidence.py",
-        "domains/inference/usage/models.py",
+        "arkhai_inference/__init__.py",
+        "arkhai_inference/domain_runtime.py",
+        "arkhai_inference/schema.py",
+        "arkhai_inference/listings/__init__.py",
+        "arkhai_inference/listings/identity.py",
+        "arkhai_inference/listings/models.py",
+        "arkhai_inference/listings/pricing.py",
+        "arkhai_inference/negotiation/__init__.py",
+        "arkhai_inference/negotiation/terms.py",
+        "arkhai_inference/usage/__init__.py",
+        "arkhai_inference/usage/evidence.py",
+        "arkhai_inference/usage/models.py",
     } <= members
-    assert not any(name.startswith("domains/inference/tests/") for name in members)
-    assert not any(name.startswith("domains/inference/registry/") for name in members)
+    assert not any(name.startswith("arkhai_inference/tests/") for name in members)
+    assert not any(name.startswith("arkhai_inference/registry/") for name in members)
 
 
 def test_domain_wheel_requires_versioned_core_and_identity(

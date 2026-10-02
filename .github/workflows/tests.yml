@@ -76,7 +76,7 @@ jobs:
           - { name: apicredits-service,      dir: domains/apicredits/service, predist: true }
           - { name: apicredits-middleware,   dir: domains/apicredits/middleware/python }
           - { name: apicredits-sample-app,   dir: domains/apicredits/sample-app }
-          - { name: inference-domain,        dir: domains/inference, predist: true, no_editable: true }
+          - { name: inference-domain,        dir: domains/inference, predist: true }
     steps:
       - uses: actions/checkout@v4
       - name: Use the repository's declared Python version

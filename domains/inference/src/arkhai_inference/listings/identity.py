@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from domains.inference.listings.models import QUANTIZATIONS
+from arkhai_inference.listings.models import QUANTIZATIONS
 
 _SEGMENT = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SOURCE_PREFIX = re.compile(r"^(?:hf://|https?://huggingface\.co/)", re.IGNORECASE)

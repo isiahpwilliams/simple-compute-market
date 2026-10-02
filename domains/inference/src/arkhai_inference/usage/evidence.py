@@ -17,8 +17,8 @@ from market_identity import (
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from domains.inference.listings.models import AttestationEnvelope, InferenceRateCard
-from domains.inference.usage.models import InferenceUsageRecord, derive_charge
+from arkhai_inference.listings.models import AttestationEnvelope, InferenceRateCard
+from arkhai_inference.usage.models import InferenceUsageRecord, derive_charge
 
 EVIDENCE_PROTOCOL = "arkhai.inference.usage-evidence.v1"
 EVIDENCE_CAPABILITY = "inference.usage.v1"

@@ -137,10 +137,10 @@ shared.
 
 ## Impact
 
-- **New code.** `domains/inference/{__init__,domain_runtime,schema}.py`,
-  `domains/inference/listings/{models,pricing}.py`,
-  `domains/inference/negotiation/terms.py`,
-  `domains/inference/usage/{models,evidence}.py`,
+- **New code.** `domains/inference/src/arkhai_inference/{__init__,domain_runtime,schema}.py`,
+  `domains/inference/src/arkhai_inference/listings/{models,pricing}.py`,
+  `domains/inference/src/arkhai_inference/negotiation/terms.py`,
+  `domains/inference/src/arkhai_inference/usage/{models,evidence}.py`,
   `domains/inference/registry/filter-spec.yaml`,
   `domains/inference/pyproject.toml`, and `domains/inference/tests/`.
 - **Touched code.** `core/registry/Dockerfile` (one `COPY` per stage),

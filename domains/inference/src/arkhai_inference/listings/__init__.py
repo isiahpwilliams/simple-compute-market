@@ -1,10 +1,10 @@
 """Inference listing schema helpers."""
 
-from domains.inference.listings.identity import (
+from arkhai_inference.listings.identity import (
     derive_model_id,
     model_id_from_artifact_ref,
 )
-from domains.inference.listings.pricing import (
+from arkhai_inference.listings.pricing import (
     UNIT_RATE,
     checked_credit_total,
     determine_strategy_from_order,
@@ -12,7 +12,7 @@ from domains.inference.listings.pricing import (
     reference_payment,
     selected_unit_price,
 )
-from domains.inference.listings.models import (
+from arkhai_inference.listings.models import (
     INFERENCE_KIND,
     INFERENCE_OFFERING_MODE,
     OPENAI_V1_API_STYLE,

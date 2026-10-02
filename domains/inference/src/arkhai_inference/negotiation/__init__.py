@@ -1,6 +1,6 @@
 """Inference negotiation term helpers."""
 
-from domains.inference.negotiation.terms import (
+from arkhai_inference.negotiation.terms import (
     INFERENCE_PROVISION_KIND,
     INFERENCE_PROVISION_VERSION,
     InferenceProvisionTerms,

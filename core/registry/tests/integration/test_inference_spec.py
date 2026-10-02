@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 from registry_client import ListingRequest, ValidatePublishRequest
-from src.api import filter_spec as filter_spec_module
-from src.api import validate_routes
+from core_registry.api import filter_spec as filter_spec_module
+from core_registry.api import validate_routes
 
 pytestmark = pytest.mark.asyncio
 

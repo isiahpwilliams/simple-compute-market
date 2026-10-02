@@ -9,12 +9,12 @@ from market_core.schemas import SettlementOption, SettlementSelection
 from market_identity import Identity
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from domains.inference.listings.models import (
+from arkhai_inference.listings.models import (
     INFERENCE_KIND,
     InferenceModelCard,
     InferenceRateCard,
 )
-from domains.inference.negotiation.terms import (
+from arkhai_inference.negotiation.terms import (
     INFERENCE_PROVISION_KIND,
     InferenceProvisionTerms,
 )

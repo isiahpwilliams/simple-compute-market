@@ -7,8 +7,8 @@ import json
 import pytest
 from market_core.schemas import RateValue, SettlementSelection, derive_settlement_option_id
 
-from domains.inference.listings.models import INFERENCE_KIND
-from domains.inference.listings.pricing import (
+from arkhai_inference.listings.models import INFERENCE_KIND
+from arkhai_inference.listings.pricing import (
     UNIT_RATE,
     checked_credit_total,
     determine_strategy_from_order,

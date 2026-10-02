@@ -8,7 +8,7 @@ import pytest
 from market_identity import Ed25519Signer, TrustedIdentitySet
 from pydantic import ValidationError
 
-from domains.inference.usage.evidence import (
+from arkhai_inference.usage.evidence import (
     InferenceUsageEvidenceBodyV1,
     UsageEvidenceError,
     canonical_signed_usage_evidence,

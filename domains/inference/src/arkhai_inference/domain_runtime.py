@@ -11,7 +11,7 @@ from market_core import (
     MarketDomainContract,
 )
 
-from domains.inference.schema import (
+from arkhai_inference.schema import (
     INFERENCE_SCHEMA_KIND,
     InferenceListing,
     InferenceMaterialization,

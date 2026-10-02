@@ -12,7 +12,7 @@ from typing import Any
 
 from market_core.schemas import SettlementOption, SettlementSelection
 
-from domains.inference.listings.models import resource_is_inference
+from arkhai_inference.listings.models import resource_is_inference
 
 UNIT_RATE = 1
 _MAX_BASE_UNIT_AMOUNT = 2**256 - 1

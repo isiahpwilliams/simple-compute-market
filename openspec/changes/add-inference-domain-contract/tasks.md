@@ -23,7 +23,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
       (`arkhai-inference-domain`, hatchling, `force-include` of every module as
       the API-credits domain wheel does), and a `tests/` root. Depend on
       `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-policy`, `pydantic`.
-- [x] 1.3 `domains/inference/listings/models.py`: `INFERENCE_KIND =
+- [x] 1.3 `domains/inference/src/arkhai_inference/listings/models.py`: `INFERENCE_KIND =
       "inference.v1"`, `INFERENCE_OFFERING_MODE = "inference"`, and the
       `InferenceModelCard` model (`listing_resource` payload) with `model_id`
       (non-empty; characters restricted to what a filter path can carry, no
@@ -43,7 +43,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
       `offering_mode` pinned to `inference`. `extra="forbid"`. Include the
       `coerce_resource_dict` and `resource_is_inference` helpers on the
       API-credits pattern.
-- [x] 1.3a `domains/inference/listings/identity.py`: `derive_model_id(...)`,
+- [x] 1.3a `domains/inference/src/arkhai_inference/listings/identity.py`: `derive_model_id(...)`,
       a pure function implementing the derivation rule — public upstream owner
       and repository lowercased with revision, branch, and quantization
       suffixes stripped; the owner's namespace for private weights; the
@@ -51,7 +51,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
       inputs for the same weights derive the same identifier and that the
       three suffix kinds are stripped. Sellers and the seller path call it; the
       card does not require it.
-- [x] 1.4 `domains/inference/schema.py`: `InferenceListing` (kind,
+- [x] 1.4 `domains/inference/src/arkhai_inference/schema.py`: `InferenceListing` (kind,
       `listing_resource`, `accepted_escrows`, `settlement_options`, `demands`)
       with the same before-validator that normalizes a wheel-boundary model back
       to its wire form, duplicate-option-id rejection, and the required-field
@@ -68,14 +68,14 @@ asset). The tasks remain as the record; no open gate remains in this change.
       envelope validate identically; a card naming a `model_owner` validates.
 
 Done 2026-09-27: premises re-verified on `dev` at `29b84d82` with no drift;
-`domains/inference/listings/{models,identity}.py`, `schema.py`; 56 focused
+`domains/inference/src/arkhai_inference/listings/{models,identity}.py`, `schema.py`; 56 focused
 tests. `model_id` admits uppercase by design (seller-asserted); `resource_id`
 is optional on the card as on the API-credits resource, the publication path
 sets it. The rate card model landed here because the card requires it.
 
 ## 2. Rate card and pricing arithmetic
 
-- [x] 2.1 `domains/inference/listings/models.py`: `InferenceRateCard` with
+- [x] 2.1 `domains/inference/src/arkhai_inference/listings/models.py`: `InferenceRateCard` with
       `prompt_credits_per_million`, `completion_credits_per_million`
       (non-negative int, required), `request_credits` (non-negative int, default
       0), `cached_prompt_credits_per_million` and `image_credits_per_unit`
@@ -83,7 +83,7 @@ sets it. The rate card model landed here because the card requires it.
       listing's settlement asset. Strict integer validation: `bool`, `float`,
       and numeric strings are rejected, matching `checked_credit_total`'s
       posture in the API-credits pricing module.
-- [x] 2.2 `domains/inference/listings/pricing.py`: `selected_unit_price` and
+- [x] 2.2 `domains/inference/src/arkhai_inference/listings/pricing.py`: `selected_unit_price` and
       `extract_unit_price_from_order` accepting `per: credit` with a value of
       exactly `1` and refusing any other value or unit; the reference payment
       equals `quantity`, with the uint256 overflow guard;
@@ -101,18 +101,18 @@ when it is one; task 2.3's text was amended to match.
 
 ## 3. Provision intent, negotiation carriers, and codecs
 
-- [x] 3.1 `domains/inference/negotiation/terms.py`: `InferenceProvisionTerms`
+- [x] 3.1 `domains/inference/src/arkhai_inference/negotiation/terms.py`: `InferenceProvisionTerms`
       (`kind: inference.v1`, `version: 1`, payload `{quantity ≥ 1, key: {mode,
       key_id?}}`) and `make_inference_provision_terms`, copied from the
       API-credits module with the kind changed. State in the module docstring
       that the shape is shared by design and that kit ownership is decided by
       `extract-access-issuance-kit`.
-- [x] 3.2 `domains/inference/schema.py`: `InferenceMessage`, `InferenceTerms`,
+- [x] 3.2 `domains/inference/src/arkhai_inference/schema.py`: `InferenceMessage`, `InferenceTerms`,
       `InferenceMaterialization` (adds the pinned `rate_card`), `InferenceReceipt`,
       `InferenceResult`, each `extra="forbid"`, each carrying `kind:
       inference.v1`, with the same joint-presence rule for settlement selection
       and canonical principals API credits enforces.
-- [x] 3.3 `domains/inference/domain_runtime.py`: `INFERENCE_MARKET_DOMAIN =
+- [x] 3.3 `domains/inference/src/arkhai_inference/domain_runtime.py`: `INFERENCE_MARKET_DOMAIN =
       MarketDomainContract(identity=DomainIdentity("inference.v1"),
       contract_version=MARKET_DOMAIN_CONTRACT_VERSION, codecs=...)` and
       `market_domain()`.
@@ -129,7 +129,7 @@ empty capability set; 24 tests including eleven invalid-input codec cases.
 
 ## 4. Usage record, charge derivation, and evidence
 
-- [x] 4.1 `domains/inference/usage/models.py`: `UsageOutcome` literal
+- [x] 4.1 `domains/inference/src/arkhai_inference/usage/models.py`: `UsageOutcome` literal
       (`completed`, `cancelled`, `failed`), `InferenceUsageRecord` (`model_id`,
       `key_id`, `request_id`, `prompt_tokens`, `completion_tokens`,
       `cached_prompt_tokens`, `image_units`, `outcome`; non-negative ints;
@@ -142,7 +142,7 @@ empty capability set; 24 tests including eleven invalid-input codec cases.
       boundaries; all-zero record with a floor; cached tokens priced separately
       when a cached rate is present and ignored when absent; a property-style
       test that `derive_charge` never returns a float and never underflows.
-- [x] 4.3 `domains/inference/usage/evidence.py`: `InferenceUsageEvidenceBodyV1`
+- [x] 4.3 `domains/inference/src/arkhai_inference/usage/evidence.py`: `InferenceUsageEvidenceBodyV1`
       (protocol `arkhai.inference.usage-evidence.v1`, schema version `1`,
       `domain: inference`, the record, the pinned card, the derived charge,
       `grant_id`, `fulfillment_id`, `issuer`, and an optional opaque

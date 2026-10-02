@@ -11,19 +11,6 @@ dependencies = [
     "pydantic>=2",
 ]
 
-[tool.uv]
-# Tests import this package from its installed wheel, not an editable
-# install: a directory-mapped package has no editable form that presents it
-# under its import path. The Makefile and CI set UV_NO_EDITABLE, and these
-# keys make uv rebuild that wheel whenever a module changes.
-cache-keys = [
-    { file = "pyproject.toml" },
-    { file = "*.py" },
-    { file = "listings/*.py" },
-    { file = "negotiation/*.py" },
-    { file = "usage/*.py" },
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -32,13 +19,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-# This directory is the `domains.inference` package. The wheel maps the shared
-# modules and subpackages by directory, so a module added to one ships without
-# a packaging edit.
-include = ["/*.py", "/listings/*.py", "/negotiation/*.py", "/usage/*.py"]
-
-[tool.hatch.build.targets.wheel.sources]
-"" = "domains/inference/"
+packages = ["src/arkhai_inference"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

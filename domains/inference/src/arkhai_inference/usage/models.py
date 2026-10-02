@@ -12,7 +12,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from domains.inference.listings.models import InferenceRateCard
+from arkhai_inference.listings.models import InferenceRateCard
 
 UsageOutcome = Literal["completed", "cancelled", "failed"]
 USAGE_OUTCOMES: tuple[str, ...] = get_args(UsageOutcome)

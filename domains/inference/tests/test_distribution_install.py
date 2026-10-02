@@ -45,9 +45,9 @@ def test_domain_contract_imports_from_built_wheel(
     )
     code = """
 from pathlib import Path
-from domains.inference import domain_runtime
-from domains.inference.listings import derive_model_id
-from domains.inference.usage import derive_charge
+from arkhai_inference import domain_runtime
+from arkhai_inference.listings import derive_model_id
+from arkhai_inference.usage import derive_charge
 contract = domain_runtime.market_domain()
 module_path = Path(domain_runtime.__file__).resolve()
 assert contract.identity == "inference.v1"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from domains.inference.listings.identity import (
+from arkhai_inference.listings.identity import (
     derive_model_id,
     model_id_from_artifact_ref,
 )

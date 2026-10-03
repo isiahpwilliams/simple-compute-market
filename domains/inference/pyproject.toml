@@ -1,0 +1,30 @@
+[project]
+name = "arkhai-inference-domain"
+version = "0.1.0"
+license = "MIT"
+description = "Shared inference domain models, pricing, usage vocabulary, and market-domain contract."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "arkhai-core>=0.2.0",
+    "arkhai-kit-policy",
+    "arkhai-kit-identity==0.3.0",
+    "pydantic>=2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arkhai_inference"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]

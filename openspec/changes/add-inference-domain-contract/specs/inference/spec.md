@@ -34,8 +34,11 @@ whose `api_style` is `openai.v1`, a complete rate card, a `provenance` of
 `self-hosted` or `resold`, and `offering_mode` equal to `inference`; it MAY
 carry an `artifact_digest`, a mutable `display_name`, a `model_owner` principal
 distinct from the seller, and an `attestation` envelope. A listing omitting any
-required field MUST be rejected at publication rather than published with the
-field absent.
+required field MUST be refused before it is published: the domain's listing
+codec refuses it on the storefront's publication path, and a registry's dry-run
+validation refuses it against the served shape. A registry's publish boundary
+refuses only retired shape spellings, so a malformed card is stopped at the
+seller, not at the index.
 
 A listing SHOULD derive `model_id` by the domain's derivation rule — the
 upstream owner and repository name, lowercased, with revision and quantization
@@ -139,8 +142,8 @@ same integer charge.
 - **WHEN** a client stops a streamed request after 400 completion tokens were
   produced against a card of 200 credits per million completion tokens with a
   request floor of 1
-- **THEN** the record's outcome is `cancelled` and its charge is 1 credit, the
-  ceiling of 0.08 plus the floor
+- **THEN** the record's outcome is `cancelled` and its charge is 2 credits: the
+  ceiling of 0.08, which is one, plus the request charge of one
 
 #### Scenario: Upstream fails to answer
 
@@ -212,10 +215,12 @@ version `1` and MUST validate and filter listings from the inference filter
 specification: exact filters on `model_id`, `model_family`, `quantization`,
 modality, `supported_parameters`, and `provenance`; range filters on
 `context_length` and on the rate card's base-unit integers; and the settlement
-mechanism, asset, and funding projections. The inference buyer plugin MUST
+mechanism, asset, and funding projections. Each rate bound MUST declare
+`settlement_asset` as a co-required filter, so a registry refuses an unpaired
+bound rather than comparing across assets. The inference buyer plugin MUST
 declare the `inference` schema identity, MUST query only registries declaring
-it, and MUST refuse to compile a rate bound that is not paired with a settlement
-asset.
+it, and MUST resolve that co-requirement from the served specification rather
+than from code.
 
 #### Scenario: Buyer bounds a rate
 
@@ -226,9 +231,9 @@ asset.
 
 #### Scenario: Buyer bounds a rate without naming an asset
 
-- **WHEN** a buyer supplies a rate bound and no settlement asset
-- **THEN** the buyer plugin refuses to compile the query and names the pairing
-  rule
+- **WHEN** a query supplies a rate bound and no `settlement_asset`
+- **THEN** the registry refuses it rather than evaluating it, and a buyer
+  plugin compiling against the served specification refuses before sending
 
 #### Scenario: Compute and API-credit registries are also configured
 

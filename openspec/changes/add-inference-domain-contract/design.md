@@ -216,17 +216,13 @@ problem it guarded against no longer exists.
 What the registry filters on is therefore authoritative: `prompt_credits_max`
 and `completion_credits_max` are upper bounds on the rate card's integers, and
 `settlement_asset` selects the asset they are denominated in. A rate bound is
-meaningful only alongside an asset, and the generic registry cannot yet express
-"this filter requires that one" — `publish-indicative-listing-rates` is building
-that declarative co-requirement. Until it lands, the **buyer plugin** enforces
-the pairing: a rate bound without `--asset` is refused at query compilation, and
-the seller path documents the same rule. Cross-asset comparison needs an
-exchange rate the registry must not be an authority on, and stays client-side,
-consistent with Goal 7.
-
-**Revisit trigger:** when `publish-indicative-listing-rates` promotes filter
-co-requirements, move the pairing rule from the buyer plugin into the inference
-filter specification so the registry refuses an unpaired bound itself.
+meaningful only alongside an asset, so both bounds declare
+`requires: [settlement_asset]` — the declarative co-requirement
+`publish-indicative-listing-rates` added to the generic registry — and the
+registry itself refuses an unpaired bound. The buyer compiler resolves the rule
+from the served specification, as `registry-discovery` requires; nothing
+encodes it in code. Cross-asset comparison needs an exchange rate the registry
+must not be an authority on, and stays client-side, consistent with Goal 7.
 ### Quota-backed publication in version 1
 
 An inference seller's supply is, in truth, not finite in the way a GPU is: a
@@ -260,7 +256,7 @@ payload shape. It is the right shape because the purchase layer *is* the same:
 a buyer is buying N credits onto a new or existing key. What differs between the
 domains is the listing and the consumption, not the purchase.
 
-It is copied into `domains/inference/negotiation/terms.py`, not imported.
+It is copied into `domains/inference/src/arkhai_inference/negotiation/terms.py`, not imported.
 `ARCHITECTURE.md`'s dependency layers forbid a domain importing a sibling, and
 the copy is small. Whether it becomes kit is `extract-access-issuance-kit`'s
 question, answered with two consumers in view.
@@ -383,8 +379,8 @@ Filters: `model_id`, `model_family`, `quantization`, `modality`,
 `supported_parameter`, and `provenance` are exact `in` filters, fail-on-missing
 where the field is required. `context_length_min` is a lower-bound range.
 `prompt_credits_max` and `completion_credits_max` are upper-bound ranges over the
-rate card's base-unit integers, paired with `settlement_asset` by the buyer
-plugin as described above. The token, mechanism, asset, and funding projections
+rate card's base-unit integers, each co-requiring `settlement_asset` as
+described above. The token, mechanism, asset, and funding projections
 are copied from the API-credits specification. `offering_mode` is required and
 equals `inference`. The attestation envelope is **not** a filter.
 ### OpenAI-compatible surface, version 1
@@ -408,9 +404,8 @@ usage fields under a version bump, not a reinterpretation.
   This is API credits' posture today and inherits its limits; the quota is a
   sales cap, and admitting the unbacked backing value later is a
   filter-specification bump, not a migration.
-- **A rate bound without an asset is meaningless, and the registry cannot yet
-  refuse one.** Mitigated by the buyer plugin refusing to compile it, until
-  filter co-requirements land and the rule moves into the specification.
+- **A rate bound without an asset is meaningless.** Closed by the declared
+  co-requirement: the registry refuses an unpaired bound.
 - **Cross-asset comparison is client-side.** Accepted for the reasons
   `publish-indicative-listing-rates` records.
 - **Identifier convergence is a SHOULD.** Two sellers may still name the same
@@ -424,17 +419,13 @@ usage fields under a version bump, not a reinterpretation.
 Each carries its revisit trigger. None is prescribed by a task in this change;
 where a task touches one it is an explicit decision gate.
 
-1. **Registry-side pairing of a rate bound with its asset.** Trigger:
-   `publish-indicative-listing-rates` promotes declarative filter
-   co-requirements; the rule then moves from the buyer plugin into the
-   inference filter specification.
-2. **Admitting the unbacked backing value for inference listings.** The
+1. **Admitting the unbacked backing value for inference listings.** The
    property exists; the trigger is a seller who needs it. Cost: an inference
    filter-specification bump and close-and-republish.
-3. **Whether the inference authority is the same kit-composed service binary as
+2. **Whether the inference authority is the same kit-composed service binary as
    API credits deployed twice, or a distinct distribution.** Owned by
    `extract-access-issuance-kit`; irrelevant to this change's vocabulary.
-4. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
+3. **Pre-flight token estimation source** (vLLM `/tokenize` versus a local
    tokenizer). Owned by `meter-inference-usage`.
 
 ## Migration Plan

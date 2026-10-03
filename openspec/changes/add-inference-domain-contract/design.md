@@ -379,8 +379,8 @@ Filters: `model_id`, `model_family`, `quantization`, `modality`,
 `supported_parameter`, and `provenance` are exact `in` filters, fail-on-missing
 where the field is required. `context_length_min` is a lower-bound range.
 `prompt_credits_max` and `completion_credits_max` are upper-bound ranges over the
-rate card's base-unit integers, paired with `settlement_asset` by the buyer
-plugin as described above. The token, mechanism, asset, and funding projections
+rate card's base-unit integers, each co-requiring `settlement_asset` as
+described above. The token, mechanism, asset, and funding projections
 are copied from the API-credits specification. `offering_mode` is required and
 equals `inference`. The attestation envelope is **not** a filter.
 ### OpenAI-compatible surface, version 1
@@ -404,9 +404,8 @@ usage fields under a version bump, not a reinterpretation.
   This is API credits' posture today and inherits its limits; the quota is a
   sales cap, and admitting the unbacked backing value later is a
   filter-specification bump, not a migration.
-- **A rate bound without an asset is meaningless, and the registry cannot yet
-  refuse one.** Mitigated by the buyer plugin refusing to compile it, until
-  filter co-requirements land and the rule moves into the specification.
+- **A rate bound without an asset is meaningless.** Closed by the declared
+  co-requirement: the registry refuses an unpaired bound.
 - **Cross-asset comparison is client-side.** Accepted for the reasons
   `publish-indicative-listing-rates` records.
 - **Identifier convergence is a SHOULD.** Two sellers may still name the same

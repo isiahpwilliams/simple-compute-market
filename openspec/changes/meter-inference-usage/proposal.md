@@ -73,6 +73,13 @@ reserve-then-settle, and the place to do it is the authority, not the gate.
   mutates is the kit-composed one, and it is mutated once.
 - `add-inference-domain-contract` owns the charge derivation this enforces;
   any change to the formula is a delta there, not here.
+- **Inherits two things from `compose-inference-domain-stack`.** That stack
+  publishes only request-priced rate cards, because its gate charges a fixed
+  amount on admission; this change removes that publication guard once
+  per-token charging exists. And that stack pins the rate card in the
+  storefront's materialization without extending the authority's grant; this
+  change carries the card to the authority, where the consumption path reads
+  it. Grants issued before then are request-priced by construction.
 
 ## Impact
 

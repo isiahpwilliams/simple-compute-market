@@ -94,7 +94,12 @@ one. This is what keeps extraction a comparison.
 | fulfillment kind `api_credits.v1`, offering mode and provider `api_credits` | `inference.v1`, `inference` |
 | key identifier prefix `ak_` | `ik_` |
 | buyer command group `market credits` | `market inference` |
-| class and function names carrying `ApiCredits`, `api_credit`, `Credits` | the same names carrying `Inference` |
+| names carrying `ApiCredits`, `ApiCredit`, `api_credits`, or `api_credit` | the same names carrying `Inference` or `inference` |
+
+Names carrying plain `Credit` or `Credits` — `CreditsServiceClient`,
+`CreditIssuanceRequest`, `credits_client.py` — are kept, as are file names:
+inference sells credits too, and a rename there would be noise in the
+comparison extraction makes.
 
 The issuance labels are inside SHA-256 digests on both the client and the
 authority. A test pins the digest bytes for a fixed input on each side and
@@ -202,6 +207,23 @@ This keeps the stack honest. Without the guard, the registry would index a
 per-token price that nothing enforces, and a buyer comparing listings by token
 rate would be comparing numbers the sellers do not charge.
 
+The copied gate holds one charge amount and the authority verifies a key
+without regard to what it was bought for. Two limits follow, both accepted
+until metering replaces the gate:
+
+- **One gateway serves one model at one price.** A gateway is configured with
+  a single `served_model_name` and a single amount. A seller with two models
+  runs two gateways. The storefront and the gateway are configured separately,
+  so their agreement on the price and the model name is a deployment property;
+  the development stack asserts it with a static test.
+- **A key is a balance at the authority, not an entitlement to a model.** A key
+  bought through one listing is admitted by any gateway using the same
+  authority, and is charged that gateway's amount. Because a credit is one base
+  unit of the settlement asset, the buyer still pays the price of what they
+  call; what is not enforced is that the price is the one pinned in their
+  materialization. Per-model entitlement and pinned-rate enforcement are
+  `meter-inference-usage`'s.
+
 One divergence from the contract remains and is accepted for this change: the
 gate charges on admission, so a request the model server then fails is still
 charged, where `derive_charge` gives a failed request zero. Releasing a charge
@@ -213,12 +235,12 @@ needs the hold-and-settle path that metering adds. It is recorded under risks.
 
 - `POST /v1/chat/completions` and `POST /v1/completions` are gated and
   proxied. Every other path is `404`, except the two below.
-- `GET /v1/models` returns only the models the gateway is configured to serve,
+- `GET /v1/models` returns only the model the gateway is configured to serve,
   and `GET /health` reports liveness. Both are ungated: the model list is
   already public in the listing, and the copied gate has no verify-without-
   charge path to gate it with.
 - **The model is checked before the charge.** The request body is read up to a
-  configured limit and its `model` must equal a configured
+  configured limit and its `model` must equal the configured
   `served_model_name`; otherwise the gateway answers `404` with an OpenAI-style
   `model_not_found` error and no credit is spent. A body over the limit is
   `413`; a body that is not a JSON object is `400`. The check sits outside the
@@ -249,8 +271,9 @@ API-credits sample application's precedent of a minimal in-repository
 application standing in for what the seller really runs.
 
 A `vllm` Compose profile replaces it with the CPU vLLM image and a small
-instruct model for anyone who wants a real model locally. The profile is not
-part of the end-to-end lane.
+instruct model for anyone who wants a real model locally, and selects a
+storefront configuration listing that model. The profile is not part of the
+end-to-end lane.
 
 The thing under test is the market plumbing and the gateway, not a model
 server. A stub makes the scenario deterministic, keeps the nightly lane free of
@@ -308,7 +331,8 @@ with the backed value.
 
 The storefront's `[seed]` block gains the model-card fields and, on a fresh
 stack, registers the quota resource and publishes one listing whose endpoint is
-the gateway: a small instruct model identifier, `provenance = "self-hosted"`,
+the gateway: the stub's model, named so that it reads as a fixture
+(`artifact_ref = "dev://arkhai/stub-instruct"`), `provenance = "self-hosted"`,
 `quantization = "none"`, a rate card of one credit per request, and a quota
 large enough that the scenario cannot close the listing. `model_id` is derived
 with the contract's `derive_model_id` from the configured owner and name.
@@ -370,7 +394,7 @@ with no hosted-release requirement.
 
 ### Landing in reviewable slices
 
-The change is about 17,000 lines, most of it copied. It lands as stacked pull
+The change is roughly 16,000 lines, most of it copied. It lands as stacked pull
 requests, one per section of `tasks.md`, each green on its own:
 
 1. Domain-package semantics and the authority.
@@ -385,7 +409,7 @@ the copy.
 
 ## Risks / Trade-offs
 
-- **Seventeen thousand lines of transient duplication.** Accepted by the
+- **Roughly sixteen thousand lines of transient duplication.** Accepted by the
   campaign's sequencing rule. Bounded by the frozen-copy rule, the enumerated
   differences, the recorded source commit, and `extract-access-issuance-kit`'s
   requirement that no domain-local copy survives.
@@ -394,6 +418,9 @@ the copy.
   drift visible; a security fix is ported by hand and noted in `tasks.md`.
 - **A failed request is charged.** The gate charges on admission. Closed by
   `meter-inference-usage`'s hold, settle, and release.
+- **A key is not scoped to a model, and one gateway has one price.** Stated
+  under the request-priced decision. Harmless on a one-model stack; a seller
+  with several models at different prices should wait for metering.
 - **Request-priced only.** No seller can publish a per-token price until
   metering lands. That is the honest state of the stack and is why
   `package-inference-seller` depends on metering.
@@ -414,9 +441,9 @@ Each carries its revisit trigger. None is prescribed by a task in this change.
    which metering introduces.
 2. **Whether the vLLM profile belongs in a scheduled lane.** Owned by
    `qualify-inference-market`.
-3. **Whether the gateway should serve more than one model server.** Trigger: a
-   seller running several. One listing is one served model either way; this is
-   only about how many upstreams one gateway process fronts.
+3. **Whether one gateway should front several models.** Trigger: a seller
+   running several. It needs a per-model charge, which the copied gate does not
+   have and metering's gate does.
 
 ## Migration Plan
 

@@ -115,8 +115,9 @@ version-1 style and MUST forward a request only after the authority has
 verified the bearer credential and charged it. A request naming a model the
 gateway does not serve MUST be refused before any charge. The gateway MUST
 answer `401` for a missing or unknown credential, `403` for a revoked one, and
-`402` with a pointer to where credits can be bought for an exhausted one. The
-model list MUST contain only the models the gateway serves.
+`402` with a pointer to where credits can be bought for an exhausted one. A
+gateway MUST serve exactly one model at one configured charge, and its model
+list MUST contain only that model.
 
 #### Scenario: A request names an unlisted model
 

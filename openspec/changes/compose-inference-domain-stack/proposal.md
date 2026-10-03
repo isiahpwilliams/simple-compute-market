@@ -43,7 +43,7 @@ request-priced rate cards are publishable until then.
 - **Gateway.** An `arkhai:inference-gateway` image: an OpenAI-compatible reverse
   proxy in front of a model server, gated by a copy of the Python bearer gate
   signing as the `service` role, charging the listing's per-request credits on
-  admission, with `/v1/models` filtered to the models the seller lists. A
+  admission, serving one model at one price with `/v1/models` listing only it. A
   request naming an unlisted model is refused before any charge, and the
   buyer's credential is never forwarded. Streaming responses are passed through
   unbuffered even though nothing yet reads their usage.

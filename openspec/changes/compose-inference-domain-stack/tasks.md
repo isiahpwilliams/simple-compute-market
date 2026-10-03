@@ -1,9 +1,9 @@
 # Implementation Tasks
 
-Sections are ordered by real dependency. Each of Sections 2–7 is one stacked
-pull request, green on its own; `design.md`'s "Landing in reviewable slices"
-gives the grouping. Sections 2–6 start no service and change no existing
-package. Section 7 changes the development stack.
+Sections are ordered by real dependency and land as five stacked pull
+requests, each green on its own: Sections 2, 3, 4, and 5 are one each, and
+Sections 6–8 land together. Sections 2–6 start no service and change no
+existing package. Section 7 changes the development stack.
 
 **Standing rule for every copied module.** `design.md`'s "Copies are frozen, and
 the permitted differences are enumerated" is the whole of what a copy may
@@ -39,8 +39,8 @@ amended to match.
 - [ ] 2.1 Copy into `domains/inference/src/arkhai_inference/`:
       `listings/reconciler.py`, `negotiation/policies.py`,
       `negotiation/buyer_policies.py`, `negotiation/storefront_round.py`,
-      `settlement/credits_client.py` as `settlement/issuance_client.py`,
-      `settlement/fulfillment.py`, and `settlement/issuance_evidence.py`. Apply
+      `settlement/credits_client.py`, `settlement/fulfillment.py`, and
+      `settlement/issuance_evidence.py`, each under its source's file name. Apply
       the rename table. Listing reads go through `InferenceModelCard`; price
       reads go through `arkhai_inference.listings.pricing`; terms go through
       `arkhai_inference.negotiation.terms`. Record the field mapping used.
@@ -143,9 +143,9 @@ amended to match.
       through; `502` when unreachable and `504` on timeout.
 - [ ] 4.3 New module — model check, outside the gate: bounded body read, `413`
       over the limit, `400` when not a JSON object, `404` `model_not_found`
-      when `model` is not a configured served model. Test: a refused request
+      when `model` is not the configured served model. Test: a refused request
       makes no authority call.
-- [ ] 4.4 `GET /v1/models` listing only configured models and `GET /health`,
+- [ ] 4.4 `GET /v1/models` listing only the configured model and `GET /health`,
       both ungated; every other path `404`.
 - [ ] 4.5 Gateway tests against a scripted authority and a scripted model
       server: admitted and charged; `401` missing and unknown key; `403`
@@ -212,7 +212,8 @@ amended to match.
 - [ ] 7.2 `domains/inference/compose.yml` with the five services, their
       health checks, memory limits, role-scoped credential mounts guarded by
       `${VAR:?…}`, pinned trusted principals and expected authorities, and
-      independent named volumes; the `vllm` profile replacing the stub.
+      independent named volumes; the `vllm` profile replacing the stub and
+      selecting a storefront configuration that lists the model it serves.
 - [ ] 7.3 `compose.inference.yml` standalone wrapper; the domain file included
       from the root `docker-compose.yml`; registry authority, storefront
       identity, and wallet bindings in `compose.local-identities.yml`; a
@@ -221,8 +222,9 @@ amended to match.
       comment above it and the identities README count them.
 - [ ] 7.5 Static stack tests beside the API-credits ones: no committed
       administrative credential, independent volumes, images installing only
-      their staged wheels, and the registry selecting the `inference`
-      specification.
+      their staged wheels, the registry selecting the `inference`
+      specification, and the gateway's configured charge and served model
+      equal to the seeded listing's `request_credits` and `served_model_name`.
 - [ ] 7.6 End-to-end settings for the inference registry and gateway URLs; the
       `e2e_inference_deal` marker; the marker added to the VM lane's module
       expression.

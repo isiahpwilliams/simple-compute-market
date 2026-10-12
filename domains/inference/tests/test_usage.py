@@ -80,7 +80,7 @@ def test_charge_is_always_a_non_negative_int():
             assert charge >= 0
 
 
-def test_two_implementations_agree_on_large_values():
+def test_large_values_stay_exact_integers():
     card = _card(prompt_credits_per_million=10**18, completion_credits_per_million=10**18)
     record = _record(prompt_tokens=10**9, completion_tokens=10**9)
     assert derive_charge(record, card) == 2 * 10**21

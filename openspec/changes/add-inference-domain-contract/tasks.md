@@ -189,9 +189,8 @@ contribute nothing, as the formula states.
       `requires: [settlement_asset]` so the registry refuses an unpaired
       bound; no filter over
       `attestation`; `offering_mode` as `in`, fail-on-missing; the
-      `token`, `token_exclude`, `settlement_mechanism`, `settlement_asset`,
-      `funding_profile`, and `funding_interaction` projections verbatim from the
-      API-credits specification.
+      `token`, `token_exclude`, `settlement_mechanism`, and `settlement_asset`
+      projections verbatim from the API-credits specification.
 - [x] 5.3 `core/registry/tests/unit/test_filter_spec.py`: add
       `test_repo_inference_spec_loads` beside `test_repo_api_credits_spec_loads`,
       asserting schema identity `inference` version 1, that every filter path

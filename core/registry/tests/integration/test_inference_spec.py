@@ -55,8 +55,6 @@ _QUERY_PER_FILTER = {
     "token_exclude": {"token_exclude": "not_in:[0x" + "33" * 20 + "]"},
     "settlement_mechanism": {"settlement_mechanism": "alkahest.v1"},
     "settlement_asset": {"settlement_asset": _ASSET},
-    "funding_profile": {"funding_profile": "prepaid"},
-    "funding_interaction": {"funding_interaction": "redirect"},
 }
 
 

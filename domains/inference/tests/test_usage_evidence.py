@@ -9,6 +9,7 @@ from market_identity import Ed25519Signer, TrustedIdentitySet
 from pydantic import ValidationError
 
 from arkhai_inference.usage.evidence import (
+    ExpectedInferenceUsageEvidenceV1,
     InferenceUsageEvidenceBodyV1,
     UsageEvidenceError,
     canonical_signed_usage_evidence,
@@ -54,6 +55,26 @@ def _fixture(**extra):
     return signer, body
 
 
+def _expected(body, **overrides):
+    facts = {
+        "grant_id": body.grant_id,
+        "fulfillment_id": body.fulfillment_id,
+        "key_id": body.record.key_id,
+        "model_id": body.record.model_id,
+        "rate_card": body.rate_card,
+        "issuer": body.issuer,
+    }
+    facts.update(overrides)
+    return ExpectedInferenceUsageEvidenceV1.model_validate(facts)
+
+
+def _verify(evidence, signer, body, **kwargs):
+    kwargs.setdefault("trusted_issuers", TrustedIdentitySet(identities=(signer.identity,)))
+    kwargs.setdefault("expected", _expected(body))
+    kwargs.setdefault("now_unix", _NOW)
+    return verify_inference_usage_evidence(evidence, **kwargs)
+
+
 def test_signed_evidence_is_canonical_verifiable_and_secret_free():
     signer, body = _fixture()
     evidence = sign_inference_usage_evidence(body, signer)
@@ -62,10 +83,7 @@ def test_signed_evidence_is_canonical_verifiable_and_secret_free():
         assert canary not in encoded
     assert decode_signed_usage_evidence(encoded) == evidence
     assert usage_evidence_digest(evidence).startswith("sha256:")
-    verified = verify_inference_usage_evidence(
-        evidence, trusted_issuers=TrustedIdentitySet(identities=(signer.identity,)), now_unix=_NOW
-    )
-    assert verified == body
+    assert _verify(evidence, signer, body) == body
 
 
 def test_body_rejects_a_charge_that_does_not_match_the_card():
@@ -97,7 +115,9 @@ def test_untrusted_issuer_is_rejected():
     evidence = sign_inference_usage_evidence(body, signer)
     other = Ed25519Signer(bytes(range(1, 33)))
     with pytest.raises(UsageEvidenceError, match="not trusted"):
-        verify_inference_usage_evidence(evidence, trusted_issuers=TrustedIdentitySet(identities=(other.identity,)), now_unix=_NOW)
+        _verify(evidence, signer, body, trusted_issuers=TrustedIdentitySet(identities=(other.identity,)))
+    with pytest.raises(UsageEvidenceError, match="not trusted"):
+        _verify(evidence, signer, body, expected=_expected(body, issuer=other.identity))
 
 
 def test_signer_must_be_the_declared_issuer():
@@ -111,20 +131,45 @@ def test_forged_signature_is_rejected():
     evidence = sign_inference_usage_evidence(body, signer)
     forged = evidence.model_copy(update={"body": body.model_copy(update={"recorded_at_unix": _NOW - 1})})
     with pytest.raises(UsageEvidenceError, match="signature is invalid"):
-        verify_inference_usage_evidence(forged, trusted_issuers=TrustedIdentitySet(identities=(signer.identity,)), now_unix=_NOW)
+        _verify(forged, signer, body)
 
 
 def test_future_dated_evidence_is_rejected():
     signer, body = _fixture()
     evidence = sign_inference_usage_evidence(body, signer)
     with pytest.raises(UsageEvidenceError, match="future"):
-        verify_inference_usage_evidence(evidence, trusted_issuers=TrustedIdentitySet(identities=(signer.identity,)), now_unix=_NOW - 3600)
+        _verify(evidence, signer, body, now_unix=_NOW - 3600)
+
+
+def test_evidence_older_than_the_retention_bound_is_stale():
+    signer, body = _fixture()
+    evidence = sign_inference_usage_evidence(body, signer)
+    assert _verify(evidence, signer, body, now_unix=_NOW + 3600, max_age_seconds=3600) == body
+    with pytest.raises(UsageEvidenceError, match="stale"):
+        _verify(evidence, signer, body, now_unix=_NOW + 3601, max_age_seconds=3600)
+
+
+@pytest.mark.parametrize(
+    "fact,value",
+    [
+        ("grant_id", "inference-fulfillment.v1:" + "b" * 64),
+        ("fulfillment_id", "inference-fulfillment.v1:" + "b" * 64),
+        ("key_id", "ak_2"),
+        ("model_id", "meta-llama/llama-3.1-70b-instruct"),
+        ("rate_card", {"prompt_credits_per_million": 500, "completion_credits_per_million": 1600}),
+    ],
+)
+def test_evidence_for_another_grant_is_refused(fact, value):
+    signer, body = _fixture()
+    evidence = sign_inference_usage_evidence(body, signer)
+    with pytest.raises(UsageEvidenceError, match=f"{fact} does not match"):
+        _verify(evidence, signer, body, expected=_expected(body, **{fact: value}))
 
 
 def test_attestation_envelope_is_carried_and_ignored_by_verification():
     signer, body = _fixture(attestation={"kind": "tee.example", "schema_version": 1, "payload": {"quote": "x"}})
     evidence = sign_inference_usage_evidence(body, signer)
-    verified = verify_inference_usage_evidence(evidence, trusted_issuers=TrustedIdentitySet(identities=(signer.identity,)), now_unix=_NOW)
+    verified = _verify(evidence, signer, body)
     assert verified.attestation is not None
     assert verified.charge == 3500
 

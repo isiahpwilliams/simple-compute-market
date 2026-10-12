@@ -20,8 +20,8 @@ asset). The tasks remain as the record; no open gate remains in this change.
       are still literal; `RateValue.per` is still a free string. Record drift in
       `design.md` rather than working around it.
 - [x] 1.2 Create `domains/inference/` with `__init__.py`, `pyproject.toml`
-      (`arkhai-inference-domain`, hatchling, `force-include` of every module as
-      the API-credits domain wheel does), and a `tests/` root. Depend on
+      (`arkhai-inference-domain`, hatchling, `packages = ["src/arkhai_inference"]`
+      as every project declares), and a `tests/` root. Depend on
       `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-policy`, `pydantic`.
 - [x] 1.3 `domains/inference/src/arkhai_inference/listings/models.py`: `INFERENCE_KIND =
       "inference.v1"`, `INFERENCE_OFFERING_MODE = "inference"`, and the
@@ -154,8 +154,11 @@ empty capability set; 24 tests including eleven invalid-input codec cases.
       the producing code and assert none appears in the canonical bytes;
       verification rejects a tampered charge and an untrusted signer.
 
-Done 2026-09-27: `usage/{models,evidence}.py`; 29 tests including the
-secret/prompt/completion canary. The request charge is added to the ceiling of
+Done 2026-09-27: `usage/{models,evidence}.py`; 35 tests including the
+secret/prompt/completion canary. Verification binds the body to the expected
+grant facts (grant, fulfillment, key, model, pinned card, issuer) as the
+API-credits verifier binds issuance to its accepted obligation, and bounds age
+when the consumer supplies a retention window. The request charge is added to the ceiling of
 the token sum, as the requirement and `design.md` state; the spec scenario's
 worked number was corrected from 1 to 2. Cached tokens with no cached rate
 contribute nothing, as the formula states.
@@ -200,15 +203,18 @@ contribute nothing, as the formula states.
       `COPY --from=builder` in the runtime stage, beside the API-credits lines.
 - [x] 5.5 **Integration.** Publish a valid inference listing to a registry
       started with `REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml`
-      through the registry client; query each filter; confirm a listing under
-      `offer_resource` is rejected and a listing missing `rate_card` is
-      rejected. Use the existing registry integration fixtures.
+      through the registry client; query every declared filter, the test
+      refusing a declaration it does not query; confirm a listing missing
+      `rate_card` fails the dry run. The retired `offer_resource` key's
+      refusal is specification-independent and already proven in
+      `core/registry/tests/integration/test_settled_envelope_across_specs.py`.
+      Use the existing registry integration fixtures.
 
 Done 2026-09-27: `registry/filter-spec.yaml`, two `COPY` lines, the unit load
-test, and `core/registry/tests/integration/test_inference_spec.py` (both
-sellers found by every filter; the dry run refuses each malformed card naming
-the field; the retired key is refused at publish). Registry unit 105, integration
-126. The image was built and carries all three specifications. Finding: the
+test, and `core/registry/tests/integration/test_inference_spec.py` (one
+query per declared filter, the test failing on a declaration it does not
+query; the dry run refuses each malformed card naming the field). Registry
+unit 105, integration 125. The image was built and carries all three specifications. Finding: the
 registry does not enforce the listing shape at publish by design, so the spec's
 "rejected at publication" sentence was reattributed to the storefront codec and
 the dry run.
@@ -229,9 +235,9 @@ the dry run.
 - [x] 6.4 Run `make dist-domains` and `make test-inference` from a clean `.dist`
       and record the result.
 - [x] 6.5 `.github/workflows/tests.yml`: an `inference-domain` matrix row with
-      `predist` and `no_editable`, needing no hosted artifact, so the job can pass
-      on a fork pull request.
-- [x] 6.6 `make check-reinit` passes for the new project's `reinit` target.
+      `predist`, needing no hosted artifact.
+- [x] 6.6 `make check-packaging` passes with the new project's lock and
+      `reinit` target.
 
 Done 2026-09-27: `domains/inference/Makefile`, `dist-inference-domain` and
 `test-inference` in the domain and root aggregates, the wheel fixture with
@@ -276,7 +282,16 @@ structural and install tests; `make test-inference` from the root: 136 passed.
       `openspec/README.md`'s placement rules; confirm the domain-versus-extension
       rationale and the copy-first rule landed in
       the `inference` capability's `architecture.md` and the normative statements in
-      the `inference` capability's `spec.md`, not only here.
+      the `inference` capability's `spec.md`, not only here. Promote only what
+      this branch implements: the vocabulary, pricing, usage, evidence,
+      attestation, and registry-discovery requirements. "Quota-backed
+      publication", "Bearer credential is delivery, not identity or payment
+      authority", "Admission authority is synchronous and singular", the
+      buyer-plugin sentences of "Discovery under the inference schema identity",
+      and the "rejected before publication" scenarios describe role behaviour
+      that `compose-inference-domain-stack` and `meter-inference-usage` build;
+      they promote with those changes, so a reader of `openspec/specs` never
+      meets a requirement nothing on `dev` satisfies.
 - [x] 8.4 **Narrative compression.** Compress completed-task notes to final
       behavior, validation evidence, and promotion destinations; keep rejected
       alternatives in `design.md`.
@@ -289,19 +304,21 @@ structural and install tests; `make test-inference` from the root: 136 passed.
 - [x] 8.7 **Documentation citations.** Run
       `make check-doc-citations CHANGE=add-inference-domain-contract` and resolve
       every match.
-- [ ] 8.8 **End-to-end pipeline.** Not run locally: the development stack
-      runs under amd64 emulation on this host, which the seller quickstart
-      records as unsuitable for validation. This change adds no service and no
-      scenario; the registry integration suite and an image build ran green,
-      and the fork pull request's CI runs the new matrix job. The nightly
-      pipeline on `dev` remains the regression check for the unchanged services.
-      Treat the pipeline's validations as unrun until that run is recorded. This change adds no service and no scenario,
-      so the existing pipeline is the regression check: run
-      `make -C e2e-tests test-e2e` on the branch and record that the compute
-      and API-credits scenarios are unaffected. If the pipeline cannot run for a
-      reason unrelated to this change, record the blocker and the owning change.
-- [ ] 8.9 **Promotion.** The record below is complete; the destination
-      documents are written at archival, after review. Complete the design-promotion record below, last.
+- [x] 8.8 **Packaging.** `make check-packaging` passes: every lock matches
+      its project and the wheelhouse, and the new distribution is one package
+      under `src/` installing editable.
+- [ ] 8.9 **End-to-end pipeline.** Not run. The development stack runs under
+      amd64 emulation on this host, which the seller quickstart records as
+      unsuitable for validation, and no continuous-integration run exists: the
+      branch lives on a fork, where Actions does not run, and a fork pull
+      request upstream receives no secrets. The registry integration suite and
+      an image build ran green locally. This change adds no service and no
+      scenario, so the nightly pipeline on `dev` is the regression check for
+      the unchanged services; treat its validations as unrun until a run on a
+      branch in the main repository is recorded here.
+- [ ] 8.10 **Promotion.** The record below is complete; the destination
+      documents are written at archival, after review. Complete the
+      design-promotion record below, last.
 
 ## Design promotion record
 

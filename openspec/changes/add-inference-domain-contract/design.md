@@ -382,8 +382,8 @@ Filters: `model_id`, `model_family`, `quantization`, `modality`,
 where the field is required. `context_length_min` is a lower-bound range.
 `prompt_credits_max` and `completion_credits_max` are upper-bound ranges over the
 rate card's base-unit integers, each co-requiring `settlement_asset` as
-described above. The token, mechanism, asset, and funding projections
-are copied from the API-credits specification. `offering_mode` is required and
+described above. The token, mechanism, and asset projections are copied
+from the API-credits specification. `offering_mode` is required and
 equals `inference`. The attestation envelope is **not** a filter.
 ### OpenAI-compatible surface, version 1
 

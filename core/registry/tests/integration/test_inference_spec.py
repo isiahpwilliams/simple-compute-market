@@ -2,11 +2,12 @@
 
 Runs the registry against the packaged inference filter specification with its
 database, through the canonical `RegistryClient` over `ASGITransport`: a valid
-model-card listing publishes and is found by each declared filter, the dry run
-refuses the shapes the specification exists to refuse, and the publish
-boundary refuses the retired shape key. Full shape enforcement at publish is
-deliberately not this registry's posture (see `reject_retired_listing_shape`);
-the storefront's domain codec is where a malformed card is stopped.
+model-card listing publishes and is found by every declared filter, and the
+dry run refuses the shapes the specification exists to refuse. Full shape
+enforcement at publish is deliberately not this registry's posture (see
+`reject_retired_listing_shape`); the storefront's domain codec is where a
+malformed card is stopped, and the retired shape key's refusal is
+specification-independent, proven once in `test_settled_envelope_across_specs`.
 """
 
 from __future__ import annotations
@@ -34,6 +35,28 @@ _OPTION = {
     "asset": _ASSET,
     "rates": [{"field": "amount", "per": "credit", "value": "1"}],
     "params": {},
+}
+
+# One query per declared filter, each matching `inference-1` as published
+# below. The test refuses a specification that declares a filter this table
+# does not query, so adding a filter means adding its proof here.
+_QUERY_PER_FILTER = {
+    "model_id": {"model_id": "meta-llama/llama-3.1-8b-instruct"},
+    "model_family": {"model_family": "llama-3.1"},
+    "quantization": {"quantization": "fp8"},
+    "modality": {"modality": "text->text"},
+    "supported_parameter": {"supported_parameter": "tools"},
+    "provenance": {"provenance": "self-hosted"},
+    "offering_mode": {"offering_mode": "inference"},
+    "context_length_min": {"context_length_min": "65536"},
+    "prompt_credits_max": {"prompt_credits_max": "600", "settlement_asset": _ASSET},
+    "completion_credits_max": {"completion_credits_max": "3000", "settlement_asset": _ASSET},
+    "token": {"token": _ASSET},
+    "token_exclude": {"token_exclude": "not_in:[0x" + "33" * 20 + "]"},
+    "settlement_mechanism": {"settlement_mechanism": "alkahest.v1"},
+    "settlement_asset": {"settlement_asset": _ASSET},
+    "funding_profile": {"funding_profile": "prepaid"},
+    "funding_interaction": {"funding_interaction": "redirect"},
 }
 
 
@@ -93,6 +116,11 @@ async def test_spec_identity(served_inference_spec):
     assert "listing_resource" in served_inference_spec.listing_shape["required"]
 
 
+async def test_every_declared_filter_is_queried(served_inference_spec):
+    declared = {declaration.name for declaration in served_inference_spec.filters}
+    assert declared == set(_QUERY_PER_FILTER)
+
+
 async def test_a_model_card_publishes_and_each_filter_finds_it(
     served_inference_spec, registry_client
 ):
@@ -104,16 +132,16 @@ async def test_a_model_card_publishes_and_each_filter_finds_it(
         rate_card={"prompt_credits_per_million": 900, "completion_credits_per_million": 2700},
     ))
 
+    for name, query in _QUERY_PER_FILTER.items():
+        assert "inference-1" in await _ids(registry_client, **query), name
+
     assert await _ids(registry_client, model_id="meta-llama/llama-3.1-8b-instruct") == {"inference-1", "inference-2"}
     assert await _ids(registry_client, quantization="fp8") == {"inference-1"}
     assert await _ids(registry_client, provenance="resold") == {"inference-2"}
-    assert await _ids(registry_client, modality="text->text") == {"inference-1", "inference-2"}
-    assert await _ids(registry_client, supported_parameter="tools") == {"inference-1", "inference-2"}
     assert await _ids(registry_client, context_length_min="65536") == {"inference-1"}
     assert await _ids(registry_client, prompt_credits_max="600", settlement_asset=_ASSET) == {"inference-1"}
     assert await _ids(registry_client, completion_credits_max="3000", settlement_asset=_ASSET) == {"inference-1", "inference-2"}
-    assert await _ids(registry_client, settlement_asset=_ASSET) == {"inference-1", "inference-2"}
-    assert await _ids(registry_client, offering_mode="inference") == {"inference-1", "inference-2"}
+    assert await _ids(registry_client, token_exclude=f"not_in:[{_ASSET}]") == set()
 
     fetched = await registry_client.get_listing("inference-1")
     assert fetched.listing_resource["rate_card"]["prompt_credits_per_million"] == 500
@@ -168,15 +196,3 @@ async def test_malformed_cards_fail_the_dry_run(served_inference_spec, registry_
     response = await _dry_run(registry_client, card)
     assert response.valid is False
     assert any(field in error for error in response.errors), response.errors
-
-
-async def test_retired_shape_key_is_refused(served_inference_spec, registry_client):
-    with pytest.raises(Exception):
-        await registry_client.publish_listing(
-            ListingRequest.model_validate({
-                "listing_id": "old",
-                "offer_resource": _card(),
-                "accepted_escrows": [_ESCROW],
-                "storefront_url": "http://seller",
-            })
-        )

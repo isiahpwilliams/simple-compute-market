@@ -73,6 +73,22 @@ class SignedInferenceUsageEvidenceV1(_EvidenceContract):
         return self
 
 
+class ExpectedInferenceUsageEvidenceV1(_EvidenceContract):
+    """Exact grant facts a consumer must match before trusting a usage record.
+
+    Evidence is self-consistent on its own; only a comparison against the
+    grant being charged proves it belongs there and was priced by that
+    grant's pinned card.
+    """
+
+    grant_id: str
+    fulfillment_id: str
+    key_id: str
+    model_id: str
+    rate_card: InferenceRateCard
+    issuer: Identity
+
+
 def _evidence_signing_bytes(body: InferenceUsageEvidenceBodyV1) -> bytes:
     return EVIDENCE_PROTOCOL.encode() + b"\0" + canonical_json(
         body.model_dump(mode="json")
@@ -127,13 +143,20 @@ def verify_inference_usage_evidence(
     evidence: SignedInferenceUsageEvidenceV1,
     *,
     trusted_issuers: TrustedIdentitySet,
+    expected: ExpectedInferenceUsageEvidenceV1,
     now_unix: int,
     max_future_skew_seconds: int = 30,
+    max_age_seconds: int | None = None,
 ) -> InferenceUsageEvidenceBodyV1:
-    """Verify signature, trust, timeliness, and the charge; ignore attestation."""
+    """Verify signature, trust, timeliness, and every expected grant fact.
+
+    The attestation envelope is ignored. Age is bounded only when the caller
+    gives ``max_age_seconds``; a consumer that keeps its own retention window
+    passes it here rather than re-reading ``recorded_at_unix``.
+    """
 
     body = evidence.body
-    if body.issuer not in trusted_issuers:
+    if body.issuer not in trusted_issuers or body.issuer != expected.issuer:
         raise UsageEvidenceError("usage evidence issuer is not trusted")
     verifier = get_identity_verifier(body.issuer.scheme)
     if not verifier.verify_signature(
@@ -144,4 +167,17 @@ def verify_inference_usage_evidence(
         raise UsageEvidenceError("usage evidence signature is invalid")
     if body.recorded_at_unix > now_unix + max_future_skew_seconds:
         raise UsageEvidenceError("usage evidence is recorded in the future")
+    if max_age_seconds is not None and body.recorded_at_unix < now_unix - max_age_seconds:
+        raise UsageEvidenceError("usage evidence is stale")
+
+    facts = (
+        ("grant_id", body.grant_id, expected.grant_id),
+        ("fulfillment_id", body.fulfillment_id, expected.fulfillment_id),
+        ("key_id", body.record.key_id, expected.key_id),
+        ("model_id", body.record.model_id, expected.model_id),
+        ("rate_card", body.rate_card, expected.rate_card),
+    )
+    for name, actual, wanted in facts:
+        if actual != wanted:
+            raise UsageEvidenceError(f"usage evidence {name} does not match the grant")
     return body

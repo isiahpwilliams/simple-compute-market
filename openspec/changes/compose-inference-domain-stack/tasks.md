@@ -23,12 +23,15 @@ amended to match.
       the effect on this change in `design.md` before starting.
 - [ ] 1.2 Confirm by inspection that `design.md`'s "What is copied from" table
       still holds: the seven domain-package modules, the service, storefront,
-      gate, and buyer exist at the named paths; the storefront's settlement
-      registry is still built from mechanism registrations; the gate still
-      charges a configured fixed amount on admission. Record drift in
+      gate, and buyer exist at the named paths; the storefront's seller
+      stages are still a `SettlementStageTable` keyed by mechanism and its
+      configuration registry is still built from their registrations; the
+      gate still charges a configured fixed amount on admission. Record drift in
       `design.md` rather than working around it.
 - [ ] 1.3 Record here the `dev` commit the copies are taken from. Every later
       section copies from that commit, not from whatever `dev` has become.
+      `design.md`'s copy table was measured at `2211c816a`; if the copies come
+      from a later commit, re-measure it.
 - [ ] 1.4 Confirm Anvil development account 8 and host ports 8100, 8102, 8103,
       and 8105 are still unassigned across the Compose files and
       `dev-env/identities/README.md`; if not, choose free ones and update
@@ -66,9 +69,9 @@ amended to match.
       controllers, database, identity, signed-request middleware and route
       contracts, key models, and the key service. Environment prefix
       `INFERENCE_`. Key identifiers are issued with the `ik_` prefix.
-- [ ] 2.7 Omit the legacy issuance path and collapse the migration history to
-      one migration creating the current tables, per `design.md`'s omissions.
-      The grant row is not extended.
+- [ ] 2.7 Collapse the migration history to one migration creating the
+      current tables, per `design.md`'s omissions. The grant row is not
+      extended.
 - [ ] 2.8 The authority's own copy of the issuance digest uses the `inference`
       labels. A test computes the digest for 2.4's fixed request on the
       authority side and asserts it equals the client-side bytes.
@@ -82,8 +85,7 @@ amended to match.
       `uv_project.py`, and a `Makefile` with `reinit` and `test`.
 - [ ] 2.11 Targets `dist-inference-service`, `build-inference-service`, and
       `test-inference-service` in `domains/Makefile` and the root `Makefile`,
-      joined to the aggregates; a test-matrix row with no hosted-release
-      requirement.
+      joined to the aggregates; a test-matrix row.
 
 ## 3. Storefront
 
@@ -98,13 +100,14 @@ amended to match.
       `market.storefront_domains` as `inference`, declaring the capabilities
       the API-credits storefront domain declares over the `inference.v1`
       contract.
-- [ ] 3.3 Settlement composition with Alkahest alone: the configuration
-      registry holds the Alkahest registration only; the hosted agreement,
-      fulfillment, projection, cleanup, routes, controller, and settlement
-      models are not copied; the package does not depend on
-      `arkhai-kit-hosted-settlement`. Test: a configuration whose
-      `[settlement].priority` names another mechanism fails at startup naming
-      it.
+- [ ] 3.3 Settlement composition with Alkahest alone: the seller stage table
+      and configuration registry hold the Alkahest stage only; the payments
+      seller stage, `services/payment_settlement_service.py`, the
+      `[Settlement.arkhai_payments]` settings, and the lines in
+      `settlement_composition.py` and `startup.py` that compose them are not
+      copied; the package does not depend on `arkhai-kit-arkhai-payments`.
+      Test: a configuration whose `[settlement].priority` names another
+      mechanism fails at startup naming it.
 - [ ] 3.4 New module — publication mapping: build an `InferenceListing` from
       configuration and the quota authority, with `model_id` from
       `derive_model_id`, the endpoint set to the gateway, and backing declared
@@ -125,7 +128,7 @@ amended to match.
       evidence, administrative authentication.
 - [ ] 3.9 Dockerfile building `arkhai:inference-storefront`, `Makefile`,
       `dist-`, `build-`, and `test-inference-storefront` targets joined to the
-      aggregates, and a test-matrix row with no hosted-release requirement.
+      aggregates, and a test-matrix row.
 
 ## 4. Gateway and model stub
 
@@ -160,8 +163,7 @@ amended to match.
       its response bodies.
 - [ ] 4.7 Dockerfiles building `arkhai:inference-gateway` and
       `arkhai:inference-model-stub`, `Makefile`s, `dist-`, `build-`, and
-      `test-` targets joined to the aggregates, and test-matrix rows with no
-      hosted-release requirement.
+      `test-` targets joined to the aggregates, and test-matrix rows.
 
 ## 5. Buyer plugin
 
@@ -169,9 +171,10 @@ amended to match.
       module `arkhai_inference_buyer`) as a copy of the API-credits buyer
       plugin, registered under `market.buyer_domains` as `inference` with the
       command group `market inference` and the `inference` schema identity.
-- [ ] 5.2 Alkahest alone: hosted authorization and every hosted branch in the
-      buy, settle, and settlement-composition modules are not copied; the
-      package does not depend on `arkhai-kit-hosted-settlement`.
+- [ ] 5.2 Alkahest alone: the buyer's `payments.py`, its payments stage, and
+      the lines in `buy_cli.py` and `settlement_composition.py` that compose
+      them are not copied; the package does not depend on
+      `arkhai-kit-arkhai-payments`.
 - [ ] 5.3 New module — listing filters for model, model family, quantization,
       modality, supported parameter, provenance, minimum context length, and
       the two rate bounds, compiled from the served filter specification.
@@ -186,9 +189,8 @@ amended to match.
       plugin export and command surface, schema-filtered discovery, negotiate
       and buy for a new key and for an existing key, settlement status.
 - [ ] 5.6 `Makefile`, `dist-inference-buyer` and `test-inference-buyer`
-      targets joined to the aggregates, a test-matrix row with no
-      hosted-release requirement, and the plugin added to the end-to-end image's
-      dependencies.
+      targets joined to the aggregates, a test-matrix row, and the plugin
+      added to the end-to-end image's dependencies.
 
 ## 6. Composition and distribution checks
 
@@ -196,7 +198,7 @@ amended to match.
       API-credits pattern: each role wheel carries its own modules and none of
       the domain wheel's; each requires the domain wheel and its versioned core
       role package; no project declares an internal editable source; no role
-      wheel requires `arkhai-kit-hosted-settlement`.
+      wheel requires `arkhai-kit-arkhai-payments`.
 - [ ] 6.2 Installed-environment test: the storefront and buyer entry points
       load from built wheels and the domain registers once under each group.
 - [ ] 6.3 Boundary test: no inference module imports `arkhai_apicredits`,
@@ -216,10 +218,14 @@ amended to match.
       selecting a storefront configuration that lists the model it serves.
 - [ ] 7.3 `compose.inference.yml` standalone wrapper; the domain file included
       from the root `docker-compose.yml`; registry authority, storefront
-      identity, and wallet bindings in `compose.local-identities.yml`; a
-      one-shot buyer service as the API-credits wrapper has.
-- [ ] 7.4 `e2e-dev-identities-env` prints the six inference variables; the
-      comment above it and the identities README count them.
+      identity, and wallet bindings in `compose.inference-local.yml`, and
+      `compose.inference-lane.yml` only if the scenario needs a second
+      registry; a one-shot buyer service as the API-credits overlay has.
+- [ ] 7.4 `e2e-inference-dev-env` at the root prints the six inference
+      variables, the identities README counts them, and the e2e-tests
+      `Makefile` gains `test-e2e-inference`, `e2e-inference-logs`, and
+      `e2e-inference-down` on the API-credits lane's pattern, run as an
+      `e2e-inference` job in `.github/workflows/e2e.yml`.
 - [ ] 7.5 Static stack tests beside the API-credits ones: no committed
       administrative credential, independent volumes, images installing only
       their staged wheels, the registry selecting the `inference`

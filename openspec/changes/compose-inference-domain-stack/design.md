@@ -17,26 +17,29 @@ find the shared boundary with two working consumers in view.
 
 ### What is copied from
 
-All paths are under `domains/apicredits/`.
+All paths are under `domains/apicredits/`; sizes were measured on `dev` at
+`2211c816a`.
 
 | Role | Source | Size |
 |---|---|---|
-| Seller and buyer semantics | `src/arkhai_apicredits/{listings/reconciler.py, negotiation/{policies,buyer_policies,storefront_round}.py, settlement/{credits_client,fulfillment,issuance_evidence}.py}` | about 2,300 lines |
-| Authority | `service/src/apicredits_service/` | about 2,400 lines |
-| Storefront | `storefront/src/apicredits_storefront/` | about 6,600 lines |
+| Seller and buyer semantics | `src/arkhai_apicredits/{listings/reconciler.py, negotiation/{policies,buyer_policies,storefront_round}.py, settlement/{credits_client,fulfillment,issuance_evidence}.py}` | about 2,000 lines |
+| Authority | `service/src/apicredits_service/` | about 2,200 lines |
+| Storefront | `storefront/src/apicredits_storefront/` | about 7,100 lines |
 | Bearer gate | `middleware/python/src/apicredits_middleware/` | about 1,200 lines |
-| Buyer plugin | `buyer/src/arkhai_apicredits_buyer/` | about 4,000 lines |
+| Buyer plugin | `buyer/src/arkhai_apicredits_buyer/` | about 3,700 lines |
 | Gated application | `sample-app/` | the pattern only; the gateway replaces it |
 
 ### What inspection found that the proposal did not anticipate
 
-1. **The storefront and buyer copies would carry a hosted-settlement
-   dependency.** `apicredits_storefront/settlement_composition.py` and the
-   buyer's `buy_cli.py` and `settle_cli.py` compose the hosted fiat mechanism
-   beside Alkahest, through `arkhai-kit-hosted-settlement`, which requires a
-   separately released client wheel. The campaign excludes a hosted fiat option
-   for inference, so a verbatim copy would import a mechanism this domain may
-   not offer and a dependency its sellers cannot obtain from a public index.
+1. **The storefront and buyer copies would carry a second settlement
+   mechanism.** `apicredits_storefront/settlement_composition.py` and
+   `settlement_stages.py`, and the buyer's `buy_cli.py`, `payments.py`, and
+   `settlement_stages.py`, compose `arkhai.payments.v1` beside Alkahest through
+   `arkhai-kit-arkhai-payments`, a client for an external payments service
+   that needs a service URL, a pinned service identity, and an operator key at
+   runtime. The campaign excludes a fiat option for inference, so a verbatim
+   copy would ship a reachable payment path this domain has not decided to
+   offer and could not exercise in its own stack.
 2. **The contract design assigns authority-side storage of the pinned rate
    card to `meter-inference-usage`,** while this change's proposal said the
    grant row carries it. Adding a column to the copied authority is feature
@@ -67,7 +70,8 @@ Each is resolved by a decision below, and the proposal is amended to match.
 - Per-token charging, admission holds, usage capture, or usage evidence
   emission. `meter-inference-usage` owns them.
 - Any change to an API-credits module. The sources are read, never edited.
-- A hosted fiat option, a Helm alias, a hosted registry, or a seller installer.
+- An Arkhai payments option, a Helm alias, a hosted registry, or a seller
+  installer.
 - TypeScript or Rust gates.
 - Verifying anything a seller asserts about a model.
 
@@ -111,12 +115,16 @@ functions, and provision terms come from `arkhai_inference`. Where a copied
 module read an API-credits listing field, it reads the model card's equivalent;
 the mapping is recorded in `tasks.md` beside the module it applies to.
 
-**Omissions.** Removed from the copies, whole:
+**Omissions.** Removed from the copies: whole modules where the mechanism
+has its own, and the import, registration, and dispatch lines that reach them
+where it shares a module.
 
-- Hosted settlement, per the next decision.
-- The legacy issuance path (`LEGACY_ISSUANCE_*` in `keys_model.py` and its
-  callers). It exists to read grants written before issuance requests carried a
-  schema; no such inference grant can exist.
+- The Arkhai payments mechanism, per the next decision: the storefront's
+  `ArkhaiPaymentsSellerStage`, `services/payment_settlement_service.py`, and
+  the `[Settlement.arkhai_payments]` settings; the buyer's `payments.py` and
+  its stage; the domain package's `settlement/payments.py`; and the lines in
+  `settlement_composition.py`, `startup.py`, and `buy_cli.py` that compose
+  them.
 - Service migrations older than the current schema. The inference authority
   starts at one migration that creates the current tables.
 
@@ -134,30 +142,30 @@ recorded commit is what lets it see the drift.
 
 The inference storefront registers one mechanism, `alkahest.v1`, and the buyer
 plugin composes one. Neither role package depends on
-`arkhai-kit-hosted-settlement`.
+`arkhai-kit-arkhai-payments`.
 
-The copied settlement composition already builds its mechanism clients from a
-registry of registrations; the inference registry is constructed with the
-Alkahest registration alone. The hosted agreement loader, hosted fulfillment,
-hosted projection, hosted routes and controller, and the buyer's hosted
-authorization are omitted. A storefront configuration naming any other
-mechanism in `[settlement].priority` fails at startup, because the registry
-holds no registration to resolve it against.
+The copied composition dispatches settlement through a `SettlementStageTable`
+keyed by mechanism and builds its configuration registry from the stages'
+registrations; the inference tables hold the Alkahest stage alone. The
+payments seller stage, payment settlement service, buyer payments module and
+stage, and the domain's payments vocabulary are omitted. A storefront
+configuration naming any other mechanism in `[settlement].priority` fails at
+startup, because the registry holds no registration to resolve it against.
 
-Three things follow. The campaign's scope decision is enforced by the absence
-of code and not by a disabled flag an operator could turn on untested. The role
-packages install from the repository's own wheels, which
-`package-inference-seller` depends on. And their test jobs need no hosted
-release artifact, so they run on a fork's pull request.
+Two things follow. The campaign's scope decision is enforced by the absence of
+code and not by a disabled flag an operator could turn on untested. And the
+inference stack needs no external payments service, so the end-to-end lane
+runs against the development chain alone.
 
-Adding a hosted option later is a new registration and its composition in a new
-module, under its own change.
+Adding the payments option later is one more stage in each table and its
+configuration, under its own change, once the campaign has decided to offer
+fiat for inference.
 
-**Alternative rejected:** copy the hosted composition and leave it disabled by
-configuration. It keeps the copy closer to its source, but ships a reachable,
-untested payment path in a domain scoped not to have one, and makes every
-inference role depend on a wheel a third-party seller cannot install. Hosted
-composition is also not among the modules the extraction moves.
+**Alternative rejected:** copy the payments composition and leave it disabled
+by configuration. It keeps the copy closer to its source, but ships a
+reachable, untested payment path in a domain scoped not to have one, and the
+stack could not exercise it without a payments service the lane does not run.
+Payments composition is also not among the modules the extraction moves.
 
 ### The gate is internal to the gateway
 
@@ -300,9 +308,14 @@ The authority and the storefront each own a database on their own volume;
 neither is shared with the other or with any API-credits service.
 `compose.inference.yml` at the repository root is the standalone wrapper over
 `compose.dev.yml`, and the root `docker-compose.yml` includes the domain file so
-the full stack carries all three markets. Identity bindings go in
-`compose.local-identities.yml`, because an including file cannot redefine an
-included service.
+the full stack carries all three markets. Identity and wallet bindings go in
+`compose.inference-local.yml`, layered with `-f` as every domain's overlay is,
+because an including file cannot redefine an included service; the lane adds
+`compose.inference-lane.yml` only if the scenario needs a second registry, as
+the API-credits lane does. `e2e-inference-dev-env` at the root prints the
+lane's variables, the e2e-tests `Makefile` gains `test-e2e-inference`,
+`e2e-inference-logs`, and `e2e-inference-down`, and the end-to-end workflow
+runs them as their own job beside the VM, bare-metal, and API-credits lanes.
 
 Development identities under `dev-env/identities/`, each a well-known
 deterministic development value documented in that directory's README:
@@ -316,7 +329,7 @@ deterministic development value documented in that directory's README:
 | `inference-admin-key` | administrative credential mount | `INFERENCE_ADMIN_KEY_FILE` |
 
 Account 8 is unassigned in the existing table, so the inference seller shares a
-principal with no other role. `e2e-dev-identities-env` prints the six
+principal with no other role. `e2e-inference-dev-env` prints the six
 variables. The authority's trusted principals and the gateway's and
 storefront's expected authorities are pinned to the public halves, as the
 API-credits stack pins its own.
@@ -389,8 +402,7 @@ the other domains, and an image built from the repository wheelhouse. Targets:
 `build-inference-{service,storefront,gateway,model-stub}`, and
 `test-inference-{service,storefront,gateway,buyer}`, joined to the `dist`,
 `build`, and `test` aggregates. The four images join `make build`; the proposal
-said three, before the stub existed. Each tested project gets a test-matrix row
-with no hosted-release requirement.
+said three, before the stub existed. Each tested project gets a test-matrix row.
 
 ### Landing in reviewable slices
 

@@ -215,7 +215,7 @@ version `1` and MUST validate and filter listings from the inference filter
 specification: exact filters on `model_id`, `model_family`, `quantization`,
 modality, `supported_parameters`, and `provenance`; range filters on
 `context_length` and on the rate card's base-unit integers; and the settlement
-mechanism, asset, and funding projections. Each rate bound MUST declare
+mechanism and asset projections. Each rate bound MUST declare
 `settlement_asset` as a co-required filter, so a registry refuses an unpaired
 bound rather than comparing across assets. The inference buyer plugin MUST
 declare the `inference` schema identity, MUST query only registries declaring

@@ -88,7 +88,7 @@ def test_selected_option_not_per_credit_is_rejected(per):
 def test_selection_must_match_exactly_one_option():
     option = _option()
     other = _option(value=1, per="credit")
-    other["mechanism"] = "fiat.stripe.v1"
+    other["mechanism"] = "arkhai.payments.v1"
     with pytest.raises(ValueError, match="exact-match"):
         selected_unit_price(_order(option), _selection(other))
 

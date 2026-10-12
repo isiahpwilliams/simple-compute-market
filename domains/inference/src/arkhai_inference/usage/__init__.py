@@ -3,6 +3,7 @@
 from arkhai_inference.usage.evidence import (
     EVIDENCE_CAPABILITY,
     EVIDENCE_PROTOCOL,
+    ExpectedInferenceUsageEvidenceV1,
     InferenceUsageEvidenceBodyV1,
     SignedInferenceUsageEvidenceV1,
     UsageEvidenceError,
@@ -22,6 +23,7 @@ __all__ = [
     "EVIDENCE_CAPABILITY",
     "EVIDENCE_PROTOCOL",
     "USAGE_OUTCOMES",
+    "ExpectedInferenceUsageEvidenceV1",
     "InferenceUsageEvidenceBodyV1",
     "InferenceUsageRecord",
     "SignedInferenceUsageEvidenceV1",

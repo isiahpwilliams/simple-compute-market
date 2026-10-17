@@ -240,12 +240,13 @@ amended to match.
 
 ## 8. Closeout
 
-- [ ] 8.1 **Comment hygiene.** `make check-comment-hygiene`; then read every
-      copied module for comments that describe API credits or the copy itself
-      and restate them as current inference behaviour.
-- [ ] 8.2 **Import placement.** Review function-level imports added or carried
-      by the copies; keep a local import only for a verified circular import or
-      a documented lazy load.
+- [ ] 8.1 **Comment hygiene.** Confirm `make check-comment-hygiene` passes and
+      that the pre-closeout review's triage restated every copied comment that
+      described API credits or the copy itself as current inference behaviour.
+- [ ] 8.2 **Import placement.** Confirm that, before the pre-closeout review,
+      function-level imports added or carried by the copies were moved to
+      module level except for a verified circular import or a documented lazy
+      load.
 - [ ] 8.3 **Documentation compliance.** Re-check this change's accepted
       decisions against `openspec/README.md`'s placement rules.
 - [ ] 8.4 **Narrative compression.** Reduce completed-task notes to final
@@ -258,15 +259,23 @@ amended to match.
 - [ ] 8.6 **Campaign index currency.** Update this change's row in
       `openspec/changes/README.md`, and `extract-access-issuance-kit`'s, whose
       dependency on a green deal is then met.
-- [ ] 8.7 **Documentation citations.**
-      `make check-doc-citations CHANGE=compose-inference-domain-stack`.
-- [ ] 8.8 **Packaging.** `make check-packaging`.
-- [ ] 8.9 **End-to-end pipeline.** Record the lane run, its result, and that
+- [ ] 8.7 **Packaging.** `make check-packaging`, which includes the
+      architecture check over the five new projects, then
+      `make check-architecture-change CHANGE=compose-inference-domain-stack`:
+      every exception or override row this change owns is deleted with its
+      cause before archival.
+- [ ] 8.8 **End-to-end pipeline.** Record the lane run, its result, and that
       `e2e_inference_deal` ran in it. If the pipeline cannot run for a reason
       unrelated to this change, record the blocker and the change that owns it,
       and treat the scenario as unrun.
-- [ ] 8.10 **Promotion.** Complete the design promotion record below after
-      code review.
+- [ ] 8.9 **Promotion.** Write the permanent documents the record below names
+      and complete the design promotion record, after code review.
+- [ ] 8.10 **Documentation citations.** After promotion,
+      `make check-doc-citations CHANGE=compose-inference-domain-stack` and
+      `openspec validate compose-inference-domain-stack --strict`.
+- [ ] 8.11 **Archival.** `openspec archive compose-inference-domain-stack -y`
+      once every part above is done; update the campaign row to `archived`
+      and the dependency graph in `openspec/changes/README.md`.
 
 ## Design promotion record
 

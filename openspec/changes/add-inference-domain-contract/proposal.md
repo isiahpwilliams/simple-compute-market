@@ -153,7 +153,7 @@ them.
 - **Deployment.** The registry image carries one more filter specification;
   nothing selects it until a deployment sets the path.
 - **Packaging.** One new wheel, `arkhai-inference-domain`, depending on
-  `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-policy`, and `pydantic`.
+  `arkhai-core`, `arkhai-kit-identity`, and `pydantic`.
 - **Contributor workflow.** None.
 
 ## Permanent documentation impact

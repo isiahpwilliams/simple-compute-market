@@ -74,12 +74,7 @@ class SignedInferenceUsageEvidenceV1(_EvidenceContract):
 
 
 class ExpectedInferenceUsageEvidenceV1(_EvidenceContract):
-    """Exact grant facts a consumer must match before trusting a usage record.
-
-    Evidence is self-consistent on its own; only a comparison against the
-    grant being charged proves it belongs there and was priced by that
-    grant's pinned card.
-    """
+    """Grant facts evidence must match; a body is self-consistent even for another grant."""
 
     grant_id: str
     fulfillment_id: str
@@ -148,12 +143,7 @@ def verify_inference_usage_evidence(
     max_future_skew_seconds: int = 30,
     max_age_seconds: int | None = None,
 ) -> InferenceUsageEvidenceBodyV1:
-    """Verify signature, trust, timeliness, and every expected grant fact.
-
-    The attestation envelope is ignored. Age is bounded only when the caller
-    gives ``max_age_seconds``; a consumer that keeps its own retention window
-    passes it here rather than re-reading ``recorded_at_unix``.
-    """
+    """Age is bounded only when ``max_age_seconds`` is given; attestation is ignored."""
 
     body = evidence.body
     if body.issuer not in trusted_issuers or body.issuer != expected.issuer:

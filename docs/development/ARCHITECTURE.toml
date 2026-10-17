@@ -51,6 +51,12 @@ directory = "domains/apicredits"
 family = "api"
 tokens = ["api_credits.v1"]
 
+# Inference shares the API-credits purchase shape by copy, not by a family.
+[[domains]]
+name = "inference"
+directory = "domains/inference"
+tokens = ["inference.v1"]
+
 [[mechanisms]]
 name = "alkahest"
 kit = "arkhai-kit-alkahest"

@@ -47,7 +47,7 @@ def test_domain_wheel_requires_versioned_core_and_identity(
     wheels: dict[str, Path],
 ) -> None:
     requirements = _requirements(wheels["domain"])
-    for name in ("arkhai-core", "arkhai-kit-identity", "arkhai-kit-policy", "pydantic"):
+    for name in ("arkhai-core", "arkhai-kit-identity", "pydantic"):
         assert name in requirements, name
     for name in ("arkhai-core", "arkhai-kit-identity"):
         assert requirements[name], f"{name} is required without a version"

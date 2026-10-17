@@ -6,7 +6,6 @@ description = "Shared inference domain models, pricing, usage vocabulary, and ma
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "arkhai-core>=0.4.0",
-    "arkhai-kit-policy",
     "arkhai-kit-identity==0.4.0",
     "pydantic>=2",
 ]

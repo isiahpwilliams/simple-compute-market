@@ -22,7 +22,7 @@ asset). The tasks remain as the record; no open gate remains in this change.
 - [x] 1.2 Create `domains/inference/` with `__init__.py`, `pyproject.toml`
       (`arkhai-inference-domain`, hatchling, `packages = ["src/arkhai_inference"]`
       as every project declares), and a `tests/` root. Depend on
-      `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-policy`, `pydantic`.
+      `arkhai-core`, `arkhai-kit-identity`, `pydantic`.
 - [x] 1.3 `domains/inference/src/arkhai_inference/listings/models.py`: `INFERENCE_KIND =
       "inference.v1"`, `INFERENCE_OFFERING_MODE = "inference"`, and the
       `InferenceModelCard` model (`listing_resource` payload) with `model_id`
@@ -268,12 +268,11 @@ structural and install tests; `make test-inference` from the root: 136 passed.
 
 ## 8. Closeout
 
-- [x] 8.1 **Comment hygiene.** Run `make check-comment-hygiene` and resolve every
-      match. Read the copied modules directly for references to the API-credits
-      change history their docstrings may have carried across.
-- [x] 8.2 **Import placement.** Review imports this change adds; move
-      function-level imports to module level where no genuine circular import or
-      documented lazy-load reason applies, verified against the suite.
+- [x] 8.1 **Comment hygiene.** Confirmed: `make check-comment-hygiene` passes,
+      and the copied modules were read for references to the API-credits change
+      history their docstrings may have carried across.
+- [x] 8.2 **Import placement.** Confirmed: no function-level import this change
+      adds lacks a genuine circular-import or lazy-load reason.
 - [ ] 8.3 **Documentation compliance.** Pending post-review promotion: the
       `inference` capability's `spec.md` and `architecture.md` are created when
       the delta is synchronized at archival, per `AGENTS.md`'s rule that
@@ -300,13 +299,14 @@ structural and install tests; `make test-inference` from the root: 136 passed.
 - [x] 8.6 **Campaign index currency.** Update this change's row and the
       campaign graph in `openspec/changes/README.md`; confirm every campaign
       link resolves to an existing directory.
-- [x] 8.7 **Documentation citations.** Run
-      `make check-doc-citations CHANGE=add-inference-domain-contract` and resolve
-      every match.
-- [x] 8.8 **Packaging.** `make check-packaging` passes: every lock matches
-      its project and the wheelhouse, and the new distribution is one package
-      under `src/` installing editable.
-- [ ] 8.9 **End-to-end pipeline.** Not run. The development stack runs under
+- [x] 8.7 **Packaging.** `make check-packaging` passes: every lock matches
+      its project and the wheelhouse, the new distribution is one package
+      under `src/` installing editable, and the architecture check classifies
+      `domains/inference` from its row in `docs/development/ARCHITECTURE.toml`
+      with the token `inference.v1`. `make check-architecture-change
+      CHANGE=add-inference-domain-contract` reports no owned exception or
+      override row.
+- [ ] 8.8 **End-to-end pipeline.** Not run. The development stack runs under
       amd64 emulation on this host, which the seller quickstart records as
       unsuitable for validation, and no continuous-integration run exists: the
       branch lives on a fork, where Actions does not run, and a fork pull
@@ -315,9 +315,18 @@ structural and install tests; `make test-inference` from the root: 136 passed.
       scenario, so the nightly pipeline on `dev` is the regression check for
       the unchanged services; treat its validations as unrun until a run on a
       branch in the main repository is recorded here.
-- [ ] 8.10 **Promotion.** The record below is complete; the destination
-      documents are written at archival, after review. Complete the
-      design-promotion record below, last.
+- [ ] 8.9 **Promotion.** Write the `inference` capability's `spec.md` and
+      `architecture.md`, the `openspec/specs/README.md` row, the
+      `docs/development/ARCHITECTURE.md` one-name and Terms entries, and the
+      one sentence in the API-credits companion that the record below names;
+      then complete the design-promotion record, last.
+- [ ] 8.10 **Documentation citations.** After promotion, run
+      `make check-doc-citations CHANGE=add-inference-domain-contract` and
+      `openspec validate add-inference-domain-contract --strict` and resolve
+      every match. Both pass on the pre-promotion tree.
+- [ ] 8.11 **Archival.** `openspec archive add-inference-domain-contract -y`
+      once every part above is done; update the campaign row to `archived` and
+      the dependency graph in `openspec/changes/README.md`.
 
 ## Design promotion record
 

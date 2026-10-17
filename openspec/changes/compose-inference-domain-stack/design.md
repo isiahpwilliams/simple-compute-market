@@ -133,6 +133,16 @@ the model-card publication mapping, the request-priced publication guard, the
 materialization builder that pins the rate card, the gateway's proxy and model
 check, and the buyer's model filters.
 
+**Inherited divergence.** `negotiation/policies.py` and
+`settlement/credits_client.py` import the Alkahest kit, and the API-credits
+domain carries an override row in `docs/development/ARCHITECTURE.toml` for
+that: a domain package whose name carries no mechanism may not depend on a
+mechanism kit. The copies inherit the divergence, so the inference domain gets
+a matching row with the same owner, `align-package-paths-with-layers`, which
+already owns moving the settlement codecs of both domains under a name that
+carries the mechanism. This change owns no architecture row of its own, so
+nothing here blocks its archival.
+
 The implementation records the source commit each copy was taken from in
 `tasks.md`. Until `extract-access-issuance-kit` lands, a change to a copied
 API-credits module on `dev` is a decision for that extraction to reconcile; the

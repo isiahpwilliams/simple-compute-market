@@ -60,15 +60,24 @@ amended to match.
       bytes, its request and result schema strings, the evidence protocol and
       capability, and the portable fulfillment reference schema. None equals
       the API-credits value.
-- [ ] 2.5 Bump `arkhai-inference-domain` to 0.2.0; add the kit dependencies the
-      copied modules import; relock through `scripts/uv_project.py`. Extend the
+- [ ] 2.5 Bump `arkhai-inference-domain` to 0.2.0; add the dependencies the
+      copied modules import — `arkhai-kit-alkahest`,
+      `arkhai-kit-settlement-runtime`, `arkhai-kit-policy`, and `httpx` — and
+      relock through `scripts/uv_project.py`. Add the domain's override row to
+      `docs/development/ARCHITECTURE.toml` beside the API-credits one, with the
+      same owner, per `design.md`'s inherited divergence; `make
+      check-architecture` passes and `make check-architecture-change
+      CHANGE=compose-inference-domain-stack` reports no owned row. Extend the
       wheel-membership and installed-import tests to the new modules.
 - [ ] 2.6 Create `domains/inference/service/` (`arkhai-inference-service`
       0.1.0, module `inference_service`, script `inference-service`) as a copy
       of the API-credits service: configuration, container, key and system
       controllers, database, identity, signed-request middleware and route
       contracts, key models, and the key service. Environment prefix
-      `INFERENCE_`. Key identifiers are issued with the `ik_` prefix.
+      `INFERENCE_`. Key identifiers are issued with the `ik_` prefix. Its
+      dependencies are the API-credits service's at the recorded commit —
+      the site, resource-pools, and resource-pools-contracts kits, identity,
+      dynaconf, FastAPI, and uvicorn — pinned as that service pins them.
 - [ ] 2.7 Collapse the migration history to one migration creating the
       current tables, per `design.md`'s omissions. The grant row is not
       extended.

@@ -1,0 +1,187 @@
+"""inference storefront admin CLI — `inference-storefront` console script.
+
+Subcommands:
+    serve      Run the storefront HTTP server in-process.
+    publish    Create + publish a listing backed by a quota resource.
+    listings   List the storefront's local listings.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from typing import Any
+
+import typer
+from arkhai_inference.listings import UNIT_RATE
+from market_alkahest.alkahest import get_erc20_escrow_obligation_default
+
+app = typer.Typer(no_args_is_help=True)
+
+
+def version_callback(value: bool) -> None:
+    if value:
+        try:
+            __version__ = version("arkhai-inference-storefront")
+        except PackageNotFoundError:
+            __version__ = "unknown (not installed)"
+        typer.echo(f"inference-storefront version {__version__}")
+        raise typer.Exit()
+
+
+def _config_path_callback(value: str | None) -> str | None:
+    if value:
+        from market_config.config_loader import set_user_config_path
+
+        set_user_config_path(Path(value))
+    return value
+
+
+@app.callback()
+def main(
+    version_flag: bool = typer.Option(
+        None,
+        "--version",
+        "-v",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+    config_file: str | None = typer.Option(
+        None,
+        "--config",
+        callback=_config_path_callback,
+        is_eager=True,
+        help="Path to an explicit storefront.toml.",
+    ),
+) -> None:
+    """inference-storefront — seller-side admin CLI for the inference domain."""
+
+
+@app.command("serve")
+def serve_cmd(
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind interface."),
+    port: int | None = typer.Option(None, "--port", help="Override port from config."),
+) -> None:
+    """Run the storefront HTTP server (uvicorn, foreground)."""
+    from inference_storefront.server import run_serve
+
+    run_serve(host=host, port=port)
+
+
+@app.command("publish")
+def publish_cmd(
+    resource_id: str = typer.Option(
+        ...,
+        "--resource-id",
+        help="Quota resource in the credits service's ledger the listing derives from.",
+    ),
+    model_card_path: Path = typer.Option(
+        ...,
+        "--model-card",
+        help="JSON file holding the model card; model_id may be derived from owner and name.",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Alkahest payment token contract address (0x…).",
+    ),
+    chain: str | None = typer.Option(
+        None,
+        "--chain",
+        help="Alkahest chain name from [chains.<name>] config.",
+    ),
+    escrow_address: str | None = typer.Option(
+        None,
+        "--escrow-address",
+        help="Alkahest escrow contract; resolved from the chain config when omitted.",
+    ),
+    paused: bool = typer.Option(False, "--paused"),
+) -> None:
+    """Create + publish a listing backed by a quota resource.
+
+    Pass the Alkahest token and chain together to publish an escrow option at
+    one base unit per credit. Omit both to publish configured settlement
+    clauses only.
+    """
+    # Imported only once ``--config`` has run: the storefront's settings
+    # resolve when its config module is first imported.
+    import inference_storefront.container as _container
+    from inference_storefront.domain_runtime import get_market_domain_contract
+    from inference_storefront.server import _build_inference_services
+    from inference_storefront.utils.config import CHAINS
+
+    legacy_requested = any(value is not None for value in (token, chain))
+    if escrow_address is not None and not legacy_requested:
+        typer.echo("--escrow-address requires the Alkahest token and chain.", err=True)
+        raise typer.Exit(code=2)
+    accepted_escrows: list[dict[str, Any]] = []
+    if legacy_requested:
+        if token is None or chain is None:
+            typer.echo(
+                "Alkahest publication requires --token and --chain together.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+
+        resolved_escrow = escrow_address
+        if not resolved_escrow:
+            chain_cfg = CHAINS.get(chain)
+            if chain_cfg is None:
+                typer.echo(f"chain {chain!r} is not configured", err=True)
+                raise typer.Exit(code=2)
+            resolved_escrow = get_erc20_escrow_obligation_default(
+                chain, config_path=chain_cfg.alkahest_address_config_path
+            )
+        accepted_escrows = [
+            {
+                "chain_name": chain,
+                "escrow_address": resolved_escrow.lower(),
+                "literal_fields": {"token": token},
+                "rates": [
+                    {"field": "amount", "per": "credit", "value": str(UNIT_RATE)}
+                ],
+            }
+        ]
+
+    # The same listing service the running storefront composes, with its
+    # settlement composition, and the signer its capacity runtime reads.
+    services = _build_inference_services(get_market_domain_contract())
+    _container.resolved_marketplace_signer = services.marketplace_signer
+    _container.resolved_sqlite_client = services.sqlite_client
+    result = asyncio.run(
+        services.listing_service.publish_from_quota(
+            resource_id=resource_id,
+            model_card=json.loads(model_card_path.read_text(encoding="utf-8")),
+            accepted_escrows=accepted_escrows,
+            paused=paused,
+        )
+    )
+    typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("listings")
+def listings_cmd(
+    status: str | None = typer.Option(None, "--status"),
+    limit: int = typer.Option(50, "--limit"),
+) -> None:
+    """List the storefront's local listings."""
+    from inference_storefront.utils.config import (
+        BASE_URL_OVERRIDE,
+        resolve_identity_config,
+    )
+    from inference_storefront.utils.sqlite_client import get_sqlite_client
+
+    rows = asyncio.run(
+        get_sqlite_client(
+            local_listing_principal=resolve_identity_config().principal,
+            expected_legacy_sellers=(BASE_URL_OVERRIDE,),
+        ).list_listings(status=status, limit=limit),
+    )
+    typer.echo(json.dumps(rows, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    app()

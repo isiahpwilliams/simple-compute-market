@@ -12,7 +12,7 @@ FOUNDRY_VERSION := v1.5.1
 DIST_DIR := ${CURDIR}/.dist
 IDENTITY_WHEEL := $(DIST_DIR)/arkhai_kit_identity-0.4.0-py3-none-any.whl
 
-.PHONY: helm-values-schema e2e-dev-identities e2e-dev-identities-env e2e-vms-dev-env e2e-apicredits-dev-env e2e-apicredits-stack-env e2e-bare-metal-dev-env review-wheelhouse review-wheelhouse-scope build build-dev build-seller build-apicredits-service build-apicredits-storefront build-apicredits-sample-app build-inference-service test test-core test-compute-provisioning-contracts test-compute-provisioning-client test-compute-provisioning test-compute-provisioning-ansible test-provisioning test-provisioning-iac test-registry test-storefront test-bare-metal test-compute test-vms-domain test-vms-buyer test-apicredits test-apicredits-middleware test-inference test-inference-service test-inference-storefront test-kits dist dist-release dist-ci dist-ci-kits dist-storefront-client dist-policy dist-compute-provisioning-contracts dist-compute-provisioning-client dist-compute-provisioning dist-compute-provisioning-service dist-compute-provisioning-ansible dist-compute-provisioning-service dist-kits dist-registry-client dist-registry dist-identity dist-core dist-arkhai-core-buyer dist-arkhai-core-storefront dist-bare-metal-storefront dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront dist-apicredits-middleware dist-apicredits-sample-app dist-apicredits-buyer dist-inference-domain dist-inference-service dist-inference-storefront dist-alkahest dist-config dist-clean init init-prerequisites init-submodules init-zero-tier init-buyer init-storefront init-arkhai-core-registry push-runtime-artifacts push-images push-dev-image check-packaging check-uv-setup check-locks check-python-version check-project-layout lock
+.PHONY: helm-values-schema e2e-dev-identities e2e-dev-identities-env e2e-vms-dev-env e2e-apicredits-dev-env e2e-apicredits-stack-env e2e-bare-metal-dev-env review-wheelhouse review-wheelhouse-scope build build-dev build-seller build-apicredits-service build-apicredits-storefront build-apicredits-sample-app build-inference-service build-inference-storefront test test-core test-compute-provisioning-contracts test-compute-provisioning-client test-compute-provisioning test-compute-provisioning-ansible test-provisioning test-provisioning-iac test-registry test-storefront test-bare-metal test-compute test-vms-domain test-vms-buyer test-apicredits test-apicredits-middleware test-inference test-inference-service test-inference-storefront test-kits dist dist-release dist-ci dist-ci-kits dist-storefront-client dist-policy dist-compute-provisioning-contracts dist-compute-provisioning-client dist-compute-provisioning dist-compute-provisioning-service dist-compute-provisioning-ansible dist-compute-provisioning-service dist-kits dist-registry-client dist-registry dist-identity dist-core dist-arkhai-core-buyer dist-arkhai-core-storefront dist-bare-metal-storefront dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront dist-apicredits-middleware dist-apicredits-sample-app dist-apicredits-buyer dist-inference-domain dist-inference-service dist-inference-storefront dist-alkahest dist-config dist-clean init init-prerequisites init-submodules init-zero-tier init-buyer init-storefront init-arkhai-core-registry push-runtime-artifacts push-images push-dev-image check-packaging check-uv-setup check-locks check-python-version check-project-layout lock
 .PHONY: check-architecture check-architecture-layers check-architecture-scope check-architecture-dependencies check-architecture-kinds check-architecture-change architecture-report
 .PHONY: test-release-tooling test-deployment-packaging test-registry-client test-provisioning-adapter test-e2e-unit
 .PHONY: dist-arkhai-core-registry
@@ -290,7 +290,7 @@ build: ## Build the wheels, the buyer CLI binary, and every runtime image
 	$(MAKE) build-buyer
 	$(MAKE) -j4 build-registry build-storefront build-bare-metal-storefront build-provisioning
 	$(MAKE) -j3 build-apicredits-service build-apicredits-storefront build-apicredits-sample-app
-	$(MAKE) build-inference-service
+	$(MAKE) -j2 build-inference-service build-inference-storefront
 
 # ---------------------------------------------------------------------------
 # e2e-*-dev-env — each stack's signer, wallet, and buyer paths from the
@@ -547,6 +547,9 @@ build-apicredits-storefront:
 
 build-inference-service:
 	docker build --ulimit nofile=65536:65536 -f domains/inference/service/Dockerfile -t arkhai:inference-service .
+
+build-inference-storefront:
+	docker build --ulimit nofile=65536:65536 -f domains/inference/storefront/Dockerfile -t arkhai:inference-storefront .
 
 build-apicredits-sample-app:
 	docker build --ulimit nofile=65536:65536 -f domains/apicredits/sample-app/Dockerfile -t arkhai:apicredits-sample-app .

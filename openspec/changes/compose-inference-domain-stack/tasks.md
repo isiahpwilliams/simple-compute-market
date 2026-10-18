@@ -135,18 +135,18 @@ the trust-pin test reads the storefront's TOML section 3 writes. The image
 
 ## 3. Storefront
 
-- [ ] 3.1 Create `domains/inference/storefront/`
+- [x] 3.1 Create `domains/inference/storefront/`
       (`arkhai-inference-storefront` 0.1.0, module `inference_storefront`,
       script `inference-storefront`) as a copy of the API-credits storefront on
       the `kit/storefront` shell: server, startup, container, lifecycle steps,
       negotiation runtime, the listings, negotiate, negotiations, settle,
       issuance-evidence, lifecycle, and system controllers, the four
       authentication middlewares, the services, and the utilities.
-- [ ] 3.2 Register `INFERENCE_STOREFRONT_DOMAIN` under
+- [x] 3.2 Register `INFERENCE_STOREFRONT_DOMAIN` under
       `market.storefront_domains` as `inference`, declaring the capabilities
       the API-credits storefront domain declares over the `inference.v1`
       contract.
-- [ ] 3.3 Settlement composition with Alkahest alone: the seller stage table
+- [x] 3.3 Settlement composition with Alkahest alone: the seller stage table
       and configuration registry hold the Alkahest stage only; the payments
       seller stage, `services/payment_settlement_service.py`, the
       `[Settlement.arkhai_payments]` settings, and the lines in
@@ -154,27 +154,184 @@ the trust-pin test reads the storefront's TOML section 3 writes. The image
       copied; the package does not depend on `arkhai-kit-arkhai-payments`.
       Test: a configuration whose `[settlement].priority` names another
       mechanism fails at startup naming it.
-- [ ] 3.4 New module — publication mapping: build an `InferenceListing` from
+- [x] 3.4 New module — publication mapping: build an `InferenceListing` from
       configuration and the quota authority, with `model_id` from
       `derive_model_id`, the endpoint set to the gateway, and backing declared
       with the backed value.
-- [ ] 3.5 New module — request-priced guard: refuse to publish a rate card
+- [x] 3.5 New module — request-priced guard: refuse to publish a rate card
       with a non-zero prompt, cached-prompt, completion, or image rate, naming
       the field. Tests for each field and for a request-priced card passing.
-- [ ] 3.6 New module — materialization: on issuance build an
+- [x] 3.6 New module — materialization: on issuance build an
       `InferenceMaterialization` whose rate card is the stored listing's at
       acceptance. Test: republishing with a different card between acceptance
       and fulfillment does not change the materialized card.
-- [ ] 3.7 `[seed]` block and `storefront.inference.toml` for the development
+- [x] 3.7 `[seed]` block and `storefront.inference.toml` for the development
       stack per `design.md`'s "Publication and the development listing".
-- [ ] 3.8 Storefront tests, copied under the same rule and extended for
+- [x] 3.8 Storefront tests, copied under the same rule and extended for
       3.3–3.6: publication and reconciliation at zero and on refill,
       negotiation accept and each guard's refusal, Alkahest settlement
       verification, issuance fulfillment and its rollback, signed issuance
       evidence, administrative authentication.
-- [ ] 3.9 Dockerfile building `arkhai:inference-storefront`, `Makefile`,
+- [x] 3.9 Dockerfile building `arkhai:inference-storefront`, `Makefile`,
       `dist-`, `build-`, and `test-inference-storefront` targets joined to the
       aggregates, and a test-matrix row.
+
+Done 2026-10-17, from `dev` at `916884944`, on `feat/compose-inference-domain-stack-storefront`.
+`domains/apicredits/storefront/` exported through the rename table: of the 74
+copied files, 51 are identical to their renamed source and 23 differ only as
+listed below; 4 are omitted and 10 are new. The renamed configuration file's
+name follows it into the one docstring that cites it, and the shared
+integration conftest names its temporary database after this storefront. Two renames the table implies were
+applied and added to the verification rules, as section 2's copies already
+applied them: the `API_CREDITS_*` constants carry `INFERENCE_`, and the prose
+spellings `API-Credits`, `API-credits`, and `api-credits` read `Inference` or
+`inference`, so the served OpenAPI title names this storefront; and the
+`api-credit-` labels (the stored credential-reference prefix, the servicing
+worker id, the OpenAPI tag) carry `inference-`, decided before this storefront
+creates a database, since the prefix is persisted. The one
+exception is `listing_source_check.py`'s docstring, which keeps its citation
+of the API-credits specification: that is the contract the copied publication,
+reconciliation, and source-recheck behaviour implements until
+`extract-access-issuance-kit` lands, and the promotion record says so. Copied
+comments are otherwise frozen for closeout's restatement; one already needs
+it: `test_credits_trust_pins.py` recalls a comment that exists only in the
+API-credits TOML.
+
+*Omissions (3.3).* `services/payment_settlement_service.py`,
+`tests/integration/test_payment_settlement.py`, and
+`tests/integration/test_payment_recovery.py` are not copied.
+`settlement_composition.py` loses the payments kit import, the payments stage
+row, the `arkhai_payments_stage` field, `payment_service`, the
+`payments_client_for_owner` parameter, and `_payments_stage`; its registry
+docstring names the one registration. `settlement_stages.py` loses the
+payments kit import, the two payments validators imported from the domain,
+and `ArkhaiPaymentsSellerStage`. `startup.py` loses the reconciliation import
+and loop; `lifecycle_steps.py` the reconciliation constant, service, step,
+registration, and export; `settings.toml` the `[Settlement.arkhai_payments]`
+table; `pyproject.toml` the payments kit, and the buyer dev dependency the
+negotiate-CLI test needed. `tests/unit/test_settlement_mechanisms.py` proves
+the table holds `alkahest.v1` alone and that resolving a `priority` naming
+`arkhai.payments.v1` raises the kit's configuration error naming it, which is
+the call `_build_inference_services` makes before any route is served
+(unit); `tests/unit/test_startup_refusal.py` builds the services under a
+foreign priority and proves they fail by name before persistence is opened.
+
+*Substitutions (3.1, 3.4; the storefront's field mapping).*
+`ListingService.publish_from_quota(service_name=, description=, openapi_url=,
+base_url=)` becomes `publish_from_quota(model_card=)`; the listing payload is
+`model_card.publishable_model_card(card, resource_id=, capacity_site_id=)`,
+the publication resource `service` is the card's `served_model_name`, and the
+creation event records `served_model_name`. `PublishFromQuotaRequest` carries
+`model_card` in place of the four fields; the `publish` command takes
+`--model-card PATH` (a JSON card) in place of `--service-name`,
+`--description`, `--openapi-url`, `--base-url`, and `--price-per-token`, and
+its docstring describes that; the escrow rate the command and the `[seed]`
+block publish is `UNIT_RATE` per credit, since the contract fixes the purchase
+rate at one; the seed reads `[seed.model_card]`.
+
+*Wiring to the new modules (3.6), each one call.* `utils/migrations.py` imports
+`migrate_accepted_rate_cards` and appends it to the chain as
+`20261017_003_accepted_rate_cards`, so the pin's table is created, versioned,
+and drift-checked with the storefront's others. `negotiation_runtime.py`
+`_persist_artifacts` ends with `record_accepted_rate_card(repository,
+acceptance)`, which also copies the listing binding to the thread — the
+API-credits storefront never bound its threads, and the core artifact store
+resolves its codec from that binding. `settlement_stages.py`: `deliver_prepared`
+reads `pinned_rate_card` before issuance and, after `continue_delivery`
+succeeds, calls `deliver_materialization`, which builds, records, and attaches
+the materialization; `persist_delivery` adds
+`public_materialization(result)` to the public result; `project_progress`
+pops it from the stored public result into the response. The carrier decision
+is recorded in `design.md` ("How the storefront carries it").
+
+*New modules.* `rate_card_guard.py` (3.5), `model_card.py` (3.4: the
+operator's card validated and bound to the quota resource and site, `model_id`
+taken as given or derived from `owner` and `name`; the card itself names the
+endpoint, which the seed points at the gateway, and backing is read from the
+pool declaration by the copied binding, as the task's wording intended),
+`materialization.py` (3.6: the accepted-rate-card repository on the storefront
+database, the artifact-slot store that refuses a changed retry, the
+public-result helpers).
+
+*Tests (3.8).* Storefront suite 115. Unit: guard per field, model-card
+binding and derivation, mechanism table and refusal, seed configuration, the
+copied unit suites. Library integration (the negotiation runtime, listing
+service, and reconciler against SQLite): the materialization pin surviving a
+republication and refusing a changed retry; sync negotiation; publish and
+reconcile; listing-source check; and, in
+`tests/integration/test_materialization_delivery.py`, the coordinator flow
+from verified escrow to stored credentials after a republication, asserting
+the accepted card in the progress row, the status projection, and the artifact
+slot (it borrows the settled deal and coordinator from the copied fulfillment
+suite, which keeps them in `unit/` beside their first users). Application integration
+(the composed app through the typed admin client over `ASGITransport`):
+force-accept, trading pause, lifecycle routes. Copied tests adapted to the
+mapping: openings below the bound use `proposal(2)` against three credits, the
+bisection cases buy 300 credits at 250 so the countered midpoint stays 275,
+listing fixtures are the model card in `credit_negotiation.model_card()`, rates
+are one per credit, and `test_domain_runtime.py`'s foreign-model case declares
+only `kind` and admits the card's other fields as extras. The three cases the
+source drove through the payments option are rewritten in
+`test_sync_negotiation.py` against the listing's Alkahest option: the
+opening-selection-switch and withdrawn-option revalidation rules, which the
+copied adapter raises, are proven here, and an Alkahest acceptance places no
+quota hold.
+`test_concept_modules.py` keeps only the storefront's reference-hook test; the
+rest exercised domain modules the domain suite already covers, or API-credits
+per-token pricing the contract replaces. `test_credits_negotiate_cli.py`
+drives `market inference negotiate` and waits for section 5. The domain's
+`test_credits_trust_pins.py` is copied now that the TOML exists; its third
+case skips until section 7 commits `inference-service.ed25519`.
+
+*Seed (3.7).* `storefront.inference.toml`: Anvil account 8
+(`0x23618e81…b21e8f`), one credit per request, `dev://arkhai/stub-instruct`,
+`model_id` derived from owner `arkhai` and name `stub-instruct`, endpoint
+`http://inference-gateway:8105/v1`, quota 100000. The file is this stack's
+configuration, written for it rather than copied, so its comments are its own.
+It sets no `hold_ttl_seconds`: only the omitted payments stage placed an
+acceptance-time quota hold, so inference reserves quota at fulfillment and the
+setting has no reader here.
+The registry and authority
+pins are the public halves of seeds derived as the identities README
+prescribes, from `arkhai-development-inference-registry-v1`
+(`QpkX0mKY…`) and `arkhai-development-inference-service-v1` (`nS5GC-Q7…`);
+neither begins with `-`. For section 7: generate `inference-registry.ed25519`
+and `inference-service.ed25519` from those labels, mount the administrative
+key at `/run/secrets/arkhai/inference-admin-key`, and for section 4: the
+gateway listens on 8105 and serves under `/v1`.
+
+*Build (3.9).* `Dockerfile` and `Makefile` identical to the source after
+rename; `dist-/build-/test-inference-storefront` in both Makefiles, the
+inference Makefile's `test-storefront`, the four-image `build` line gains the
+storefront, and a `tests.yml` row. `arkhai:inference-storefront` was not
+built on this host. End-to-end markers: none exercise this section yet;
+section 7 adds `e2e_inference_deal`.
+
+*Owed to later work.* Section 5: the storefront client's status model admits
+the `materialization` field only through its catch-all `extra` mapping, so the
+buyer's typed client gains a named field before the plugin reads it.
+`extract-access-issuance-kit`: `tests/unit/test_settlement_fulfillment.py`
+runs a real SQLite coordinator from `unit/`, and the testing guide asks that
+such a suite move to `integration/` when next touched; it stays beside its
+source until the extraction so the copy comparison has one less difference to
+explain.
+
+*Checks.* `make check-packaging` (which runs `check-architecture`),
+`check-comment-hygiene`, `check-doc-citations`, `check-architecture-change`,
+`check-change-index`, `check-tasks`, and `openspec validate --strict` pass.
+`make -k test` runs every project; every suite this section touches is green,
+and the four failures are in projects it does not touch and are this macOS
+host's, since upstream's `tests.yml` run at `916884944` passes them:
+`provisioning/compute/service`'s dotenv-layer test, which fails identically
+under a minimal environment; `provisioning/compute/iac`'s three relay-teardown
+tests; the VM storefront's two `test_alkahest.py` toolchain tests; and
+`scripts/tests/test_validate_slice.py`, which needs a `make` with `--eval`.
+The fresh-context review's accepted findings were fixed before the commit; its
+duplicate-registry and typing remarks were declined: the materialization store
+builds the one-registration registry from the domain contract it is handed,
+and threading the composed app's registry into the stage would add wiring
+lines to copies, while `Any`-typed repository and acceptance parameters follow
+the copied modules' own convention.
 
 ## 4. Gateway and model stub
 
@@ -337,4 +494,5 @@ the trust-pin test reads the storefront's TOML section 3 writes. The image
 | Local inference stack: third registry schema, role-scoped development identities, independent volumes | `openspec/specs/deployment-state/spec.md`; `docs/development/ARCHITECTURE.md` runtime service map and local topology |
 | Inference end-to-end deal path through shared helpers against a deterministic model server | `openspec/specs/test-compatibility/spec.md`; `docs/development/TESTING.md` |
 | Copy-then-extract sequencing and the frozen-copy rule | not promoted; change history, superseded when `extract-access-issuance-kit` lands |
+| Quota-backed publication, reconciliation, and source recheck as the inference storefront copies them | normative in `openspec/specs/api-credits/spec.md` until `extract-access-issuance-kit` moves the shared behaviour; the copied docstrings cite it |
 | Roadmap and campaign index currency | `docs/development/ROADMAP.md` Goal 8; `openspec/changes/README.md` |

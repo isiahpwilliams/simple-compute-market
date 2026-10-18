@@ -5,8 +5,8 @@ export UV_PYTHON := $(or $(shell cat ../.python-version 2>/dev/null),$(error ../
 	dist-bare-metal-storefront dist-storefront dist-provisioning-operator-client dist-provisioning-adapters \
 	dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront \
 	dist-apicredits-middleware dist-apicredits-sample-app dist-apicredits-buyer \
-	dist-inference-domain dist-buyer test-provisioning-iac test-provisioning-adapter test-storefront \
-	test-bare-metal test-compute test-vms-domain test-vms-buyer test-apicredits test-apicredits-middleware test-inference
+	dist-inference-domain dist-inference-service dist-buyer test-provisioning-iac test-provisioning-adapter test-storefront \
+	test-bare-metal test-compute test-vms-domain test-vms-buyer test-apicredits test-apicredits-middleware test-inference test-inference-service
 
 DIST_DIR ?= $(abspath ../.dist)
 
@@ -15,7 +15,7 @@ dist: dist-compute dist-vms dist-vms-listings dist-vms-negotiation dist-vms-sett
 	dist-storefront dist-provisioning-operator-client dist-provisioning-adapters \
 	dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront \
 	dist-apicredits-middleware dist-apicredits-sample-app dist-apicredits-buyer \
-	dist-inference-domain dist-buyer ## Build every domains-scoped wheel
+	dist-inference-domain dist-inference-service dist-buyer ## Build every domains-scoped wheel
 
 # ---------------------------------------------------------------------------
 # Dist -- leaf wheel-build recipes for domains/-scoped packages, mirroring
@@ -138,6 +138,12 @@ dist-inference-domain: ## Build arkhai-inference-domain wheel into .dist/
 	@ls $(DIST_DIR)/arkhai_inference_domain-*-none-any.whl > /dev/null 2>&1 || \
 		(echo "ERROR: arkhai-inference-domain produced a platform-specific wheel -- must build inside Docker" && exit 1)
 
+dist-inference-service: dist-inference-domain ## Build arkhai-inference-service wheel into .dist/
+	-mkdir -p $(DIST_DIR)
+	cd inference/service && uv build --wheel --out-dir $(DIST_DIR)
+	@ls $(DIST_DIR)/arkhai_inference_service-*-none-any.whl > /dev/null 2>&1 || \
+		(echo "ERROR: arkhai-inference-service produced a platform-specific wheel -- must build inside Docker" && exit 1)
+
 dist-buyer: dist-vms-listings dist-vms-negotiation dist-vms-settlement ## Build arkhai-vms-buyer (the `market` CLI) wheel into .dist/
 	-mkdir -p $(DIST_DIR)
 	cd vms/buyer && uv build --wheel --out-dir $(DIST_DIR)
@@ -183,6 +189,9 @@ test-apicredits-middleware:
 
 test-inference: ## Full inference domain test suite
 	cd inference && $(MAKE) test
+
+test-inference-service:
+	cd inference && $(MAKE) test-service
 
 
 test-provisioning-adapter: ## VM provisioning adapter tests against built wheels

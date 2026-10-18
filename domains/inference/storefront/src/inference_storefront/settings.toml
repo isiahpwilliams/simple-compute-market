@@ -1,0 +1,115 @@
+# ---------------------------------------------------------------------------
+# inference storefront base defaults.
+# This file documents every supported key and its default. Do NOT put
+# environment-specific values here.
+#
+# Override via (highest priority first):
+#   1. INFERENCE_STOREFRONT_* environment variables (separator __)
+#   2. $XDG_CONFIG_HOME/arkhai/storefront.secrets.toml  (Secret overlay)
+#   3. $XDG_CONFIG_HOME/arkhai/storefront.json          (a chart-rendered document)
+#   4. $XDG_CONFIG_HOME/arkhai/storefront.toml          (an operator's own file)
+#   5. This file
+#
+# The overlay files are shared with the VM storefront's loader on
+# purpose: a deployment runs one storefront per container, each with its
+# own mounted configuration.
+# ---------------------------------------------------------------------------
+
+# Public marketplace identity. The matching credential is supplied only through
+# ARKHAI_IDENTITY_CREDENTIAL and is never loaded into Dynaconf.
+# Root-level defaults. These must appear before the first table header: a
+# bare key after one belongs to that table, and these previously sat below
+# [identity.admin_principals], which put every one of them out of reach of
+# the `settings.<key>` lookups that read them.
+# Display/process identity
+agent_id   = ""        # must be a Python identifier; empty → "root_agent"
+agent_name = ""        # display name; falls back to agent_id
+# HTTP server
+port     = 8002
+base_url = "http://localhost:8002"  # advertised in registry publications
+# Storage / logging
+db_path       = "./src/inference_storefront/data/storefront/agent.db"
+log_level     = "INFO"
+# Registry discovery (seller-side)
+enable_registry_discovery = true
+# Negotiation watchdog
+negotiation_timeout_seconds   = 1800
+negotiation_watchdog_interval = 60
+# Shared settlement-servicing worker cadence (seconds).
+claims_sweep_interval = 30
+
+[identity]
+scheme     = ""
+identifier = ""
+
+[identity.admin_principals]
+identities = []
+[Settlement]
+schema_version = 1
+priority = []
+
+[wallet]
+# Sensitive — populated by Secret overlay in k8s, by local file otherwise.
+address     = ""
+private_key = ""
+
+# [chains.<name>] tables — one per chain the operator transacts on, same
+# schema as the VM storefront (rpc_url required; chain_id and
+# alkahest_address_config_path optional).
+
+[registry]
+urls              = []
+discovery_timeout = 5.0
+
+
+[registry.authorities]
+# Required URL tables with authority text and 1-2 principal identities.
+[registry.auth]
+# Free-form table of {url = "bearer-token"} pairs for private registries.
+
+[gateway]
+root_path = ""
+
+[credits]
+# The credits service this storefront sells for. It also hosts the quota
+# ledger in the default deployment, but capacity trust is configured
+# independently below. Its admin_key is a mechanism credential only.
+service_url       = "http://localhost:8082"
+admin_key         = ""
+admin_key_file    = ""
+preflight_timeout = 30
+fail_on_unreachable = true
+
+[capacity]
+# Configure one stable table per site under [capacity.sites.<site_id>] with:
+#   url = "https://site-authority.example"
+# and a nested [capacity.sites.<site_id>.expected_authorities] table carrying an
+# identities array of 1-2 ordered principals. No URL, seller-identity, or
+# response-based fallback is permitted.
+poll_interval    = 5
+placement        = "fill_first"
+seed_site        = ""
+hold_ttl_seconds = 0
+
+[capacity.sites]
+
+[fulfillment.failure_policy]
+# Actions applied when issuance/fulfillment fails. `release_capacity`
+# releases the quota hold at the ledger and reopens exhausted listings;
+# `emit_event` writes to stage_events; `webhook` POSTs the failure
+# payload to webhook_url. Issuance rollback (clawback + revoke of a
+# deal-created key) is inline in the fulfillment flow, not an action.
+actions         = ["release_capacity", "emit_event"]
+webhook_url     = ""
+webhook_timeout = 5.0
+
+[negotiation]
+# Ordered policies run per round; the inference guards are prepended
+# automatically (inference_round_zero_guard, buyer_counter_guard,
+# credit_quota_guard, key_owned_by_buyer_principal, escrow_shape_guard).
+# A seller who wants open top-up overrides this list without
+# key_owned_by_buyer_principal. The terminal default is listed_price.
+policies = []
+
+[pricing]
+default_min_price = ""

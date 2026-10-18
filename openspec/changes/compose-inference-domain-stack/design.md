@@ -126,6 +126,9 @@ one. This is what keeps extraction a comparison.
 | key identifier prefix `ak_` | `ik_` |
 | buyer command group `market credits` | `market inference` |
 | names carrying `ApiCredits`, `ApiCredit`, `api_credits`, or `api_credit` | the same names carrying `Inference` or `inference` |
+| constants carrying `API_CREDITS_` | the same constants carrying `INFERENCE_` |
+| the prose spellings `API-Credits`, `API-credits`, and `api-credits`, except inside a citation of the API-credits specification | `Inference`, `inference` |
+| labels carrying `api-credit-`: the credential-reference prefix, the servicing worker id, the OpenAPI tag | the same labels carrying `inference-` |
 
 Names carrying plain `Credit` or `Credits` — `CreditsServiceClient`,
 `CreditIssuanceRequest`, `credits_client.py` — are kept, as are file names:
@@ -158,7 +161,9 @@ where it shares a module.
 **Additions.** New behaviour lives in new modules, never inside a copied one:
 the model-card publication mapping, the request-priced publication guard, the
 materialization builder that pins the rate card, the gateway's proxy and model
-check, and the buyer's model filters.
+check, and the buyer's model filters. A copy reaches an addition through the
+fewest call sites that can carry it; each such line is listed in `tasks.md`
+beside the module, so the diff against the source stays a reviewable list.
 
 **Inherited divergence.** `negotiation/policies.py` and
 `settlement/credits_client.py` import the Alkahest kit, and the API-credits
@@ -226,6 +231,21 @@ The authority's grant row is not extended. Storing the card where the
 consumption path reads it is `meter-inference-usage`'s work, done once against
 the kit-composed authority, as the contract design already says. The proposal's
 "grant row carrying the pinned rate card" is withdrawn.
+
+**How the storefront carries it** (decided 2026-10-17, with the storefront
+implemented). Nothing in the API-credits roles builds a materialization: the
+codec exists and delivery returns only the fulfillment payload and the private
+credential. The inference storefront therefore adds three modules beside the
+copies. At acceptance it pins the listing's rate card in a table of its own,
+keyed by negotiation, and binds the thread to its listing's domain binding. At
+delivery it builds the `InferenceMaterialization` from that pin and the issued
+key, records it in the core storefront's `materialization` artifact slot so a
+retry finds the same one, and adds it to the delivery's public result under
+`materialization`, beside the connection payload and apart from the private
+credential. The settle and status responses carry that field, and the buyer
+plugin reads it from there. The alternative, folding the card into the copied
+connection payload, would have changed a copied wire shape; a new field leaves
+the copies' payloads untouched and the core status model admits it.
 
 Consequence for `meter-inference-usage`: grants issued by this stack have no
 authority-side card. That change either carries the card on the issuance
@@ -451,6 +471,11 @@ requests, one per section of `tasks.md`, each green on its own:
 3. The gateway and the model stub.
 4. The buyer plugin.
 5. The stack, identities, targets, and the end-to-end scenario; closeout.
+
+Sections 2 and 3 each proved too large for one review and landed as four and
+seven stacked slices respectively, split along the storefront's import graph
+so that every slice imports, tests, and packages alone and states what it
+leaves to the next; the last slice of each carries the section's task notes.
 
 A copied module's pull request states the source commit and shows the diff
 against its source after renames, so a reviewer reads the differences and not

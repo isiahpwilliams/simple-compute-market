@@ -4,11 +4,35 @@ from __future__ import annotations
 
 import market_policy.negotiation_thread as thread_module
 import pytest
+from inference_storefront import negotiation_runtime as runtime_module
 from inference_storefront.utils.sqlite_client import SQLiteClient
 from market_policy.identity import Identity
 from market_policy.negotiation_thread import get_thread_store
 
 from tests.integration.credit_negotiation import FakeCapacity, seed_listing
+
+
+@pytest.fixture
+def fake_capacity(monkeypatch):
+    capacity = FakeCapacity()
+
+    monkeypatch.setattr(
+        runtime_module,
+        "build_capacity_client",
+        lambda factory: capacity,
+    )
+    return capacity
+
+
+@pytest.fixture
+def key_records(monkeypatch):
+    records: dict[str, dict | None] = {}
+
+    async def _lookup(key_id: str):
+        return records.get(key_id)
+
+    monkeypatch.setattr(runtime_module, "lookup_key_record", _lookup)
+    return records
 
 
 @pytest.fixture

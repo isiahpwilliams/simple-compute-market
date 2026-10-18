@@ -35,6 +35,10 @@ def test_domain_wheel_owns_every_module(wheels: dict[str, Path]) -> None:
         "arkhai_inference/listings/pricing.py",
         "arkhai_inference/negotiation/__init__.py",
         "arkhai_inference/negotiation/terms.py",
+        "arkhai_inference/settlement/__init__.py",
+        "arkhai_inference/settlement/credits_client.py",
+        "arkhai_inference/settlement/fulfillment.py",
+        "arkhai_inference/settlement/issuance_evidence.py",
         "arkhai_inference/usage/__init__.py",
         "arkhai_inference/usage/evidence.py",
         "arkhai_inference/usage/models.py",
@@ -47,7 +51,7 @@ def test_domain_wheel_requires_versioned_core_and_identity(
     wheels: dict[str, Path],
 ) -> None:
     requirements = _requirements(wheels["domain"])
-    for name in ("arkhai-core", "arkhai-kit-identity", "pydantic"):
+    for name in ("arkhai-core", "arkhai-kit-identity", "httpx", "pydantic"):
         assert name in requirements, name
     for name in ("arkhai-core", "arkhai-kit-identity"):
         assert requirements[name], f"{name} is required without a version"

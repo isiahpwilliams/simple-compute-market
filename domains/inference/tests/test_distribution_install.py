@@ -52,6 +52,8 @@ contract = domain_runtime.market_domain()
 module_path = Path(domain_runtime.__file__).resolve()
 assert contract.identity == "inference.v1"
 assert derive_model_id("Meta-Llama", "Llama-3.1-8B-Instruct") == "meta-llama/llama-3.1-8b-instruct"
+from arkhai_inference.settlement.credits_client import derive_credit_fulfillment_id
+assert derive_credit_fulfillment_id("n-1").startswith("inference-fulfillment.v1:")
 assert "site-packages" in module_path.parts
 """
     subprocess.run(

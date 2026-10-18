@@ -18,24 +18,34 @@ amended to match.
 
 ## 1. Baseline and copy record
 
-- [ ] 1.1 Confirm `add-inference-domain-contract` is accepted and its wheel
+- [x] 1.1 Confirm `add-inference-domain-contract` is accepted and its wheel
       builds on the target branch. If its vocabulary changed in review, record
       the effect on this change in `design.md` before starting.
-- [ ] 1.2 Confirm by inspection that `design.md`'s "What is copied from" table
+- [x] 1.2 Confirm by inspection that `design.md`'s "What is copied from" table
       still holds: the seven domain-package modules, the service, storefront,
       gate, and buyer exist at the named paths; the storefront's seller
       stages are still a `SettlementStageTable` keyed by mechanism and its
       configuration registry is still built from their registrations; the
       gate still charges a configured fixed amount on admission. Record drift in
       `design.md` rather than working around it.
-- [ ] 1.3 Record here the `dev` commit the copies are taken from. Every later
+- [x] 1.3 Record here the `dev` commit the copies are taken from. Every later
       section copies from that commit, not from whatever `dev` has become.
-      `design.md`'s copy table was measured at `2211c816a`; if the copies come
-      from a later commit, re-measure it.
-- [ ] 1.4 Confirm Anvil development account 8 and host ports 8100, 8102, 8103,
+- [x] 1.4 Confirm Anvil development account 8 and host ports 8100, 8102, 8103,
       and 8105 are still unassigned across the Compose files and
       `dev-env/identities/README.md`; if not, choose free ones and update
       `design.md`'s tables.
+
+Done 2026-10-17. The contract's wheel builds on this branch
+(`arkhai_inference_domain-0.1.0`); its review is outstanding, so section 2
+proceeds on the vocabulary as pushed and 1.1's "record the effect" clause
+stays live until the review lands. Every copy source exists at its path; the
+seller stages are a `SettlementStageTable` and the registry is built from
+their registrations; the gate charges `amount_per_request` on admission. The
+copies are taken from `dev` at `916884944`; the copy table was re-measured
+there, and the reconciler's reshaping by the capacity-backing delegate is
+recorded in `design.md` beside it. Anvil accounts 0 through 7 are assigned
+and 8 is free; none of the four host ports appears in any Compose file,
+chart, or configuration.
 
 ## 2. Domain-package semantics and the authority
 

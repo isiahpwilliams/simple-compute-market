@@ -18,16 +18,43 @@ find the shared boundary with two working consumers in view.
 ### What is copied from
 
 All paths are under `domains/apicredits/`; sizes were measured on `dev` at
-`2211c816a`.
+`916884944`, the commit the copies are taken from.
 
 | Role | Source | Size |
 |---|---|---|
 | Seller and buyer semantics | `src/arkhai_apicredits/{listings/reconciler.py, negotiation/{policies,buyer_policies,storefront_round}.py, settlement/{credits_client,fulfillment,issuance_evidence}.py}` | about 2,000 lines |
 | Authority | `service/src/apicredits_service/` | about 2,200 lines |
-| Storefront | `storefront/src/apicredits_storefront/` | about 7,100 lines |
+| Storefront | `storefront/src/apicredits_storefront/` | about 7,700 lines |
 | Bearer gate | `middleware/python/src/apicredits_middleware/` | about 1,200 lines |
 | Buyer plugin | `buyer/src/arkhai_apicredits_buyer/` | about 3,700 lines |
 | Gated application | `sample-app/` | the pattern only; the gateway replaces it |
+
+Since the plan was written, the capacity-backing delegate reshaped the
+reconciler: listing reads go through a `CreditListingSource` built from the
+row, availability arrives as an `AvailabilityView`, and the row-level
+`listing_capacity_site_id` helper is gone. The copy takes that shape; the
+substitution in task 2.1 maps the source's fields onto the model card rather
+than reading the row directly.
+
+**Field mapping in the copied domain modules.** Where a copied module read
+an API-credits listing field, it reads the model card's equivalent through
+`InferenceModelCard`:
+
+| API-credits read | Inference read |
+|---|---|
+| `listing_resource["service_name"]` (the issuance `service`) | `InferenceModelCard.served_model_name` |
+| `listing_resource["base_url"]` | `InferenceModelCard.endpoint.base_url` |
+| `listing_resource["resource_id"]`, `kind` | the same fields on the card |
+| `extract_unit_price_from_order(order, proposal=…)` | `extract_unit_price_from_order(order, settlement_selection=proposal["settlement_selection"])`, the contract's narrowed signature |
+| `api-credit-fulfillment.v1:` grant prefix | `inference-fulfillment.v1:` |
+
+The fulfillment payload names `served_model_name` where the source named
+`service_name`. Reading through the card also validates the whole card at
+issuance, where the source checked only its two fields for emptiness: a
+delivery whose stored resource is not a complete model card is refused. That
+is deliberate, since the codec refuses the same card at publication, and the
+extraction treats it as inference behaviour rather than drift. Everything
+else in the seven modules is the rename table.
 
 ### What inspection found that the proposal did not anticipate
 

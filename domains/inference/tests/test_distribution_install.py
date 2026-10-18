@@ -47,13 +47,14 @@ def test_domain_contract_imports_from_built_wheel(
 from pathlib import Path
 from arkhai_inference import domain_runtime
 from arkhai_inference.listings import derive_model_id
+from arkhai_inference.negotiation import default_seller_round_hook
+from arkhai_inference.settlement.credits_client import derive_credit_fulfillment_id
 from arkhai_inference.usage import derive_charge
 contract = domain_runtime.market_domain()
+assert derive_credit_fulfillment_id("n-1").startswith("inference-fulfillment.v1:")
 module_path = Path(domain_runtime.__file__).resolve()
 assert contract.identity == "inference.v1"
 assert derive_model_id("Meta-Llama", "Llama-3.1-8B-Instruct") == "meta-llama/llama-3.1-8b-instruct"
-from arkhai_inference.settlement.credits_client import derive_credit_fulfillment_id
-assert derive_credit_fulfillment_id("n-1").startswith("inference-fulfillment.v1:")
 assert "site-packages" in module_path.parts
 """
     subprocess.run(

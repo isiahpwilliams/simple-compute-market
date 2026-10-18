@@ -2,10 +2,12 @@
 name = "arkhai-inference-domain"
 version = "0.2.0"
 license = "MIT"
-description = "Shared inference domain models, pricing, usage vocabulary, issuance client, and market-domain contract."
+description = "Shared inference domain models, pricing, usage vocabulary, negotiation policies, issuance client, and market-domain contract."
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "arkhai-core>=0.4.0",
+    "arkhai-kit-policy",
+    "arkhai-kit-alkahest>=0.4.0",
     "arkhai-kit-identity==0.4.0",
     "httpx>=0.27",
     "pydantic>=2",

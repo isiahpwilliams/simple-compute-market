@@ -4,6 +4,12 @@ from arkhai_inference.listings.identity import (
     derive_model_id,
     model_id_from_artifact_ref,
 )
+from arkhai_inference.listings.reconciler import (
+    CreditListingSource,
+    listing_quota_resource_id,
+    reopenable_credit_listing_ids,
+    stale_open_credit_listing_ids,
+)
 from arkhai_inference.listings.pricing import (
     UNIT_RATE,
     checked_credit_total,
@@ -35,6 +41,7 @@ __all__ = [
     "QUANTIZATIONS",
     "UNIT_RATE",
     "AttestationEnvelope",
+    "CreditListingSource",
     "InferenceArchitecture",
     "InferenceEndpoint",
     "InferenceModelCard",
@@ -44,8 +51,11 @@ __all__ = [
     "derive_model_id",
     "determine_strategy_from_order",
     "extract_unit_price_from_order",
+    "listing_quota_resource_id",
     "model_id_from_artifact_ref",
     "reference_payment",
+    "reopenable_credit_listing_ids",
     "resource_is_inference",
     "selected_unit_price",
+    "stale_open_credit_listing_ids",
 ]

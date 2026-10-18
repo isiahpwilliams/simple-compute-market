@@ -216,6 +216,15 @@ owner = "align-package-paths-with-layers"
 since = 2026-10-13
 reason = "The API-credits domain holds both mechanisms' settlement codecs, and its name carries neither."
 
+[[overrides]]
+project = "arkhai-inference-domain"
+layer = "specialization"
+kind = "library"
+scope = ["inference", "alkahest"]
+owner = "align-package-paths-with-layers"
+since = 2026-10-17
+reason = "The inference domain copies the API-credits negotiation guards and issuance client, which carry the Alkahest settlement codec, and its name carries no mechanism."
+
 # Divergences the check reports, each owned by the change that removes it. A
 # row excuses one finding of the rule it names and fails once it excuses
 # nothing; its owner may not be archived while the row stands.

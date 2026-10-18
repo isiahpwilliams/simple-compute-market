@@ -145,7 +145,7 @@ dist-bare-metal-storefront: dist-core dist-arkhai-core-storefront dist-kits ## B
 dist-apicredits-domain: dist-core dist-identity dist-alkahest dist-policy ## Build arkhai-apicredits-domain wheel into .dist/
 	cd domains && $(MAKE) dist-apicredits-domain DIST_DIR=$(DIST_DIR)
 
-dist-inference-domain: dist-identity dist-core ## Build arkhai-inference-domain wheel into .dist/
+dist-inference-domain: dist-identity dist-core dist-policy dist-alkahest ## Build arkhai-inference-domain wheel into .dist/
 	cd domains && $(MAKE) dist-inference-domain DIST_DIR=$(DIST_DIR)
 
 dist-apicredits-service: dist-identity dist-ci-kits dist-apicredits-domain dist-apicredits-middleware ## Build arkhai-apicredits-service wheel into .dist/

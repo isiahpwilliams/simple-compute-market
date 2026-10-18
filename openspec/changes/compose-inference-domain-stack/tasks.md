@@ -49,7 +49,7 @@ chart, or configuration.
 
 ## 2. Domain-package semantics and the authority
 
-- [ ] 2.1 Copy into `domains/inference/src/arkhai_inference/`:
+- [x] 2.1 Copy into `domains/inference/src/arkhai_inference/`:
       `listings/reconciler.py`, `negotiation/policies.py`,
       `negotiation/buyer_policies.py`, `negotiation/storefront_round.py`,
       `settlement/credits_client.py`, `settlement/fulfillment.py`, and
@@ -57,29 +57,28 @@ chart, or configuration.
       the rename table. Listing reads go through `InferenceModelCard`; price
       reads go through `arkhai_inference.listings.pricing`; terms go through
       `arkhai_inference.negotiation.terms`. Record the field mapping used.
-- [ ] 2.2 Guards keep their semantics under inference names: round-zero shape,
+- [x] 2.2 Guards keep their semantics under inference names: round-zero shape,
       buyer counter, quota, key owned by the buyer principal, escrow shape. The
       terminal default remains the listed per-credit price, which the contract
       pins at one.
-- [ ] 2.3 Tests for 2.1–2.2, copied from the API-credits domain tests under
+- [x] 2.3 Tests for 2.1–2.2, copied from the API-credits domain tests under
       the same rule: issuance client against a scripted authority, signed
       response verification and trust pins, fulfillment orchestration and
       rollback, evidence signing and verification, each guard's accept and
       refuse cases.
-- [ ] 2.4 Label pin: a test fixes one issuance request and asserts its digest
+- [x] 2.4 Label pin: a test fixes one issuance request and asserts its digest
       bytes, its request and result schema strings, the evidence protocol and
       capability, and the portable fulfillment reference schema. None equals
       the API-credits value.
-- [ ] 2.5 Bump `arkhai-inference-domain` to 0.2.0; add the dependencies the
-      copied modules import — `arkhai-kit-alkahest`,
-      `arkhai-kit-settlement-runtime`, `arkhai-kit-policy`, and `httpx` — and
-      relock through `scripts/uv_project.py`. Add the domain's override row to
+- [x] 2.5 Bump `arkhai-inference-domain` to 0.2.0; add the dependencies the
+      copied modules import — `arkhai-kit-alkahest`, `arkhai-kit-policy`,
+      and `httpx` — and relock through `scripts/uv_project.py`. Add the domain's override row to
       `docs/development/ARCHITECTURE.toml` beside the API-credits one, with the
       same owner, per `design.md`'s inherited divergence; `make
       check-architecture` passes and `make check-architecture-change
       CHANGE=compose-inference-domain-stack` reports no owned row. Extend the
       wheel-membership and installed-import tests to the new modules.
-- [ ] 2.6 Create `domains/inference/service/` (`arkhai-inference-service`
+- [x] 2.6 Create `domains/inference/service/` (`arkhai-inference-service`
       0.1.0, module `inference_service`, script `inference-service`) as a copy
       of the API-credits service: configuration, container, key and system
       controllers, database, identity, signed-request middleware and route
@@ -88,23 +87,51 @@ chart, or configuration.
       dependencies are the API-credits service's at the recorded commit —
       the site, resource-pools, and resource-pools-contracts kits, identity,
       dynaconf, FastAPI, and uvicorn — pinned as that service pins them.
-- [ ] 2.7 Collapse the migration history to one migration creating the
+- [x] 2.7 Collapse the migration history to one migration creating the
       current tables, per `design.md`'s omissions. The grant row is not
       extended.
-- [ ] 2.8 The authority's own copy of the issuance digest uses the `inference`
+- [x] 2.8 The authority's own copy of the issuance digest uses the `inference`
       labels. A test computes the digest for 2.4's fixed request on the
       authority side and asserts it equals the client-side bytes.
-- [ ] 2.9 Service tests, copied under the same rule: key issuance and top-up,
+- [x] 2.9 Service tests, copied under the same rule: key issuance and top-up,
       verification, consumption and exhaustion, revocation, quota ledger
       commit and release, idempotent issuance replay, role authorization for
       `seller` and `service`, and refusal of an unsigned or wrongly signed
       request.
-- [ ] 2.10 `domains/inference/service/Dockerfile` building
+- [x] 2.10 `domains/inference/service/Dockerfile` building
       `arkhai:inference-service` from the repository wheelhouse through
       `uv_project.py`, and a `Makefile` with `reinit` and `test`.
-- [ ] 2.11 Targets `dist-inference-service`, `build-inference-service`, and
+- [x] 2.11 Targets `dist-inference-service`, `build-inference-service`, and
       `test-inference-service` in `domains/Makefile` and the root `Makefile`,
       joined to the aggregates; a test-matrix row.
+
+Done 2026-10-17, from `dev` at `916884944`. The seven modules copied under
+the rename table; the copies differ from their renamed sources only by the
+field mapping `design.md` records beside the copy table (model-card reads in
+`fulfillment.py`, the narrowed pricing call in `storefront_round.py`), proven
+by a diff of each copy against its mechanically renamed source. Domain suite
+188 (29 copied client, selection, and evidence tests; 15 reconciler, quota-guard,
+and ownership-guard cases lifted from the API-credits storefront's unit suite
+into `tests/test_guards.py`, with the backing judge written locally so the
+domain package declares no resource-pools kit; the label pin in
+`test_label_pin.py` fixes one request to
+`inference-fulfillment.v1:2238e668…` and digest `sha256:a19cc6fa…`, and holds
+every label apart from the API-credits value). The settlement-runtime kit is
+not imported by the seven modules, so 2.5 declares Alkahest, policy, and
+`httpx` only; the domain's override row names the inherited Alkahest import
+and `check-architecture-change` reports no owned row. `arkhai-inference-service`
+0.1.0 is the service copied whole; its single migration
+`20261017_001_inference_schema_baseline` adopts the tables `create_all`
+creates, and the owner-principal, pool-declaration, and reservation-column
+history is omitted with its tests. Service suite 53, including the
+authority-side pin in `tests/unit/test_issuance_label_pin.py` asserting the
+client's bytes. Three copied tests wait for later sections and are recorded
+here rather than stubbed: `test_credits_signed_roundtrip.py` needs the
+committed `inference-*.ed25519` identities section 7 creates; the gated-app
+half of the route-parity test and the three canonical-client flows that spend
+through the gate's `TokensClient` need the gateway package section 4 copies;
+the trust-pin test reads the storefront's TOML section 3 writes. The image
+`arkhai:inference-service` is wired but was not built on this host.
 
 ## 3. Storefront
 

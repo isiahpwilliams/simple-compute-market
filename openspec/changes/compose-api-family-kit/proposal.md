@@ -67,10 +67,11 @@ without the ledger.
 - **One family authority image.** `domains/api/service` is deployed once per
   domain with its own label, database, key namespace, and identities, and
   accepts route contributions for what metering adds later.
-- **The gate relocates; the published name stays.** `arkhai-api-gate` is the
-  bearer gate, httpx-only with identity optional, and the Python reference for
-  the conformance trace. `arkhai-apicredits-middleware` stays on PyPI as a thin
-  re-export depending on it, so sellers' installs keep working.
+- **The gate relocates under its own name.** `arkhai-api-gate` is the bearer
+  gate, httpx-only with identity optional, and the Python reference for the
+  conformance trace. `arkhai-apicredits-middleware` is retired from publishing;
+  no re-export is kept, because no third party installs it and sellers take the
+  pre-built images.
 
 ## Capabilities
 
@@ -121,9 +122,10 @@ without the ledger.
   `contracts`, `client`, `authority`, `selling`, `buying`, `gate`, `alkahest`,
   `arkhai-payments`, and `service` beneath it; the pinned regression fixtures
   under `domains/apicredits/tests/`; a `[[families]]` row and two `family`
-  attributes in `docs/development/ARCHITECTURE.toml`; rows for the gate and
-  the shell in `docs/development/RELEASING.md`'s published-packages table and
-  the publish workflow, with the gate's one-time PyPI setup for a maintainer.
+  attributes in `docs/development/ARCHITECTURE.toml`; a row for the gate in
+  `docs/development/RELEASING.md`'s published-packages table and the publish
+  workflow, in place of the middleware's, with the gate's one-time PyPI setup
+  for a maintainer.
 - Touched: every `domains/apicredits` package, which shrinks to bindings and
   its own vocabulary; `domains/apicredits/service` retired in favour of the
   family image; the inference contract's purchase-terms module;
@@ -142,9 +144,8 @@ without the ledger.
       split only where a stated rule or dependency weight forces it; the runtime
       service map and the authority-boundaries row for keys and issuance cite
       the family authority.
-- [x] `docs/development/RELEASING.md` — the published-packages table gains the
-      gate and the shell, and the rule that a published package whose code moves
-      keeps its name as a thin re-export.
+- [x] `docs/development/RELEASING.md` — the published-packages table replaces
+      the middleware's row with the gate's.
 - [x] Existing subsystem specification — `api-credits` composition prose and
       its architecture companion's "Implementation composition";
       `market-composition` family-kit requirements.
@@ -158,8 +159,6 @@ without the ledger.
 - A family kit splits only where a rule or dependency weight forces it; an
   anticipated split is recorded with its trigger, not built —
   `docs/development/ARCHITECTURE.md#family-kits`.
-- A published package whose code moves keeps its name as a re-export depending
-  on the new package — `docs/development/RELEASING.md`.
 - The contribution bundle and what each domain supplies —
   `openspec/specs/api-family/architecture.md`.
 - Label-parameterized digests and the pin that proves them —

@@ -126,16 +126,15 @@ configuration, its verify-and-consume client, and its optional identity
 signing — MUST live in one family library whose runtime dependencies are httpx
 alone, with the identity kit as an optional extra, parameterized by
 environment prefix and label. The Python gate MUST remain the reference
-implementation that replays the cross-language conformance trace. The
-distribution `arkhai-apicredits-middleware` MUST remain published as a
-re-export of the gate library, depending on it and vendoring none of it.
+implementation that replays the cross-language conformance trace. The gate
+MUST be published under its own distribution name, and the repository MUST NOT
+publish a second distribution carrying the same code under another name.
 
-#### Scenario: An existing seller upgrades
+#### Scenario: The published packages are listed
 
-- **WHEN** a seller application that imports `apicredits_middleware` installs
-  the next published version
-- **THEN** its imports resolve to the gate library's implementation and its
-  configuration is read unchanged
+- **WHEN** the published-packages table and the publish workflow are read
+- **THEN** the gate library appears once, under its own name, and no
+  API-credits-named middleware distribution appears
 
 #### Scenario: The conformance trace is replayed
 

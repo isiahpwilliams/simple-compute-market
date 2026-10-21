@@ -260,13 +260,17 @@ contract is httpx-only. The conformance trace stays at
 `sign-multi-language-credits-middleware`, and the Python runner replays it
 against the relocated gate.
 
-`arkhai-apicredits-middleware` stays on PyPI as a thin re-export of the gate
-package, so existing sellers' installs keep working. The releasing guide decides
-the form: "no package vendors another's modules ... code another package needs
-is its own wheel and a declared dependency", so the shell depends on
-`arkhai-api-gate` and copies nothing, and both appear in the published-packages
-table with their internal dependencies. The gate's one-time PyPI setup is a
-maintainer's.
+`arkhai-apicredits-middleware` is retired: its row leaves the
+published-packages table and the publish workflow, and `arkhai-api-gate` takes
+its place with a one-time PyPI setup that is a maintainer's. No re-export under
+the old name is kept. There are no third-party sellers installing the package
+today, and sellers are expected to take the pre-built images rather than work
+at the package layer, so the old name has nothing to protect; a shell would be
+a published package with no consumer.
+
+**Rejected:** keeping `arkhai-apicredits-middleware` as a thin re-export of the
+gate. The releasing guide permits that form — a declared dependency, nothing
+vendored — but it exists only to protect installs nobody has.
 
 ### Route services in the kit, bindings in the compositions
 
@@ -300,14 +304,15 @@ binding the purchase shape; `client`, with the service composing the shared
 digest and deleting its duplicate; `authority` and `domains/api/service`, with
 `domains/apicredits/service` retired and the API-credits stack deploying the
 family image; `selling`, with the storefront's route services and bindings;
-the two mechanism distributions; `gate` and the shell; `buying`. Each slice
+the two mechanism distributions; `gate`, retiring the old distribution; `buying`. Each slice
 is one to two thousand lines, leaves API credits green on its suites and its
 end-to-end lane, and keeps `make check-packaging` green.
 
 ### Compatibility
 
 Wire shapes, digests, database rows, migration identifiers, environment
-prefixes, and the published middleware's name do not change. The API-credits
+prefixes do not change. The gate publishes as `arkhai-api-gate`, and the
+`arkhai-apicredits-middleware` distribution is no longer published. The API-credits
 distributions keep their names and bump versions as their contents shrink. No
 database reset is required, and the service's in-process migration chain is
 unchanged. `ARCHITECTURE.toml` gains the family row and the two `family`

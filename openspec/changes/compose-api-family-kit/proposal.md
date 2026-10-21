@@ -33,60 +33,63 @@ without the ledger.
   and attestation shapes the API-credits domain produces today for a fixed input
   set. Every later slice is proven byte-identical against them. A failure here
   is a blocking defect, never a migration.
-- **Family vocabulary, `domains/api`** (`arkhai_api`): the names, schemas, and
-  identifiers both domains share — the bearer-credential issuance request and
-  result with a domain label, the key and grant wire shapes, the fulfillment
-  identity and request digest. It depends on foundation kits only, never on a
-  domain, and owns no authority or persistence.
-- **Family kit, in two distributions.** A base distribution owns what any
-  API-selling domain needs: the issuance client, fulfillment orchestration and
-  rollback, the evidence projection, the key service and its persistence, the
-  authority's shared routes and signed authentication, the gate's authority
-  client and request signing, and the storefront-side issuance composition. A
-  `credits` distribution owns the prepaid ledger: balances, quantities, quota,
-  top-up, and the fixed per-request consumption rule. The credits distribution
-  depends on the base; the base never depends on it, so a domain that sells
-  access another way installs the base alone. Where the kit lives is an open
-  question for the owner and the maintainers; compute's kit sits under
-  `provisioning/`, and `kit/` is reserved for family-neutral code.
-- **API credits composes the kit.** Its storefront, authority, gate, and buyer
-  keep their behaviour, wire, digests, and data, and lose their local
-  implementations of everything the kit now owns. This is the risky part of the
-  change and lands in slices of one to two thousand lines, each proven by the
-  pinned regression tests, the domain's suites, and its end-to-end lane. API
-  credits ends as the first thin domain: wiring, controllers, its listing
-  schema, and its consumption rule.
-- **One digest implementation.** The authority composes the kit's digest and
-  identity functions instead of mirroring them, so client and server cannot
-  drift. Independent recomputation stays; independent implementation was never
-  the point.
-- **The contribution surface.** The kit consumes what a domain contributes —
-  a listing schema and its publication mapping, publication guards, a
-  materialization hook, a consumption rule — and never imports a domain or
-  branches on its identity. The inference contract's vocabulary is the second
-  consumer that fixes this surface; what it contributes is the inference
-  stack's whole domain-specific content.
-- **Decide the authority packaging.** Whether an API-selling domain's authority
-  is one kit-composed service deployed per domain with its own label, database,
-  and key namespace, or a composition root per domain sharing the kit, is
-  decided here with both consumers in view.
+- **The `api` family under `domains/api`.** `ARCHITECTURE.toml` gains the
+  family row and both domains join it. The kit lives under the family directory,
+  as the scope rule prescribes; compute's kit sits elsewhere only under override
+  rows another change owns.
+- **Ten projects, each forced by a rule.** The vocabulary `arkhai_api`
+  (purchase shape, issuance models, digests, evidence; foundation kits only);
+  `contracts` and `client` for the authority's wire models, route contract, and
+  typed client; three side libraries whose dependencies the other sides do not
+  need — `authority` (key service, ledger, quota-as-capacity composition,
+  migrations, route services), `selling` (issuance and settlement composition,
+  negotiation adapters, quota listing binding and publication, carriers, route
+  services, persistence), and `buying` (buy, negotiate, settle, and listing
+  flows); `gate` for the bearer gate; `alkahest` and `arkhai-payments` for the
+  mechanism stages; and `service`, the family authority's composition root.
+  `design.md` names the rule behind each.
+- **API credits composes the kit, slice by slice.** Each slice deletes the
+  implementation it replaces, leaves API credits green on its suites and lane,
+  and keeps `make check-packaging` green. Behaviour, wire, digests, and data are
+  unchanged. API credits ends as the first thin domain: its listing schema and
+  kind bindings, its fixed per-request amount as a contribution, its
+  configuration, its bindings, compose files, and seed.
+- **One digest implementation.** The authority composes the vocabulary's digest
+  and identity functions and deletes its own copy, so client and server cannot
+  drift.
+- **One typed contribution bundle.** A storefront hands `selling` its label,
+  kind literals, listing schema and publication mapping, optional guards,
+  optional acceptance hook, optional public-result extension, and consumption
+  rule; a buyer plugin hands `buying` its schema identity, filters, rendering,
+  and commands. The inference contract's purchase-terms module becomes a binding
+  of the vocabulary's shape, so the vocabulary has two consumers from its first
+  slice.
+- **One family authority image.** `domains/api/service` is deployed once per
+  domain with its own label, database, key namespace, and identities, and
+  accepts route contributions for what metering adds later.
+- **The gate relocates; the published name stays.** `arkhai-api-gate` is the
+  bearer gate, httpx-only with identity optional, and the Python reference for
+  the conformance trace. `arkhai-apicredits-middleware` stays on PyPI as a thin
+  re-export depending on it, so sellers' installs keep working.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `api-family`: the family vocabulary and the family kit's base and credits
-  distributions — domain-labelled bearer-credential issuance, stable
-  fulfillment identity and request digest, evidence projection and rollback,
-  the key authority, the gate's authority client, and the prepaid ledger — and
-  what a domain contributes to compose them.
+- `api-family`: the family vocabulary and kit — one vocabulary, distributions
+  split only where a rule forces it, label-parameterized digests proven
+  byte-identical, one typed contribution bundle, one authority service deployed
+  per domain, one published gate, kit-owned route services behind
+  composition-owned bindings.
 
 ### Modified Capabilities
 
-- `api-credits`: composes the family kit; behaviour, wire, digests, and data
-  unchanged, proven by the pinned regression tests.
+- `api-credits`: composes the family kit with no domain-local copy; behaviour,
+  wire, digests, and data unchanged, proven by the pins.
 - `market-composition`: the family-kit rules gain a second family beside
-  compute; the extracted-concern rule gains this instance.
+  compute, and the extracted-concern rule gains this instance.
+- `inference`: its purchase-terms module binds the vocabulary's shape under its
+  own kind literal; no promised behaviour changes.
 
 ## Non-Goals
 
@@ -96,9 +99,9 @@ without the ledger.
   `compose-inference-domain-stack`.
 - No metering, holds, usage capture, or change to the fixed per-request
   consumption rule beyond relocating it.
-- No TypeScript or Rust gate changes beyond what relocating the Python client's
-  signing requires; their conformance fixture stays where it is and stays
-  green.
+- No ledger-free access distribution; deferred in `design.md` with its trigger.
+- No TypeScript or Rust gate changes beyond what relocating the Python reference
+  requires; their conformance fixture stays where it is and stays green.
 
 ## Dependencies and Related Changes
 
@@ -114,30 +117,60 @@ without the ledger.
 
 ## Impact
 
-- New: `domains/api/`, the family kit's base and `credits` distributions at
-  the directory the design settles, regression fixtures under
-  `domains/apicredits/tests/`, `[[domains]]` and family rows in
-  `docs/development/ARCHITECTURE.toml`.
-- Touched: `domains/apicredits/{settlement,service,storefront,buyer,middleware}`,
-  `domains/Makefile`, `kit/Makefile` or the family's, root `Makefile` and
-  `tests.yml` target lists, root `dist` ordering, every touched project's
+- New: `domains/api/` with ten projects — the vocabulary at its root and
+  `contracts`, `client`, `authority`, `selling`, `buying`, `gate`, `alkahest`,
+  `arkhai-payments`, and `service` beneath it; the pinned regression fixtures
+  under `domains/apicredits/tests/`; a `[[families]]` row and two `family`
+  attributes in `docs/development/ARCHITECTURE.toml`; rows for the gate and
+  the shell in `docs/development/RELEASING.md`'s published-packages table and
+  the publish workflow, with the gate's one-time PyPI setup for a maintainer.
+- Touched: every `domains/apicredits` package, which shrinks to bindings and
+  its own vocabulary; `domains/apicredits/service` retired in favour of the
+  family image; the inference contract's purchase-terms module;
+  `domains/Makefile`, the root `Makefile` and `tests.yml` target lists, the
+  aggregate kit test target, root `dist` ordering, and every touched project's
   `pyproject.toml` and lock.
-- Wire: none. Database: none. Packaging: new family wheels; the API-credits
-  wheels shrink.
+- Removed: the `arkhai-apicredits-domain` override row in `ARCHITECTURE.toml`
+  and the unmounted issuance-evidence router.
+- Wire: none. Database: none; migration identifiers unchanged. Packaging: ten
+  new wheels, two of them published; the API-credits wheels shrink and bump.
 
 ## Permanent documentation impact
 
 - [x] `docs/development/ARCHITECTURE.md` — the family-kit section gains the
-      `api` family beside compute; the runtime service map and the authority
-      boundaries for keys and issuance cite the kit.
-- [x] Existing subsystem specification — `api-credits` composition prose;
+      `api` family beside compute, with the rule that a family's distributions
+      split only where a stated rule or dependency weight forces it; the runtime
+      service map and the authority-boundaries row for keys and issuance cite
+      the family authority.
+- [x] `docs/development/RELEASING.md` — the published-packages table gains the
+      gate and the shell, and the rule that a published package whose code moves
+      keeps its name as a thin re-export.
+- [x] Existing subsystem specification — `api-credits` composition prose and
+      its architecture companion's "Implementation composition";
       `market-composition` family-kit requirements.
-- [x] New subsystem specification — `api-family`.
+- [x] New subsystem specification — `api-family`, with an architecture
+      companion for the contribution surface and the deferred ledger split.
+
+### Knowledge to promote
+
+- The `api` family, its root, and the rule-derived distribution set —
+  `docs/development/ARCHITECTURE.md#family-kits`.
+- A family kit splits only where a rule or dependency weight forces it; an
+  anticipated split is recorded with its trigger, not built —
+  `docs/development/ARCHITECTURE.md#family-kits`.
+- A published package whose code moves keeps its name as a re-export depending
+  on the new package — `docs/development/RELEASING.md`.
+- The contribution bundle and what each domain supplies —
+  `openspec/specs/api-family/architecture.md`.
+- Label-parameterized digests and the pin that proves them —
+  `openspec/specs/api-family/spec.md`; the API-credits companion's
+  "Idempotency boundaries" cites the vocabulary.
+- One family authority deployed per domain, with its route-contribution seam —
+  `openspec/specs/api-family/spec.md` and `ARCHITECTURE.md`'s runtime service
+  map.
 
 ## Status
 
-Design phase. Open for the design: the kit's directory; whether the gate's
-authority client ships in the base distribution or in a dependency-light
-distribution of its own, which the published middleware's packaging constraint
-in `apicredits_middleware/signing.py` motivates; and the authority packaging.
-`tasks.md` is authored when the design's review gate passes.
+In design; the design is recorded in `design.md` and awaits its design review.
+`tasks.md` is authored when that review's gate passes. The slice order the
+dependencies impose is in `design.md`.

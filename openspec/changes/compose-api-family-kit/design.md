@@ -70,7 +70,7 @@ the Python reference requires. A ledger-free access distribution, deferred under
 
 ## Decisions
 
-### The family is `api`, rooted at `domains/api`
+### D1. The family is `api`, rooted at `domains/api`
 
 Credits is one way to pay for API access; a domain selling access by
 subscription or by invoice would still publish a listing, issue a credential,
@@ -91,7 +91,7 @@ prescribe `domains/api/`, so no override row is written.
 would need the same override rows compute carries, for a package created after
 the rule existed.
 
-### The distributions are the ones the rules force, and no more
+### D2. The distributions are the ones the rules force, and no more
 
 `ARCHITECTURE.md` licenses exactly three reasons to split a family's code into
 more than one distribution, and each of the eleven packages below exists for
@@ -139,7 +139,7 @@ and `buying` under an override row granting the mechanisms, which is the shape
 of the divergence the domain library carries today; "no new dependency of the
 same shape should be added while one stands".
 
-### The vocabulary holds the shared semantics that need no core
+### D3. The vocabulary holds the shared semantics that need no core
 
 A family vocabulary package "depends only on foundation kits, never on a
 domain, a role, or core". `arkhai_api` therefore holds, with pydantic and the
@@ -171,7 +171,7 @@ which is the "third domain" test applied early. The inference binding amends
 `add-inference-domain-contract`'s code under that change's own kind literal and
 changes nothing it has promised.
 
-### Contracts are plain data, and the client signs from them
+### D4. Contracts are plain data, and the client signs from them
 
 `contracts` holds the authority's wire models — issuance request and response,
 consume, verify, adjust, key, grant, and usage shapes — and the route contract
@@ -197,7 +197,7 @@ the same bytes from one implementation.
 new divergence of a kind the rules say not to add, and every client installer
 would pull the site authority.
 
-### The mechanism stages live in side-split, mechanism-named distributions
+### D5. The mechanism stages live in side-split, mechanism-named distributions
 
 Each domain role still "MUST declare one immutable table from canonical
 mechanism ID to domain-owned stage", and that table stays in the domain's
@@ -219,7 +219,7 @@ seller Alkahest codec is its own distribution, `arkhai-vms-settlement`, and its
 buyer Alkahest code lives inside the buyer plugin, with no runtime edge between
 them. A buyer-side library is new here because two domains' buyers share it.
 
-### Each domain composes the authority kit in its own service root
+### D6. Each domain composes the authority kit in its own service root
 
 `authority` is a library: it owns the key service and the prepaid ledger, the
 quota-as-capacity composition over the site and resource-pool kits, the
@@ -260,7 +260,7 @@ domains never run in one process, so the shared image buys nothing.
 **Rejected:** `authority` exposing a completed app builder, for the reason
 above.
 
-### A domain contributes through one typed bundle per side
+### D7. A domain contributes through one typed bundle per side
 
 "Domains define the values, codecs, hooks, and registrations a family kit
 consumes; composition roots select and assemble those contributions", and a
@@ -301,7 +301,7 @@ supplies no placeholder. Each caller — both storefronts, each service root,
 each gate, each buyer plugin — composes through its bundle, its capacity
 profile, and configuration alone.
 
-### The digest label is a parameter, and the pins come first
+### D8. The digest label is a parameter, and the pins come first
 
 The issuance request digest, fulfillment identity, evidence digest, and
 portable reference each embed schema strings that today spell API credits. The
@@ -313,7 +313,7 @@ signed attestation shapes the domain produces today; every later slice runs it,
 and a difference is a blocking defect. The suite is the change's first
 implementation task.
 
-### The compatibility promise is proven at its full width
+### D9. The compatibility promise is proven at its full width
 
 The pins prove the bytes. The proposal also promises unchanged wire shapes,
 authentication, database rows, migration identifiers, environment prefixes, and
@@ -334,7 +334,7 @@ Because the API-credits service keeps its distribution, image, and entry
 point, each baseline is held to a diff of zero rather than an allowlist of
 accepted differences.
 
-### The gate is the published middleware, relocated under its own name
+### D10. The gate is the published middleware, relocated under its own name
 
 `domains/api/gate` holds the bearer gate: the framework-neutral `TokenGate`,
 the ASGI adapter, the configuration, the httpx verify-and-consume client, and
@@ -367,7 +367,7 @@ whose contract is httpx-only. **Rejected:** keeping
 `arkhai-apicredits-middleware` as a thin re-export of the gate. The releasing
 guide permits that form, but it exists only to protect installs nobody has.
 
-### Route services in the kit, bindings in the compositions
+### D11. Route services in the kit, bindings in the compositions
 
 The route-contract pattern splits a route into wire models, a route contract, a
 typed client, a framework-free route service, and an HTTP binding that
@@ -377,7 +377,7 @@ the bindings. The storefront controllers hold logic today, so the refactor
 moves it into route services first and leaves each binding a few lines. The
 unmounted issuance-evidence router is dropped, not moved.
 
-### What API credits keeps
+### D12. What API credits keeps
 
 Its listing resource schema and kind literals; the meaning of `service_name`;
 its issuance projection and its fixed per-request amount, supplied as
@@ -389,7 +389,7 @@ schema, the kind bindings, and the bundle values, and its override row in
 `ARCHITECTURE.toml` is retired, because the mechanism codecs that earned it
 move to the mechanism distributions.
 
-### Slices, each leaving no copy behind
+### D13. Slices, each leaving no copy behind
 
 "Every domain that implemented it MUST compose the kit implementation in the
 same change, every obsolete domain-local implementation MUST be removed." Each
@@ -406,7 +406,7 @@ mechanism distributions. Each slice is one to two thousand lines, leaves API
 credits green on its suites, its compatibility baselines, and its end-to-end
 lane, and keeps `make check-packaging` green.
 
-### Compatibility
+### D14. Compatibility
 
 Wire shapes, digests, database rows, migration identifiers, environment
 prefixes, the API-credits service's distribution, image, entry point, and

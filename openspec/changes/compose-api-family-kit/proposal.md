@@ -197,8 +197,10 @@ without the ledger.
 
 ## Status
 
-Ready for planning. The design in `design.md` passed its design gate on
+Ready for implementation. The design in `design.md` passed its design gate on
 2026-10-22 after four external review passes; the round's dispositions are
 recorded in `interventions.jsonl`, and the review records and their triage are
 kept in the change's `reviews/` directory, which the repository keeps untracked
-as the change workflow prescribes. `tasks.md` is authored next.
+as the change workflow prescribes. `tasks.md` plans eleven sections, pins and
+baselines first; section 2 amends `add-inference-domain-contract`'s terms module
+and waits on that change's implementation review.

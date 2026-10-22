@@ -97,9 +97,10 @@ without the ledger.
 
 - `api-family`: the family vocabulary and kit — one vocabulary, distributions
   split only where a rule forces it, label-parameterized digests proven
-  byte-identical, one typed contribution bundle, one authority service deployed
-  per domain, one published gate, kit-owned route services behind
-  composition-owned bindings.
+  byte-identical, one typed contribution bundle per side with an issuance
+  projection, each domain's service root composing the authority kit with its
+  label and capacity profile, one published gate, kit-owned route services
+  behind composition-owned bindings.
 
 ### Modified Capabilities
 
@@ -197,6 +198,9 @@ without the ledger.
 ## Status
 
 In design; the design is recorded in `design.md` and revised for its first
-design review's round, recorded under `reviews/`. `tasks.md` is authored when
-the review's gate passes. The slice order the
+design review's round. The round's dispositions are recorded in
+`interventions.jsonl`; the review records and their triage are kept in the
+change's `reviews/` directory, which the repository keeps untracked as the
+change workflow prescribes. `tasks.md` is authored when the review's gate
+passes. The slice order the
 dependencies impose is in `design.md`.

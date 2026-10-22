@@ -57,8 +57,8 @@ choice, the decision says so and records the owner's.
 
 ## Goals / Non-Goals
 
-**Goals.** One `api` family whose vocabulary and kit every API-selling domain
-composes; API credits refactored onto it with its behaviour, wire, digests, and
+**Goals.** One `api` family whose vocabulary every API-selling domain binds and
+whose kit every domain selling prepaid bearer access composes; API credits refactored onto it with its behaviour, wire, digests, and
 data unchanged, proven by pinned bytes; a contribution surface the inference
 domain fills with its three modules and wiring; the duplicate digest removed.
 
@@ -178,10 +178,11 @@ to sign a pool request and a service hosting the pool authority assembles the
 same declarations into the table its request authentication reads". The
 `contracts` kind allowlist admits core, the identity kit, the shape kits, and
 the family vocabulary, and the site kit is none of those, so the declarations
-cannot be the site kit's contract objects. `authority` adapts them into
-`SiteRouteContract` objects where it composes the site kit's authentication
-middleware, so resource extraction, role admission, and exact-retry semantics
-stay where they are, fed by the same declarations. `client` holds the typed sync
+cannot be the site kit's contract objects. `authority` provides the adapter from
+those declarations to `SiteRouteContract` objects, and each domain's service
+root invokes it where it installs the site kit's `SiteAuthMiddleware`, so
+resource extraction, role admission, and exact-retry semantics stay where they
+are, fed by the same declarations. `client` holds the typed sync
 and async client over any transport exposing `authenticated_request`, looking
 each route up by operation name, so request authentication and the client
 cannot disagree. The service's own duplicate models and digest helpers are

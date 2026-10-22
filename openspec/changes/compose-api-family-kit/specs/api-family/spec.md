@@ -67,9 +67,10 @@ on `contracts` and the vocabulary, and only `selling` and `buying` on `client`;
 The family `contracts` package MUST declare each authority route as plain data —
 method, path pattern, signed operation name, admitted roles, and the path
 segment naming the bound resource — and MUST NOT depend on the site kit. The
-authority library MUST adapt those declarations into the site kit's route
-contracts where it composes the site kit's authentication, and the typed client
-MUST sign each request from the same declaration, so client, server, and
+authority library MUST provide the adapter from those declarations to the site
+kit's route contracts, each domain's service root MUST invoke it where it
+installs the site kit's authentication middleware, and the typed client MUST
+sign each request from the same declaration, so client, server, and
 authentication cannot disagree.
 
 #### Scenario: A route's roles are read on both sides

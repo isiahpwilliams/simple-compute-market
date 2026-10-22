@@ -94,7 +94,8 @@ the rule existed.
 ### The distributions are the ones the rules force, and no more
 
 `ARCHITECTURE.md` licenses exactly three reasons to split a family's code into
-more than one distribution, and each package below exists for one of them.
+more than one distribution, and each of the eleven packages below exists for
+one of them.
 
 | Project | Package | Layer, kind | Exists because |
 |---|---|---|---|
@@ -105,16 +106,21 @@ more than one distribution, and each package below exists for one of them.
 | `domains/api/selling` | `arkhai_api_selling` | specialization, library | dependency weight: the negotiation runtime, capacity publication, the storefront kit, and the core storefront, which no authority or buyer needs |
 | `domains/api/buying` | `arkhai_api_buying` | specialization, library | dependency weight: the buyer core and its configuration, which no storefront or authority needs |
 | `domains/api/gate` | `arkhai_api_gate` | specialization, library | dependency weight: embedded in third-party applications, httpx-only, identity optional |
-| `domains/api/alkahest` | `arkhai_api_alkahest` | specialization, library, mechanism `alkahest` | the scope rule: "a specialization that knows a mechanism carries the mechanism in its name" |
-| `domains/api/arkhai-payments` | `arkhai_api_arkhai_payments` | specialization, library, mechanism `arkhai-payments` | the same |
-| `domains/api/service` | `arkhai_api_service` | composition, executable | the family authority's composition root; see below |
+| `domains/api/selling-alkahest` | `arkhai_api_selling_alkahest` | specialization, library, mechanism `alkahest` | the scope rule: "a specialization that knows a mechanism carries the mechanism in its name"; the side split, because a buyer must not install selling code |
+| `domains/api/selling-arkhai-payments` | `arkhai_api_selling_arkhai_payments` | specialization, library, mechanism `arkhai-payments` | the same |
+| `domains/api/buying-alkahest` | `arkhai_api_buying_alkahest` | specialization, library, mechanism `alkahest` | the same, for the buyer side |
+| `domains/api/buying-arkhai-payments` | `arkhai_api_buying_arkhai_payments` | specialization, library, mechanism `arkhai-payments` | the same |
 
 Dependencies among them point one way and are acyclic, as the family-kit
 section requires: `contracts` → vocabulary; `client` → `contracts`;
-`authority`, `selling`, `buying`, `gate` → vocabulary, `contracts`, and (all
-but `gate`) `client`; the two mechanism distributions → `selling` and `buying`
-plus their mechanism kit; `service` → `authority`. Nothing under `domains/api/`
-imports `arkhai_apicredits`, `arkhai_inference`, or any role executable.
+`authority` → vocabulary and `contracts`, never `client`, so "the server never
+depends on its own client"; `selling` and `buying` → vocabulary, `contracts`,
+and `client`; each `selling-<mechanism>` → `selling` and its mechanism kit;
+each `buying-<mechanism>` → `buying` and its mechanism kit; `gate` → nothing
+in the family. Nothing under `domains/api/` imports `arkhai_apicredits`,
+`arkhai_inference`, or any role executable. The existing API-credits service
+project stays, as a composition root over `authority`; the inference service
+is the stack change's.
 
 `selling` and `buying` are named for the side of the market each serves. They
 cannot carry their roles' names: `storefront`, `buyer`, `service`, and `app`
@@ -126,96 +132,140 @@ distribution for the ledger. The rule permits a split only where a consumer
 the ledger, and the ledger adds no dependency the authority kit lacks. Deferred
 with its trigger under "Open Questions". **Rejected:** one kit distribution for
 all three sides, which would install the storefront's publication machinery on
-every buyer's machine. **Rejected:** mechanism stages inside `selling` and
-`buying` under an override row granting the mechanisms, which is the shape of
-the divergence the domain library carries today; "no new dependency of the same
-shape should be added while one stands".
+every buyer's machine. **Rejected:** one distribution per mechanism holding
+both sides' stages: it would depend on both `selling` and `buying` and undo the
+side split for every installer. **Rejected:** mechanism stages inside `selling`
+and `buying` under an override row granting the mechanisms, which is the shape
+of the divergence the domain library carries today; "no new dependency of the
+same shape should be added while one stands".
 
-### The vocabulary holds what needs no core
+### The vocabulary holds the shared semantics that need no core
 
 A family vocabulary package "depends only on foundation kits, never on a
 domain, a role, or core". `arkhai_api` therefore holds, with pydantic and the
 identity kit as its only dependencies:
 
-- the purchase shape: a positive integer quantity of credits onto a new key or
-  an existing key named by `key_id`, with its payload validation, parameterized
-  by the binding domain's kind literal;
+- the purchase shape and key disposition: a positive integer quantity of
+  credits onto a new key or an existing key named by `key_id`, with its payload
+  validation, parameterized by the binding domain's kind literal;
 - the issuance request and result models, the deterministic fulfillment
-  identity, and the issuance request digest, each taking the issuance label as
-  an argument;
+  identity, and the issuance request digest, each taking an issuance label;
 - the signed, secret-free issuance evidence body, its signing, verification,
-  digest, encoding, and the portable fulfillment reference, likewise labelled.
+  digest, encoding, and the portable fulfillment reference, likewise labelled;
+- the issuance label type and the label-parameterized operations above.
 
-The message, terms, materialization, receipt, and result carriers extend core
-schemas, so they cannot be vocabulary. `selling` provides them as base classes
-each domain binds to its kind literal. Both domains bind the purchase shape
-from the vocabulary: the API-credits terms module and the inference contract's
-terms module each become a one-line binding, so the vocabulary has two
-consumers from its first slice, which is the "third domain" test applied early.
-The inference binding amends `add-inference-domain-contract`'s code under that
-change's own kind literal and changes nothing it has promised.
+The concrete labels are not vocabulary: `api-credits` and `inference` are each
+domain's contribution, so the family package never names a sibling. The
+message, terms, materialization, receipt, and result carriers extend core
+schemas, so they cannot be vocabulary either; `selling` provides them as base
+classes each domain binds to its kind literal. Neither contribution bundle is
+vocabulary, for the same reason: both are typed against core, storefront, and
+runtime packages. Both domains bind the purchase shape from the vocabulary: the
+API-credits terms module and the inference contract's terms module each become
+a one-line binding, so the vocabulary has two consumers from its first slice,
+which is the "third domain" test applied early. The inference binding amends
+`add-inference-domain-contract`'s code under that change's own kind literal and
+changes nothing it has promised.
 
-### Contracts and client are thin, and the server never depends on its client
+### Contracts are plain data, and the client signs from them
 
 `contracts` holds the authority's wire models — issuance request and response,
-consume, verify, adjust, key, grant, and usage shapes — the route contract
-naming each route's method, path, signed operation, resource, and admitted
-roles, and the operation-name constants. Its package allowlist is the kind
-allowlist: core, the identity kit, and the family vocabulary. `client` holds
-the typed sync and async client over any transport exposing
-`authenticated_request`, built on the contract so request authentication and
-the client cannot disagree. The service's own duplicate models and digest
-helpers are deleted; it imports the vocabulary's functions, so client and
-server recompute the same bytes from one implementation.
+consume, verify, adjust, key, grant, and usage shapes — and the route contract
+as plain data: for each route its method, path pattern, signed operation name,
+admitted roles, and the path segment naming the bound resource. That is the
+form `kit/resource-pools-contracts` uses, "so a client needs only this package
+to sign a pool request and a service hosting the pool authority assembles the
+same declarations into the table its request authentication reads". The
+`contracts` kind allowlist admits core, the identity kit, the shape kits, and
+the family vocabulary, and the site kit is none of those, so the declarations
+cannot be the site kit's contract objects. `authority` adapts them into
+`SiteRouteContract` objects where it composes the site kit's authentication
+middleware, so resource extraction, role admission, and exact-retry semantics
+stay where they are, fed by the same declarations. `client` holds the typed sync
+and async client over any transport exposing `authenticated_request`, looking
+each route up by operation name, so request authentication and the client
+cannot disagree. The service's own duplicate models and digest helpers are
+deleted; it imports the vocabulary's functions, so client and server recompute
+the same bytes from one implementation.
 
-### The mechanism stages live in mechanism-named distributions
+**Rejected:** `contracts` depending on the site kit under an exception row. A
+new divergence of a kind the rules say not to add, and every client installer
+would pull the site authority.
+
+### The mechanism stages live in side-split, mechanism-named distributions
 
 Each domain role still "MUST declare one immutable table from canonical
 mechanism ID to domain-owned stage", and that table stays in the domain's
-storefront and buyer compositions, as the wiring it is. The entries move:
-`domains/api/alkahest` holds the seller stage, the buyer stage, escrow
-selection, and the escrow client helpers; `domains/api/arkhai-payments` holds
-the seller stage, the receipt-gated issuance service, the payments clause
-validators, and the buyer stage. Each stage takes its collaborators — the
-delivery callable, the evidence repository, the private-result repository, the
-capacity runtime — as constructor arguments, where today the seller stages read
-the storefront's container and settings modules; "instance wiring ... belong[s]
-in the composition root". An Alkahest-only storefront installs the first
-distribution and not the second.
+storefront and buyer compositions, as the wiring it is. The entries move, split
+by side: `selling-alkahest` holds the seller Alkahest stage and the accepted
+escrow artifacts; `selling-arkhai-payments` holds the seller payments stage,
+the receipt-gated issuance service, and the payments clause validators;
+`buying-alkahest` holds the buyer Alkahest stage, escrow selection, and the
+escrow client helpers; `buying-arkhai-payments` holds the buyer payments stage
+and payer selection. Each stage takes its collaborators — the delivery
+callable, the evidence repository, the private-result repository, the capacity
+runtime — as constructor arguments, where today the seller stages read the
+storefront's container and settings modules; "instance wiring ... belong[s] in
+the composition root". An Alkahest-only storefront installs `selling` and
+`selling-alkahest` and nothing else from the mechanism set.
 
-### The family authority is one service deployed per domain
+The VM domain is the precedent for the principle, not the packaging: its
+seller Alkahest codec is its own distribution, `arkhai-vms-settlement`, and its
+buyer Alkahest code lives inside the buyer plugin, with no runtime edge between
+them. A buyer-side library is new here because two domains' buyers share it.
 
-`domains/api/service` is a composition root at the family root; the scope rule
-says "a composition under a family directory composes that family's domains,
-which is what makes it a family composition root", and the family-kit section
-says a family kit "may own ... authority lifecycles for its family". Compute
-is the precedent: "the compute provisioning service is the composition root
-that wires them." The service composes `authority`'s key service, ledger,
-quota-as-capacity composition, migrations, and route services, binds its
-controllers, and takes the issuance label, database, key namespace, signer, and
-trusted principals from deployment configuration. Each domain's stack deploys
-the one image with its own configuration, as the registry image is deployed
-once per schema, satisfying "Deployable stack per market domain".
+### Each domain composes the authority kit in its own service root
 
-The service accepts route contributions from a package that "declares their
-contracts in its own package and supplies its router as a factory", so a later
-inference-only route reaches it without a fork; nothing uses that seam in this
-change.
+`authority` is a library: it owns the key service and the prepaid ledger, the
+quota-as-capacity composition over the site and resource-pool kits, the
+SQLAlchemy models and the in-process migration chain, the framework-free route
+services for every authority route, and the adapter from `contracts`'s plain
+declarations to the site kit's contract objects. It produces no application.
+"Instance wiring, process lifecycle, route mounting, and aggregation of
+contributions belong in the composition root", and a function that creates the
+app, installs authentication, and mounts routers is composition wherever it is
+called from.
 
-**Rejected:** a composition root per domain. Until metering, the two would
-differ only in configuration. **Rejected:** leaving the service under
-`domains/apicredits` and letting inference deploy it, which composes a sibling
-domain's executable.
+Each domain's service is that root. `domains/apicredits/service` stays, with
+its distribution name, image, entry point, and version response unchanged,
+and shrinks to about a hundred lines: read configuration, construct the
+authority kit's collaborators, install the site kit's authentication over the
+adapted declarations, mount the authority's routers and any routes the domain
+contributes, and run the migration chain. `domains/inference/service` is
+created the same way by `compose-inference-domain-stack`, and the inference-only
+routes metering adds are mounted by that root with a plain import the
+architecture check can see. The architecture document already treats the
+storefront executables as "domain-owned composition roots"; this applies the
+same shape to the authority.
 
-### A domain contributes through one typed bundle
+The root passes the authority kit two things beside its signer, trusted
+principals, database, and key namespace. The issuance label. And one validated,
+immutable **capacity profile** carrying the offering mode, the seeded pool's
+provider, identity, and label, its deliverable and advertisable modes, its
+backing, and the capacity resource type — the values the service hard-codes as
+`api_credits` today in its pool seed and its reservation check. The kit reads
+every such value from the profile and names none itself.
+
+**Rejected:** one family service at `domains/api/service` deployed per domain.
+A family composition root may not import a domain, so a domain's contributions
+could reach it only through a new plugin group discovered at startup; that
+costs a sanctioned group, discovery code, an image installing both domains, a
+changed version response, and a topology change on upgrade, and the two
+domains never run in one process, so the shared image buys nothing.
+**Rejected:** `authority` exposing a completed app builder, for the reason
+above.
+
+### A domain contributes through one typed bundle per side
 
 "Domains define the values, codecs, hooks, and registrations a family kit
 consumes; composition roots select and assemble those contributions", and a
-family kit "never discovers or imports its domains". The vocabulary defines a
-frozen contribution bundle each storefront's container fills and passes to
-`selling`; the buyer plugin fills the buyer bundle for `buying`. Entry points
-stay for the role executables only: the plugin groups are for packages
-"imported by nobody", and a storefront imports its own domain.
+family kit "never discovers or imports its domains". `selling` defines
+`SellingContributions`, which each storefront's container fills and passes to
+it; `buying` defines `BuyingContributions` for the buyer plugin. Each lives in
+the library whose types it is written against, so neither is typed as `Any`
+and neither is vocabulary. Entry points stay for the role executables only: the
+plugin groups are for packages "imported by nobody", and a storefront imports
+its own domain.
 
 | Field | API credits supplies | Inference supplies |
 |---|---|---|
@@ -225,16 +275,26 @@ stay for the role executables only: the plugin groups are for packages
 | publication guards | none | the request-priced guard |
 | negotiation-time terms checks | the quota and key guards, from `selling` | the same |
 | acceptance hook | none | pin the rate card |
+| issuance projection | service from `service_name`, resource from `resource_id` | the stack change's design decides; see "Open Questions" |
 | delivery public-result extension | none | the materialization, beside the connection payload, never the secret |
 | consumption rule | a fixed configured amount | the same until metering |
 | buyer filters and rendering | service name | model card fields |
 
+The **issuance projection** is the field the first review found missing: a
+typed function from the accepted listing and terms to the authority's issuance
+command — one named service identity, one quota resource, the quantity, and
+the key target. It reads the listing as accepted and pinned to the thread,
+never a listing republished since, so a seller cannot change what a settled
+purchase issues. For a quota-backed domain it refuses a listing with no quota
+resource before publication and again before acceptance, since the authority
+cannot reserve against nothing; the inference model card's `resource_id` is
+optional today and becomes required by that guard. `selling` keeps no
+field-name assumption of its own.
+
 Every field a domain may omit is optional in the bundle, so API credits
-supplies no placeholder. Each caller — both storefronts, the family service,
-each gate, each buyer plugin — composes through the bundle and configuration
-alone; the walk found one missing operation, the public-result extension,
-which the owner's decision of 2026-10-17 on the stack change requires, and it is
-in the table.
+supplies no placeholder. Each caller — both storefronts, each service root,
+each gate, each buyer plugin — composes through its bundle, its capacity
+profile, and configuration alone.
 
 ### The digest label is a parameter, and the pins come first
 
@@ -248,50 +308,81 @@ signed attestation shapes the domain produces today; every later slice runs it,
 and a difference is a blocking defect. The suite is the change's first
 implementation task.
 
-### The gate is the published middleware, relocated
+### The compatibility promise is proven at its full width
+
+The pins prove the bytes. The proposal also promises unchanged wire shapes,
+authentication, database rows, migration identifiers, environment prefixes, and
+observable behaviour, so the same first task records a baseline for each and
+every slice diffs against it:
+
+- the route surface: every route's method, path, and the OpenAPI document the
+  service and storefront serve;
+- authentication: each route's admitted roles and signed operation name, and
+  the status code and error body of each refusal;
+- configuration: every environment variable and settings key each process
+  reads, by prefix;
+- schema: the tables, columns, and indexes each database holds, and the
+  recorded migration history;
+- the version response, which names the unchanged API-credits distribution.
+
+Because the API-credits service keeps its distribution, image, and entry
+point, each baseline is held to a diff of zero rather than an allowlist of
+accepted differences.
+
+### The gate is the published middleware, relocated under its own name
 
 `domains/api/gate` holds the bearer gate: the framework-neutral `TokenGate`,
 the ASGI adapter, the configuration, the httpx verify-and-consume client, and
 the identity-v2 signing with the identity kit as an optional extra, exactly as
-today, parameterized by environment prefix and label. It keeps its own light
-HTTP calls rather than depending on `client`, because the published package's
-contract is httpx-only. The conformance trace stays at
-`domains/apicredits/middleware/conformance/`, owned by
-`sign-multi-language-credits-middleware`, and the Python runner replays it
+today, parameterized by environment prefix and label. It depends on no family
+package: its runtime dependency is httpx alone, as the published package's
+contract requires, so its small wire contract — the verify and consume routes,
+their operation names, their fields and error codes — stays local, as it does
+now. That is a second spelling of part of the route contract, so a dev-only
+test compares the gate's spelling against `contracts`'s plain declarations and
+fails on any difference; the published gate gains no dependency from it. The
+conformance trace stays at `domains/apicredits/middleware/conformance/`, owned
+by `sign-multi-language-credits-middleware`, and the Python runner replays it
 against the relocated gate.
 
-`arkhai-apicredits-middleware` is retired: its row leaves the
-published-packages table and the publish workflow, and `arkhai-api-gate` takes
-its place with a one-time PyPI setup that is a maintainer's. No re-export under
-the old name is kept. There are no third-party sellers installing the package
-today, and sellers are expected to take the pre-built images rather than work
-at the package layer, so the old name has nothing to protect; a shell would be
-a published package with no consumer.
+`arkhai-apicredits-middleware` is retired. This is a package and import break,
+not a behaviour change, and the proposal lists every repository consumer that
+migrates to `arkhai_api_gate`: the sample app and its tests, the service's
+integration tests, the conformance runner, the three middleware READMEs, the
+cookbook, the identities README, the publish and test workflows, and the root
+and domains Makefiles. The gate takes the middleware's row in the
+published-packages table and the workflow, with a one-time PyPI setup that is a
+maintainer's. There are no third-party sellers installing the package today,
+and sellers are expected to take the pre-built images, so the old name has
+nothing to protect.
 
-**Rejected:** keeping `arkhai-apicredits-middleware` as a thin re-export of the
-gate. The releasing guide permits that form — a declared dependency, nothing
-vendored — but it exists only to protect installs nobody has.
+**Rejected:** `gate` depending on `contracts` for one spelling of the routes;
+it would make pydantic and the identity kit hard dependencies of a package
+whose contract is httpx-only. **Rejected:** keeping
+`arkhai-apicredits-middleware` as a thin re-export of the gate. The releasing
+guide permits that form, but it exists only to protect installs nobody has.
 
 ### Route services in the kit, bindings in the compositions
 
 The route-contract pattern splits a route into wire models, a route contract, a
 typed client, a framework-free route service, and an HTTP binding that
 "belongs to whatever composes the process". `selling` and `authority` own the
-route services; each domain's storefront, and the family service, own the
-bindings. The storefront controllers hold logic today, so the refactor moves
-it into route services first and leaves each binding a few lines. The unmounted
-issuance-evidence router is dropped, not moved.
+route services; each domain's storefront and each domain's service root own
+the bindings. The storefront controllers hold logic today, so the refactor
+moves it into route services first and leaves each binding a few lines. The
+unmounted issuance-evidence router is dropped, not moved.
 
 ### What API credits keeps
 
 Its listing resource schema and kind literals; the meaning of `service_name`;
-its fixed per-request amount, supplied as a contribution and configured as
-today; its environment prefixes and settings; its settlement tables in both
-compositions; its controllers as bindings; its compose files, seed, and
-development identities. Its domain library shrinks to the listing schema, the
-kind bindings, and the bundle, and its override row in `ARCHITECTURE.toml` is
-retired, because the mechanism codecs that earned it move to the mechanism
-distributions.
+its issuance projection and its fixed per-request amount, supplied as
+contributions; its environment prefixes and settings; its settlement tables in
+both compositions; its storefront controllers and its service root as
+bindings; its compose files, seed, and development identities; its service
+distribution, image, and entry point. Its domain library shrinks to the listing
+schema, the kind bindings, and the bundle values, and its override row in
+`ARCHITECTURE.toml` is retired, because the mechanism codecs that earned it
+move to the mechanism distributions.
 
 ### Slices, each leaving no copy behind
 
@@ -299,38 +390,46 @@ distributions.
 same change, every obsolete domain-local implementation MUST be removed." Each
 slice therefore deletes the API-credits implementation it replaces, and no
 slice leaves a copy for a later one. Planning fixes the sections; the order the
-dependencies impose is: the pins; vocabulary and contracts, with both domains
-binding the purchase shape; `client`, with the service composing the shared
-digest and deleting its duplicate; `authority` and `domains/api/service`, with
-`domains/apicredits/service` retired and the API-credits stack deploying the
-family image; `selling`, with the storefront's route services and bindings;
-the two mechanism distributions; `gate`, retiring the old distribution; `buying`. Each slice
-is one to two thousand lines, leaves API credits green on its suites and its
-end-to-end lane, and keeps `make check-packaging` green.
+dependencies impose is: the pins and the compatibility baselines; vocabulary
+and `contracts`, with both domains binding the purchase shape; `client`, with
+the service composing the shared digest and deleting its duplicate;
+`authority`, with the API-credits service root composing it and passing its
+capacity profile; `selling`, with the storefront's route services and
+bindings; the two selling-side mechanism distributions; `gate`, retiring the
+old distribution and migrating its consumers; `buying` and the two buying-side
+mechanism distributions. Each slice is one to two thousand lines, leaves API
+credits green on its suites, its compatibility baselines, and its end-to-end
+lane, and keeps `make check-packaging` green.
 
 ### Compatibility
 
 Wire shapes, digests, database rows, migration identifiers, environment
-prefixes do not change. The gate publishes as `arkhai-api-gate`, and the
-`arkhai-apicredits-middleware` distribution is no longer published. The API-credits
-distributions keep their names and bump versions as their contents shrink. No
-database reset is required, and the service's in-process migration chain is
-unchanged. `ARCHITECTURE.toml` gains the family row and the two `family`
-attributes, loses the domain library's override row, and needs no row for any
-new project, because every path reads as intended.
+prefixes, the API-credits service's distribution, image, entry point, and
+version response do not change, and the baselines above hold each to a diff of
+zero. The gate publishes as `arkhai-api-gate`, and the
+`arkhai-apicredits-middleware` distribution is no longer published, which is
+the one package break and is listed as such. The API-credits distributions
+keep their names and bump versions as their contents shrink. No database reset
+is required, and the service's in-process migration chain is unchanged.
+`ARCHITECTURE.toml` gains the family row and the two `family` attributes, loses
+the domain library's override row, and needs no row for any new project,
+because every path reads as intended.
 
 ## Risks / Trade-offs
 
-- **Refactoring a live domain.** Mitigated by the pins, each slice's suites and
-  lane, and the rule that a slice leaves API credits green. Continuous
-  integration does not run on the fork the branches live on; local suites and
-  the pins are the evidence until the branches move.
-- **Ten projects where there were five.** Each exists for a rule the
+- **Refactoring a live domain.** Mitigated by the pins, the compatibility
+  baselines, each slice's suites and lane, and the rule that a slice leaves
+  API credits green. Continuous integration does not run on the fork the
+  branches live on; local suites and the baselines are the evidence until the
+  branches move.
+- **Eleven projects where there were five.** Each exists for a rule the
   documents state; the cost is lock files and the aggregate test target, which
   `make check-packaging` and "Aggregate kit tests cover every kit" hold.
 - **Stages refactored to injection.** The seller stages read composition state
   today; moving them to constructor arguments changes their tests, not their
   behaviour, and the pins cover the bytes they produce.
+- **Two spellings of the gate's routes.** Accepted so the published gate stays
+  httpx-only; held equal by the dev-only parity test.
 
 ## Open Questions
 
@@ -338,21 +437,27 @@ new project, because every path reads as intended.
   and ledger halves is deferred until a sibling domain sells access without a
   prepaid balance — by subscription, by invoice, or free with a rate limit.
   The trigger is that domain's proposal; the rule that permits the split is
-  dependency weight, which such a consumer would create.
-- **Inference-only authority routes.** Metering adds hold, settle, and release
-  routes the API-credits deployment does not serve. The service's
-  route-contribution seam is where they land; whether they ship as a
-  contribution from the inference domain or as an optional authority
-  distribution is `meter-inference-usage`'s decision.
+  dependency weight, which such a consumer would create. Until then the
+  family's composability claim is scoped to prepaid bearer access.
+- **Inference's issuance projection values.** Which stable value enters the
+  digested service identity, `model_id` or `served_model_name`, and whether the
+  endpoint is delivery metadata or nothing in issuance, are the inference
+  domain's choices and belong to `compose-inference-domain-stack`'s design.
+  The review of this design recommends one explicitly named model identity and
+  a required `resource_id`; the projection's interface here already requires
+  the resource.
 - **The TypeScript and Rust gates.** They replay the same conformance trace
   and are unaffected by the Python relocation; whether they adopt a family
   name is `sign-multi-language-credits-middleware`'s.
 
 ## Migration Plan
 
-No data migration. Each slice is a code relocation proven by the pins; a
-deployment upgrades by installing the new wheels. The API-credits stack switches
-its authority image to the family service in the slice that retires
-`domains/apicredits/service`, with the same database and configuration keys.
-Rollback of any slice is reinstalling the previous wheels; no slice writes a
-row an earlier version cannot read.
+No data migration. Each slice is a code relocation proven by the pins and the
+baselines; a deployment upgrades by installing the new wheels or the rebuilt
+API-credits images, whose names, entry points, and Compose topology are
+unchanged. Two directions are tested against a copy of a pre-kit database:
+the kit image over the pre-kit database proves upgrade compatibility, and the
+pre-kit image over a database the kit image has written proves rollback
+compatibility. Rollback of any slice is therefore the previous image and
+configuration against the retained database; no slice writes a row an earlier
+version cannot read.

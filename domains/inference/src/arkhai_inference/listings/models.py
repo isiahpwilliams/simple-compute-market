@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, get_args
 
+from market_core.schemas import OptionalUint256Amount, Uint256Amount
 from market_identity import Identity
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 INFERENCE_KIND = "inference.v1"
 INFERENCE_OFFERING_MODE = "inference"
@@ -26,19 +27,55 @@ QUANTIZATIONS: tuple[str, ...] = get_args(Quantization)
 PROVENANCES: tuple[str, ...] = get_args(Provenance)
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"
+
+#: The largest base-unit amount a settlement mechanism can carry; every card
+#: amount and derived charge stays within it.
+MAX_BASE_UNIT_AMOUNT = 2**256 - 1
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 
 
 class InferenceRateCard(BaseModel):
-    """Prices in base units of the listing's settlement asset."""
+    """Prices in base units of ``asset``, the one asset the listing settles in.
+
+    Every settlement option and escrow token on the listing must identify
+    ``asset``, so a rate bound compared against the card is compared within
+    one asset. Amounts are uint256-domain: Python integers in memory and
+    decimal-digit strings on the wire, because a card on an 18-decimal asset
+    exceeds the integer range canonical JSON carries, and both the published
+    listing and the usage evidence that pins the card are signed canonically.
+    ``model_dump`` therefore yields the string form in both modes; arithmetic
+    reads the attributes.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt_credits_per_million: StrictInt = Field(ge=0)
-    completion_credits_per_million: StrictInt = Field(ge=0)
-    request_credits: StrictInt = Field(default=0, ge=0)
-    cached_prompt_credits_per_million: StrictInt | None = Field(default=None, ge=0)
-    image_credits_per_unit: StrictInt | None = Field(default=None, ge=0)
+    asset: str = Field(min_length=1)
+    prompt_credits_per_million: Uint256Amount
+    completion_credits_per_million: Uint256Amount
+    request_credits: Uint256Amount = 0
+    cached_prompt_credits_per_million: OptionalUint256Amount = None
+    image_credits_per_unit: OptionalUint256Amount = None
+
+    @field_validator("asset")
+    @classmethod
+    def _non_blank_asset(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("rate_card.asset must be non-empty")
+        return value
+
+    @model_validator(mode="after")
+    def _within_uint256(self) -> "InferenceRateCard":
+        for name in (
+            "prompt_credits_per_million",
+            "completion_credits_per_million",
+            "request_credits",
+            "cached_prompt_credits_per_million",
+            "image_credits_per_unit",
+        ):
+            value = getattr(self, name)
+            if value is not None and value > MAX_BASE_UNIT_AMOUNT:
+                raise ValueError(f"rate_card.{name} exceeds uint256")
+        return self
 
 
 class InferenceArchitecture(BaseModel):

@@ -10,7 +10,7 @@ from arkhai_inference.usage.models import InferenceUsageRecord, derive_charge
 
 
 def _card(**overrides):
-    values = {"prompt_credits_per_million": 500, "completion_credits_per_million": 1500}
+    values = {"asset": "0x" + "01" * 20, "prompt_credits_per_million": 500, "completion_credits_per_million": 1500}
     values.update(overrides)
     return InferenceRateCard.model_validate(values)
 
@@ -93,3 +93,9 @@ def test_large_values_stay_exact_integers():
 def test_record_rejects_bad_values(field, value):
     with pytest.raises(ValidationError):
         _record(**{field: value})
+
+
+def test_derive_charge_refuses_a_total_beyond_uint256():
+    record = InferenceUsageRecord(model_id="m", key_id="k", request_id="r", prompt_tokens=2_000_000, completion_tokens=0, outcome="completed")
+    with pytest.raises(ValueError, match="uint256"):
+        derive_charge(record, _card(prompt_credits_per_million=2**256 - 1))

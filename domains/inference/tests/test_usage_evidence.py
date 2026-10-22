@@ -23,7 +23,8 @@ _SECRET = "ak_1.SECRET-BEARER-MATERIAL"
 _PROMPT = "PROMPT-TEXT-MUST-NOT-LEAK"
 _COMPLETION = "COMPLETION-TEXT-MUST-NOT-LEAK"
 _NOW = 2_000_000_000
-_RATE_CARD = {"prompt_credits_per_million": 500, "completion_credits_per_million": 1500}
+_ASSET = "0x" + "01" * 20
+_RATE_CARD = {"asset": _ASSET, "prompt_credits_per_million": 500, "completion_credits_per_million": 1500}
 
 
 def _issue(*, bearer_secret, prompt, completion, prompt_tokens=1_000_000, completion_tokens=2_000_000, outcome="completed", **extra):
@@ -59,6 +60,7 @@ def _expected(body, **overrides):
     facts = {
         "grant_id": body.grant_id,
         "fulfillment_id": body.fulfillment_id,
+        "request_id": body.record.request_id,
         "key_id": body.record.key_id,
         "model_id": body.record.model_id,
         "rate_card": body.rate_card,
@@ -154,9 +156,10 @@ def test_evidence_older_than_the_retention_bound_is_stale():
     [
         ("grant_id", "inference-fulfillment.v1:" + "b" * 64),
         ("fulfillment_id", "inference-fulfillment.v1:" + "b" * 64),
+        ("request_id", "req-2"),
         ("key_id", "ak_2"),
         ("model_id", "meta-llama/llama-3.1-70b-instruct"),
-        ("rate_card", {"prompt_credits_per_million": 500, "completion_credits_per_million": 1600}),
+        ("rate_card", {**_RATE_CARD, "completion_credits_per_million": 1600}),
     ],
 )
 def test_evidence_for_another_grant_is_refused(fact, value):
@@ -177,3 +180,17 @@ def test_attestation_envelope_is_carried_and_ignored_by_verification():
 def test_failed_request_evidence_carries_zero_charge():
     _, body = _fixture(outcome="failed")
     assert body.charge == 0
+
+
+def test_evidence_on_an_eighteen_decimal_card_signs_and_round_trips():
+    # 10**21 base units per million tokens is past 2**53-1: the card and the
+    # charge travel as decimal text, so the body stays canonical and signable.
+    rate_card = {**_RATE_CARD, "prompt_credits_per_million": 10**21, "completion_credits_per_million": 0}
+    signer, body = _fixture(rate_card=rate_card, prompt_tokens=1_000_000, completion_tokens=0, charge=10**21)
+    evidence = sign_inference_usage_evidence(body, signer)
+    encoded = canonical_signed_usage_evidence(evidence)
+    assert '"charge":"1000000000000000000000"' in encoded
+    assert '"prompt_credits_per_million":"1000000000000000000000"' in encoded
+    decoded = decode_signed_usage_evidence(encoded)
+    assert decoded.body.charge == 10**21
+    assert _verify(decoded, signer, body).rate_card.prompt_credits_per_million == 10**21

@@ -16,6 +16,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictInt,
     field_validator,
     model_validator,
 )
@@ -31,16 +32,22 @@ class InferenceKeyIntent(BaseModel):
     key_id: str | None = None
 
     @model_validator(mode="after")
-    def _validate_existing_key(self) -> "InferenceKeyIntent":
-        if self.mode == "existing" and not self.key_id:
+    def _validate_key_shape(self) -> "InferenceKeyIntent":
+        # Exactly two shapes are admitted: a new key names no identifier, an
+        # existing key names a non-blank one.
+        if self.key_id is not None and not self.key_id.strip():
+            raise ValueError("key.key_id must be non-blank")
+        if self.mode == "existing" and self.key_id is None:
             raise ValueError("key.key_id is required when key.mode is existing")
+        if self.mode == "new" and self.key_id is not None:
+            raise ValueError("key.key_id is not admitted when key.mode is new")
         return self
 
 
 class InferenceProvisionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    quantity: int = Field(ge=1)
+    quantity: StrictInt = Field(ge=1)
     key: InferenceKeyIntent = Field(default_factory=InferenceKeyIntent)
 
 
@@ -88,7 +95,7 @@ def make_inference_provision_terms(
     if key_id is not None:
         key["key_id"] = key_id
     return InferenceProvisionTerms(
-        payload={"quantity": int(quantity), "key": key},
+        payload={"quantity": quantity, "key": key},
     )
 
 

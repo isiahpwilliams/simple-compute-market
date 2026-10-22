@@ -73,6 +73,17 @@ tests. `model_id` admits uppercase by design (seller-asserted); `resource_id`
 is optional on the card as on the API-credits resource, the publication path
 sets it. The rate card model landed here because the card requires it.
 
+Round 1 (review 01-implementation-external, 2026-10-22). F3: the rate card
+names its `asset`, and the listing codec refuses a settlement option or escrow
+token naming another, so one card is read in one asset. F2: the card's amounts
+are `Uint256Amount` — integers in memory, decimal-digit strings on the wire —
+because canonical JSON carries no integer above 2⁵³ − 1 and both the published
+listing and the evidence pinning the card are signed canonically. F1: the codec
+runs the unit-rate check over every option and escrow; before, only the pricing
+path did, and a listing at two per credit or one per hour validated. Tests:
+eight listing cases for the refused and admitted shapes, a 7 × 10²¹ card
+round-tripping through canonical JSON.
+
 ## 2. Rate card and pricing arithmetic
 
 - [x] 2.1 `domains/inference/src/arkhai_inference/listings/models.py`: `InferenceRateCard` with
@@ -98,6 +109,11 @@ sets it. The rate card model landed here because the card requires it.
 Done 2026-09-27: `listings/pricing.py`; 23 tests. The hidden-reserve fallback
 has no meaning under a fixed unit rate, so a configured minimum is admitted only
 when it is one; task 2.3's text was amended to match.
+
+Round 1 (F1, F3): `validate_listing_rates(options, escrows, asset=)` is the one
+check the codec and `extract_unit_price_from_order` share. Task 2.1's "numeric
+strings are rejected" now holds for the purchase arithmetic only; on the card a
+decimal-digit string is the wire form (F2).
 
 ## 3. Provision intent, negotiation carriers, and codecs
 
@@ -126,6 +142,12 @@ when it is one; task 2.3's text was amended to match.
 Done 2026-09-27: `negotiation/terms.py`, the five carriers in `schema.py`,
 `domain_runtime.py`; the contract passes `assert_domain_conformance` with an
 empty capability set; 24 tests including eleven invalid-input codec cases.
+
+Round 1 (F5): `quantity` is a strict integer; a new key names no `key_id` and
+an existing key names a non-blank one; the maker no longer truncates through
+`int()`. The API-credits original is left as it is by the owner's direction:
+`compose-api-family-kit` extracts the shape into the shared kit and corrects
+API credits there, replacing this copy with an import.
 
 ## 4. Usage record, charge derivation, and evidence
 
@@ -162,6 +184,12 @@ when the consumer supplies a retention window. The request charge is added to th
 the token sum, as the requirement and `design.md` state; the spec scenario's
 worked number was corrected from 1 to 2. Cached tokens with no cached rate
 contribute nothing, as the formula states.
+
+Round 1 (F2, F4): the evidence `charge` is `Uint256Amount`, so a body on an
+18-decimal card signs; a test signs and decodes at 10²¹. Verification binds the
+body to the expected `request_id` as well as the grant facts; grant and request
+together name one usage record, and the delta states a consumer debits that
+pair once — the hold-and-settle path that enforces it is `meter-inference-usage`'s.
 
 ## 5. Registry filter specification
 
@@ -218,6 +246,15 @@ registry does not enforce the listing shape at publish by design, so the spec's
 "rejected at publication" sentence was reattributed to the storefront codec and
 the dry run.
 
+Round 1 (F2, F3): the served shape requires `rate_card.asset` and declares the
+amounts as decimal-digit strings; the two rate bounds compare `decimal_text`
+and co-require the new `rate_card_asset` filter, the card's own asset, as the
+compute specification pairs `asking_rate_max` with `asking_rate_asset`.
+`settlement_asset` stays as the projection over options. The integration test
+queries the new filter, refuses a bound paired only with `settlement_asset`,
+publishes a 7 × 10²¹ card through the signed client and bounds it exactly, and
+fails the dry run on a numeric rate and on a card without its asset.
+
 ## 6. Distribution and aggregate targets
 
 - [x] 6.1 `domains/Makefile`: `dist-inference-domain` (wheel into `$(DIST_DIR)`
@@ -241,6 +278,33 @@ the dry run.
 Done 2026-09-27: `domains/inference/Makefile`, `dist-inference-domain` and
 `test-inference` in the domain and root aggregates, the wheel fixture with
 structural and install tests; `make test-inference` from the root: 136 passed.
+
+Round 1 checks (fix commit against `a733d920`): `make test-inference`, the
+domain package's unit level, 169 passed; `make test-registry`, unit 129 and
+integration 138 passed (the integration level: the real registry app and its
+database through the typed client over ASGI transport); `openspec validate
+--strict` valid for this change, `compose-inference-domain-stack`, and
+`meter-inference-usage`; `make check-comment-hygiene`, `make check-doc-citations
+CHANGE=add-inference-domain-contract`, and `make check-architecture-change` pass.
+No dependency changed, so `make lock` and `make check-packaging` were not rerun.
+`make test` (keep-going) ran every suite; the inference, registry, kit, core,
+and buyer suites passed, and four suites failed in files this round does not
+touch: `provisioning/compute/service` unit (`test_config.py`, the dotenv layer
+ordering), `test-provisioning-iac` (`test_cleanup_script_relay_teardown.py`),
+`test-release-tooling` (`scripts/tests/test_validate_slice.py`, the pipeline
+marker variables), and `test-storefront` integration (`test_alkahest.py`, whose
+`EnvTestManager` needs the development chain). The diff changes nothing under
+those paths; validation characterises them. The fresh-context compliance check
+of the diff found no must-fix item; it asked for, and this round made, the
+uint256 upper bound on card amounts and the derived charge that the delta's
+"uint256 domain" wording promised, the card's asset check on the pricing path
+as well as the codec, and a true name for the rejection test; it noted that
+the buyer plugin's sentences were restated as a requirement rather than moved
+verbatim, which `design.md` now says. Declined: normalising a checksum-cased
+option address against the card's asset (exact string comparison is the rule
+across the filters and `SettlementOption.asset`), and tightening the served
+shape against the leading-zero and whitespace strings the model canonicalises
+(only a publisher bypassing the codec meets the shape).
 
 ## 7. Decision gates
 
@@ -282,14 +346,16 @@ structural and install tests; `make test-inference` from the root: 136 passed.
       the `inference` capability's `architecture.md` and the normative statements in
       the `inference` capability's `spec.md`, not only here. Promote only what
       this branch implements: the vocabulary, pricing, usage, evidence,
-      attestation, and registry-discovery requirements. "Quota-backed
-      publication", "Bearer credential is delivery, not identity or payment
-      authority", "Admission authority is synchronous and singular", the
-      buyer-plugin sentences of "Discovery under the inference schema identity",
-      and the "rejected before publication" scenarios describe role behaviour
-      that `compose-inference-domain-stack` and `meter-inference-usage` build;
-      they promote with those changes, so a reader of `openspec/specs` never
-      meets a requirement nothing on `dev` satisfies.
+      attestation, and registry-discovery requirements, which is everything the
+      delta now holds. Archival merges a change's whole delta, so the role
+      behaviour `compose-inference-domain-stack` and `meter-inference-usage`
+      build — "Bearer credential is delivery, not identity or payment
+      authority", "Quota-backed publication", the buyer plugin's discovery, and
+      "Admission authority is synchronous and singular" — was moved into those
+      changes' own `specs/inference/spec.md` deltas in round 1 (F6) and
+      promotes with them, so a reader of `openspec/specs` never meets a
+      requirement nothing on `dev` satisfies. The "rejected before publication"
+      scenarios stay: the listing codec enforces them since round 1 (F1).
 - [x] 8.4 **Narrative compression.** Compress completed-task notes to final
       behavior, validation evidence, and promotion destinations; keep rejected
       alternatives in `design.md`.
@@ -334,17 +400,18 @@ structural and install tests; `make test-inference` from the root: 136 passed.
 |---|---|
 | The domain owns the shapes a buyer compares on — model card, rate card, usage record — not what a storefront sells or charges; the payment kit converts money, the storefront prices its balance, and a registry operator decides comparability | the `inference` capability's `architecture.md` — "Market shape"; one sentence in `openspec/specs/api-credits/architecture.md` — "Market shape" |
 | One listing is one served model | the `inference` capability's `spec.md` — "One listing is one served model" |
-| One credit is one base unit of the settlement asset; the settlement rate is one; rate-card integers are prices in that asset | the `inference` capability's `spec.md` — "Purchase is priced in settlement-asset base units", "Rate card is integer-valued and pinned at issuance"; rationale in its `architecture.md` |
+| One credit is one base unit of the settlement asset; the settlement rate is one; the rate card names its asset and prices in integers of it, carried as decimal-digit strings on the wire; every option and escrow on the listing identifies that asset | the `inference` capability's `spec.md` — "Purchase is priced in settlement-asset base units", "Rate card is integer-valued and pinned at issuance"; rationale in its `architecture.md` |
 | The rate card is pinned at issuance | the `inference` capability's `spec.md` — "Rate card is integer-valued and pinned at issuance" |
 | The request charge is added to the ceiling of the token sum; a failed upstream costs nothing | the `inference` capability's `spec.md` — "Usage record and deterministic charge derivation" |
 | A malformed card is refused by the storefront's codec and the registry's dry run; a registry's publish boundary refuses only retired spellings | the `inference` capability's `spec.md` — "One listing is one served model" |
 | Charge derivation is a pure function of record and card | the `inference` capability's `spec.md` — "Usage record and deterministic charge derivation" |
-| Usage evidence is secret-free | the `inference` capability's `spec.md` — "Usage evidence is secret-free" |
-| Three identities; the bearer credential is delivery | the `inference` capability's `spec.md` — "Bearer credential is delivery, not identity or payment authority" |
-| The authority is the singular synchronous admission decision; rating systems are downstream | the `inference` capability's `spec.md` — "Admission authority is synchronous and singular"; rationale in the `inference` capability's `architecture.md` |
+| Usage evidence is secret-free, and verification binds it to the grant and the request; the pair is debited once | the `inference` capability's `spec.md` — "Usage evidence is secret-free" |
+| Three identities; the bearer credential is delivery | rationale in the `inference` capability's `architecture.md`; the requirement is `compose-inference-domain-stack`'s delta and promotes with it |
+| The authority is the singular synchronous admission decision; rating systems are downstream | rationale in the `inference` capability's `architecture.md`; the requirement is `meter-inference-usage`'s delta and promotes with it |
 | Discovery under the `inference` schema identity | the `inference` capability's `spec.md` — "Discovery under the inference schema identity" |
-| Quota-backed publication in version 1 as the backed value of the declared backing property, quota being a sales cap | the `inference` capability's `spec.md` — "Quota-backed publication"; trigger in the `inference` capability's `architecture.md` — "Current limits" |
-| No derived discovery price; a rate bound co-requires its settlement asset in the filter specification, so the registry refuses an unpaired bound | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
+| Quota-backed publication in version 1 as the backed value of the declared backing property, quota being a sales cap | trigger in the `inference` capability's `architecture.md` — "Current limits"; the requirement is `compose-inference-domain-stack`'s delta and promotes with it |
+| No derived discovery price; a rate bound co-requires the card's asset (`rate_card_asset`) in the filter specification, so the registry refuses an unpaired bound | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
+| The inference copy of the provision-intent shape validates exactly the two documented shapes; the shared kit owns extraction and the API-credits correction | `design.md` — "Provision intent is the API-credits shape under a new kind"; carried into `compose-api-family-kit`'s plan |
 | Attestation is reserved as an opaque envelope on the card and the evidence, unverified and unfilterable in this version | the `inference` capability's `spec.md` — "Attestation is reserved and unverified"; rationale in its `architecture.md` |
 | Copies are frozen and extraction blocks metering | `docs/development/ROADMAP.md` Goal 8 current state; the campaign section of `openspec/changes/README.md` |
 | Copy first, extract after two consumers | the `inference` capability's `architecture.md` — "Implementation composition"; `docs/development/ROADMAP.md` Goal 8 current state |

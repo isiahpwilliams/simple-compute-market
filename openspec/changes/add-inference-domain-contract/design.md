@@ -187,11 +187,32 @@ listing 5 credits per million charge the same real price and show numbers a
 filter cannot relate. Two knobs per seller guarantee that denominations vary,
 and a filter over the credit figure looks like a price filter and is not.
 
-Costs, accepted: on an 18-decimal asset the integers are large (the existing
-uint256 overflow guards apply); on a fiat-cent asset the finest expressible rate
-is one cent per million tokens, which nobody undercuts. Integers remain required
-so two independent implementations of the charge arithmetic cannot disagree by
-rounding.
+Costs, accepted: on an 18-decimal asset the integers are large; on a fiat-cent
+asset the finest expressible rate is one cent per million tokens, which nobody
+undercuts. Integers remain required so two independent implementations of the
+charge arithmetic cannot disagree by rounding.
+
+**The card names its asset** (implementation review, 2026-10-22). "Base units
+of the listing's settlement asset" presumed one asset per listing, and nothing
+held a listing to one: a card beside options in two assets would be read in
+whichever a buyer's bound named. The rate card therefore carries `asset`, the
+listing codec refuses any settlement option or escrow token naming another
+asset, and the discovery bounds co-require `rate_card_asset`, the card's own
+field, as the compute specification pairs `asking_rate` with its asset. The
+alternative, a codec rule that all options share one asset with the card left
+numeric, was rejected because the served shape could not express it and the
+bound would still pair through a projection over options. The pinned card thus
+also pins the asset the grant's balance is kept in.
+
+**Amounts travel as decimal text.** Large integers were accepted above with
+"the overflow guards apply", but the guards bound multiplication, not
+representation: canonical JSON has no number form above 2⁵³ − 1, and both the
+published listing and the usage-evidence body are signed canonically, so a
+card on an 18-decimal asset could be neither published nor metered. The card's
+amounts and the derived charge use the repository's uint256 wire type —
+Python integers in memory, decimal-digit strings on the wire — and the filter
+specification compares the bounds as exact decimal text. Token counts stay
+plain strict integers; the magnitude lives in the charge.
 ### The rate card is pinned at issuance
 
 A grant carries the rate card in force when it was issued. A seller who
@@ -215,12 +236,13 @@ unnecessary — the rate card *is* the price — so the rejection stands and the
 problem it guarded against no longer exists.
 
 What the registry filters on is therefore authoritative: `prompt_credits_max`
-and `completion_credits_max` are upper bounds on the rate card's integers, and
-`settlement_asset` selects the asset they are denominated in. A rate bound is
-meaningful only alongside an asset, so both bounds declare
-`requires: [settlement_asset]` — the declarative co-requirement
+and `completion_credits_max` are upper bounds on the rate card's amounts, and
+`rate_card_asset` selects the asset the card denominates them in. A rate bound
+is meaningful only alongside an asset, so both bounds declare
+`requires: [rate_card_asset]` — the declarative co-requirement
 `publish-indicative-listing-rates` added to the generic registry — and the
-registry itself refuses an unpaired bound. The buyer compiler resolves the rule
+registry itself refuses an unpaired bound. `settlement_asset` remains the
+projection over options a buyer uses to find how a listing can be paid. The buyer compiler resolves the rule
 from the served specification, as `registry-discovery` requires; nothing
 encodes it in code. Cross-asset comparison needs an exchange rate the registry
 must not be an authority on, and stays client-side, consistent with Goal 7.
@@ -263,6 +285,14 @@ the copy is small. The `api` family vocabulary owns the shape, and the stack
 change replaces this copy with a binding of it; until then this domain carries
 its own.
 
+The inference copy validates what this specification states and no more: a
+strict integer quantity, a new key naming no identifier, an existing key
+naming a non-blank one. The API-credits original is looser on each point and
+is deliberately left so here (implementation review, 2026-10-22, owner's
+direction): the kit change pins API credits before refactoring it, owns the
+extraction of the shape into the shared kit, and corrects the API-credits
+validation there, replacing this copy with an import.
+
 ### Usage record and charge derivation are domain-owned deterministic semantics
 
 `market-composition` requires a domain to own "the pure interpretation required
@@ -292,6 +322,12 @@ and the grant and fulfillment identities. It never carries the bearer secret,
 the prompt, the completion, or the response. This is the same rule the
 API-credits issuance evidence enforces with a canary test, applied to usage.
 
+Verification binds a body to the grant *and the request* the consumer expects
+(implementation review, 2026-10-22): a body is self-consistent for any grant
+and any request, so the consumer must say which it is settling. Grant and
+request together name one usage record and a consumer debits that pair once;
+the hold-and-settle path that enforces the once is `meter-inference-usage`'s.
+
 ### Attestation is reserved as an opaque, unverified envelope
 
 The model card and the usage evidence each carry an optional `attestation`
@@ -311,6 +347,16 @@ platform, measurement, and verifier on the listing; a check at purchase; a check
 per request — read before the field's shape is fixed.
 
 ### Three identities, restated for this domain
+
+The normative statement of this decision, and of the two that follow, lives in
+the spec delta of the change that builds the behaviour —
+`compose-inference-domain-stack` for the bearer credential, quota-backed
+publication, and the buyer plugin's discovery; `meter-inference-usage` for the
+admission authority — because archival merges a change's whole delta, and a
+permanent requirement nothing on `dev` satisfies misleads its reader. The
+rationale stays here. The three requirements moved verbatim; the buyer plugin's
+sentences, which had no requirement of their own, were restated in the stack's
+delta as one, with the scenario that named the plugin.
 
 The API-credits architecture companion already separates a marketplace principal
 (who may negotiate and buy), a bearer credential (what admits a request), and

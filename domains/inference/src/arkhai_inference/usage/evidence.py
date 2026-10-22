@@ -7,6 +7,7 @@ import json
 import re
 from typing import Literal, Self
 
+from market_core.schemas import Uint256Amount
 from market_identity import (
     Identity,
     SignatureProof,
@@ -43,7 +44,7 @@ class InferenceUsageEvidenceBodyV1(_EvidenceContract):
     domain: Literal["inference"] = "inference"
     record: InferenceUsageRecord
     rate_card: InferenceRateCard
-    charge: int = Field(ge=0)
+    charge: Uint256Amount
     grant_id: str = Field(min_length=1, max_length=512)
     fulfillment_id: str = Field(min_length=1, max_length=512)
     issuer: Identity
@@ -74,10 +75,17 @@ class SignedInferenceUsageEvidenceV1(_EvidenceContract):
 
 
 class ExpectedInferenceUsageEvidenceV1(_EvidenceContract):
-    """Grant facts evidence must match; a body is self-consistent even for another grant."""
+    """Grant and request facts evidence must match.
+
+    A body is self-consistent even for another grant or another request, so
+    the consumer states which one it is settling. The grant and request
+    identities together name one usage record; charging that pair once is
+    the consumer's rule, and binding here is what lets it hold it.
+    """
 
     grant_id: str
     fulfillment_id: str
+    request_id: str
     key_id: str
     model_id: str
     rate_card: InferenceRateCard
@@ -163,6 +171,7 @@ def verify_inference_usage_evidence(
     facts = (
         ("grant_id", body.grant_id, expected.grant_id),
         ("fulfillment_id", body.fulfillment_id, expected.fulfillment_id),
+        ("request_id", body.record.request_id, expected.request_id),
         ("key_id", body.record.key_id, expected.key_id),
         ("model_id", body.record.model_id, expected.model_id),
         ("rate_card", body.rate_card, expected.rate_card),

@@ -6,7 +6,7 @@ import json
 
 import pytest
 from market_core.schemas import RateValue, derive_settlement_option_id
-from market_identity import Ed25519Signer
+from market_identity import Ed25519Signer, canonical_json
 from pydantic import ValidationError
 
 from arkhai_inference.listings.models import (
@@ -14,22 +14,39 @@ from arkhai_inference.listings.models import (
     INFERENCE_OFFERING_MODE,
     InferenceModelCard,
     InferenceRateCard,
+    MAX_BASE_UNIT_AMOUNT,
     coerce_resource_dict,
     resource_is_inference,
 )
 from arkhai_inference.schema import InferenceListing
 
 _OWNER = Ed25519Signer(bytes(range(32))).identity
-_RATES = [RateValue(field="amount", per="credit", value=1)]
-_OPTION = {
-    "option_id": derive_settlement_option_id(
-        mechanism="alkahest.v1", asset="0x" + "01" * 20, rates=_RATES, params={}
-    ),
-    "mechanism": "alkahest.v1",
-    "asset": "0x" + "01" * 20,
-    "rates": [rate.model_dump(mode="json") for rate in _RATES],
-    "params": {},
-}
+_ASSET = "0x" + "01" * 20
+_OTHER_ASSET = "0x" + "02" * 20
+
+
+def _option(value=1, per="credit", asset=_ASSET):
+    rates = [RateValue(field="amount", per=per, value=value)]
+    return {
+        "option_id": derive_settlement_option_id(
+            mechanism="alkahest.v1", asset=asset, rates=rates, params={}
+        ),
+        "mechanism": "alkahest.v1",
+        "asset": asset,
+        "rates": [rate.model_dump(mode="json") for rate in rates],
+        "params": {},
+    }
+
+
+def _escrow(value="1", token=_ASSET):
+    escrow = {"chain_name": "anvil", "escrow_address": "0x" + "11" * 20}
+    if token is not None:
+        escrow["literal_fields"] = {"token": token}
+    escrow["rates"] = [{"field": "amount", "per": "credit", "value": value}]
+    return escrow
+
+
+_OPTION = _option()
 _REQUIRED = [
     "model_id",
     "artifact_ref",
@@ -57,6 +74,7 @@ def _card(**overrides):
         "supported_parameters": ["tools", "response_format"],
         "endpoint": {"base_url": "https://inference.acme.example/v1"},
         "rate_card": {
+            "asset": _ASSET,
             "prompt_credits_per_million": 500,
             "completion_credits_per_million": 1500,
         },
@@ -138,6 +156,7 @@ def test_two_sellers_may_share_a_model_id():
             artifact_ref="hf://meta-llama/Llama-3.1-8B-Instruct@1c2d3e4",
             quantization="bf16",
             rate_card={
+                "asset": _ASSET,
                 "prompt_credits_per_million": 900,
                 "completion_credits_per_million": 2700,
             },
@@ -184,12 +203,57 @@ def test_artifact_digest_must_be_sha256():
         InferenceModelCard.model_validate(_card(artifact_digest="md5:abc"))
 
 
-@pytest.mark.parametrize("value", [1.5, -1, True, "500"])
-def test_rate_card_admits_only_non_negative_integers(value):
+@pytest.mark.parametrize("value", [1.5, -1, True, "5.5", "", "abc", None, 2**256])
+def test_rate_card_rejects_values_outside_the_uint256_domain(value):
     with pytest.raises(ValidationError):
         InferenceRateCard.model_validate(
-            {"prompt_credits_per_million": value, "completion_credits_per_million": 0}
+            {"asset": _ASSET, "prompt_credits_per_million": value, "completion_credits_per_million": 0}
         )
+
+
+def test_rate_card_admits_the_largest_uint256_amount():
+    card = InferenceRateCard.model_validate(
+        {"asset": _ASSET, "prompt_credits_per_million": str(MAX_BASE_UNIT_AMOUNT), "completion_credits_per_million": 0}
+    )
+    assert card.prompt_credits_per_million == MAX_BASE_UNIT_AMOUNT
+
+
+def test_rate_card_amounts_are_integers_in_memory_and_decimal_text_on_the_wire():
+    card = InferenceRateCard.model_validate(
+        {"asset": _ASSET, "prompt_credits_per_million": "500", "completion_credits_per_million": 1500}
+    )
+    assert card.prompt_credits_per_million == 500
+    assert card.completion_credits_per_million == 1500
+    assert card.model_dump(mode="json") == {
+        "asset": _ASSET,
+        "prompt_credits_per_million": "500",
+        "completion_credits_per_million": "1500",
+        "request_credits": "0",
+        "cached_prompt_credits_per_million": None,
+        "image_credits_per_unit": None,
+    }
+
+
+@pytest.mark.parametrize("asset", [None, "", "  "])
+def test_rate_card_must_name_its_asset(asset):
+    rate_card = {"prompt_credits_per_million": 1, "completion_credits_per_million": 1}
+    if asset is not None:
+        rate_card["asset"] = asset
+    with pytest.raises(ValidationError, match="asset"):
+        InferenceModelCard.model_validate(_card(rate_card=rate_card))
+
+
+def test_an_eighteen_decimal_rate_card_publishes_as_canonical_json():
+    # 7000 whole units of an 18-decimal asset per million tokens: past 2**53-1,
+    # so the amount has no JSON number form and must travel as decimal text.
+    rate_card = {"asset": _ASSET, "prompt_credits_per_million": 7 * 10**21, "completion_credits_per_million": 0}
+    listing = InferenceListing.model_validate(
+        {"listing_resource": _card(rate_card=rate_card), "settlement_options": [_OPTION]}
+    )
+    wire = listing.model_dump(mode="json")
+    assert wire["listing_resource"]["rate_card"]["prompt_credits_per_million"] == str(7 * 10**21)
+    assert b'"7000000000000000000000"' in canonical_json(wire)
+    assert InferenceListing.model_validate(json.loads(json.dumps(wire))) == listing
 
 
 def test_blank_strings_are_rejected():
@@ -226,3 +290,50 @@ def test_resource_helpers():
     assert not resource_is_inference({"kind": "api_credits.v1"})
     assert coerce_resource_dict("not json") == {}
     assert coerce_resource_dict(None) == {}
+
+
+@pytest.mark.parametrize(
+    "option,reason",
+    [
+        (_option(value=2), "exactly one"),
+        (_option(value=0), "exactly one"),
+        (_option(per="hour"), "per credit"),
+        (_option(asset=_OTHER_ASSET), "asset"),
+    ],
+    ids=["two-per-credit", "zero-per-credit", "per-hour", "other-asset"],
+)
+def test_listing_refuses_a_settlement_option_the_domain_prohibits(option, reason):
+    with pytest.raises(ValidationError, match=reason):
+        InferenceListing.model_validate({"listing_resource": _card(), "settlement_options": [option]})
+
+
+def test_listing_refuses_a_second_settlement_asset_beside_a_valid_option():
+    with pytest.raises(ValidationError, match="asset"):
+        InferenceListing.model_validate(
+            {"listing_resource": _card(), "settlement_options": [_OPTION, _option(asset=_OTHER_ASSET)]}
+        )
+
+
+@pytest.mark.parametrize(
+    "escrow,reason",
+    [
+        (_escrow(value="2"), "exactly one"),
+        (_escrow(token=_OTHER_ASSET), "asset"),
+    ],
+    ids=["two-per-credit", "other-token"],
+)
+def test_listing_refuses_a_legacy_escrow_the_domain_prohibits(escrow, reason):
+    with pytest.raises(ValidationError, match=reason):
+        InferenceListing.model_validate({"listing_resource": _card(), "accepted_escrows": [escrow]})
+
+
+def test_listing_admits_unit_rate_options_and_escrows_in_the_card_asset():
+    listing = InferenceListing.model_validate(
+        {
+            "listing_resource": _card(),
+            "settlement_options": [_OPTION],
+            "accepted_escrows": [_escrow(), _escrow(token=None)],
+        }
+    )
+    assert len(listing.settlement_options) == 1
+    assert len(listing.accepted_escrows) == 2

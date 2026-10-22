@@ -12,7 +12,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from arkhai_inference.listings.models import InferenceRateCard
+from arkhai_inference.listings.models import MAX_BASE_UNIT_AMOUNT, InferenceRateCard
 
 UsageOutcome = Literal["completed", "cancelled", "failed"]
 USAGE_OUTCOMES: tuple[str, ...] = get_args(UsageOutcome)
@@ -45,4 +45,7 @@ def derive_charge(record: InferenceUsageRecord, rate_card: InferenceRateCard) ->
     )
     token_charge = -(-per_million // _TOKENS_PER_UNIT)
     image_charge = record.image_units * (rate_card.image_credits_per_unit or 0)
-    return token_charge + image_charge + rate_card.request_credits
+    charge = token_charge + image_charge + rate_card.request_credits
+    if charge > MAX_BASE_UNIT_AMOUNT:
+        raise ValueError("derived charge exceeds uint256")
+    return charge

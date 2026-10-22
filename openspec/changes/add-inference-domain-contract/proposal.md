@@ -61,10 +61,13 @@ them.
   policy, and the registry never mints or resolves identifiers.
 - Define **one credit as one base unit of the listing's settlement asset**.
   The settlement option's per-credit rate is exactly one, `quantity` at
-  purchase is base units bought, and the **rate card** is exact integers in
-  that asset: base units per million prompt tokens, per million completion
-  tokens, an optional flat charge per request, and optional cached-prompt and
-  image rates. One authoritative number is what the buyer sees, what the meter
+  purchase is base units bought, and the **rate card** names that asset and
+  prices in exact integers of it, carried as decimal-digit strings on the
+  wire: base units per million prompt tokens, per million completion tokens,
+  an optional flat charge per request, and optional cached-prompt and image
+  rates. Every settlement option and escrow on the listing identifies the
+  card's asset; the listing codec refuses any other, and any per-credit rate
+  other than one. One authoritative number is what the buyer sees, what the meter
   charges, and what the balance is kept in. The card in force at issuance is
   pinned to the grant.
 - Reserve an opaque, unverified `attestation` envelope on the model card and
@@ -184,8 +187,9 @@ them.
   the `inference` capability's `spec.md`.
 - Marketplace principal, bearer credential, and spending authority are three
   identities; the bearer credential is delivery, never payment authorization —
-  the `inference` capability's `spec.md`, restating the API-credits companion's
-  "Commercial and usage identity" for the new domain.
+  rationale in the `inference` capability's `architecture.md`; the normative
+  requirement is `compose-inference-domain-stack`'s delta, which builds the
+  credential.
 - Model identity is seller-asserted with a SHOULD derivation rule; the domain
   keeps no model list; quantization is an enumerated field; provenance is
   required and resale is legitimate; a registry may curate but never mints;

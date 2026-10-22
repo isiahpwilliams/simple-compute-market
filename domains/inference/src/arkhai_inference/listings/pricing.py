@@ -8,14 +8,18 @@ purchased quantity. The rate card prices consumption, not purchase.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from market_core.schemas import SettlementOption, SettlementSelection
 
-from arkhai_inference.listings.models import resource_is_inference
+from arkhai_inference.listings.models import (
+    MAX_BASE_UNIT_AMOUNT,
+    coerce_resource_dict,
+    resource_is_inference,
+)
 
 UNIT_RATE = 1
-_MAX_BASE_UNIT_AMOUNT = 2**256 - 1
 
 
 def _settlement_options(order: dict[str, Any]) -> list[SettlementOption]:
@@ -52,7 +56,7 @@ def checked_credit_total(unit_rate: Any, quantity: Any) -> int:
     if rate < 0 or count < 1:
         raise ValueError("inference rate must be non-negative and quantity positive")
     total = rate * count
-    if total > _MAX_BASE_UNIT_AMOUNT:
+    if total > MAX_BASE_UNIT_AMOUNT:
         raise ValueError("inference quantity-scaled amount exceeds uint256")
     return total
 
@@ -70,6 +74,38 @@ def _unit_rate(value: Any, per: Any) -> int:
     if checked_credit_total(value, 1) != UNIT_RATE:
         raise ValueError("inference settlement rate must be exactly one base unit per credit")
     return UNIT_RATE
+
+
+def validate_listing_rates(
+    settlement_options: Iterable[SettlementOption],
+    accepted_escrows: Iterable[dict[str, Any]],
+    *,
+    asset: str | None = None,
+) -> None:
+    """Refuse an advertised rate other than one base unit per credit.
+
+    With ``asset`` given, also refuse a settlement option or an escrow token
+    settling in another asset: the rate card's integers are base units of
+    exactly one asset, and a listing taking payment in two would let a
+    discovery bound read them in whichever matched. An escrow that names no
+    token asserts no asset and is not compared.
+    """
+    for option in settlement_options:
+        if asset is not None and option.asset != asset:
+            raise ValueError(
+                "settlement option asset does not match the rate card's asset"
+            )
+        for rate in option.rates:
+            if rate.field == "amount":
+                _unit_rate(rate.value, rate.per)
+    for entry in accepted_escrows:
+        literal_fields = entry.get("literal_fields")
+        token = literal_fields.get("token") if isinstance(literal_fields, dict) else None
+        if asset is not None and token is not None and token != asset:
+            raise ValueError("accepted escrow token does not match the rate card's asset")
+        for rate in entry.get("rates") or []:
+            if isinstance(rate, dict) and rate.get("field", "amount") == "amount":
+                _unit_rate(rate.get("value"), rate.get("per", "credit"))
 
 
 def selected_unit_price(
@@ -109,14 +145,13 @@ def extract_unit_price_from_order(
             SettlementSelection.model_validate(settlement_selection),
         )
 
-    for option in _settlement_options(order):
-        for rate in option.rates:
-            if rate.field == "amount":
-                _unit_rate(rate.value, rate.per)
-    for entry in _accepted_escrows(order):
-        for rate in entry.get("rates") or []:
-            if isinstance(rate, dict) and rate.get("field", "amount") == "amount":
-                _unit_rate(rate.get("value"), rate.get("per", "credit"))
+    rate_card = coerce_resource_dict(order.get("listing_resource")).get("rate_card")
+    asset = rate_card.get("asset") if isinstance(rate_card, dict) else None
+    validate_listing_rates(
+        _settlement_options(order),
+        _accepted_escrows(order),
+        asset=asset if isinstance(asset, str) else None,
+    )
 
     if default_min_price is not None and str(default_min_price).strip():
         _unit_rate(default_min_price, "credit")

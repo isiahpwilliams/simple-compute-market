@@ -14,6 +14,7 @@ from arkhai_inference.listings.models import (
     InferenceModelCard,
     InferenceRateCard,
 )
+from arkhai_inference.listings.pricing import validate_listing_rates
 from arkhai_inference.negotiation.terms import (
     INFERENCE_PROVISION_KIND,
     InferenceProvisionTerms,
@@ -63,6 +64,14 @@ class InferenceListing(BaseModel):
         option_ids = [option.option_id for option in self.settlement_options]
         if len(option_ids) != len(set(option_ids)):
             raise ValueError("settlement_options contains duplicate option identities")
+        # The codec is where a listing advertising a non-unit rate or a second
+        # settlement asset is stopped: the registry validates shape only, and
+        # the pricing path runs after the listing is already discoverable.
+        validate_listing_rates(
+            self.settlement_options,
+            self.accepted_escrows,
+            asset=self.listing_resource.rate_card.asset,
+        )
         return self
 
 

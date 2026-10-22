@@ -57,8 +57,8 @@ choice, the decision says so and records the owner's.
 
 ## Goals / Non-Goals
 
-**Goals.** One `api` family whose vocabulary every API-selling domain binds and
-whose kit every domain selling prepaid bearer access composes; API credits refactored onto it with its behaviour, wire, digests, and
+**Goals.** One `api` family whose vocabulary and kit every domain selling
+prepaid bearer access composes; API credits refactored onto it with its behaviour, wire, digests, and
 data unchanged, proven by pinned bytes; a contribution surface the inference
 domain fills with its three modules and wiring; the duplicate digest removed.
 
@@ -154,7 +154,11 @@ identity kit as its only dependencies:
   digest, encoding, and the portable fulfillment reference, likewise labelled;
 - the issuance label type and the label-parameterized operations above.
 
-The concrete labels are not vocabulary: `api-credits` and `inference` are each
+The issuance and evidence parts are reusable by any domain that delivers a
+bearer credential; the purchase shape is prepaid, since it buys a quantity of
+credits, so the vocabulary as a whole is bound by prepaid bearer-access domains
+until the ledger-free split under "Open Questions" separates the two. The
+concrete labels are not vocabulary: `api-credits` and `inference` are each
 domain's contribution, so the family package never names a sibling. The
 message, terms, materialization, receipt, and result carriers extend core
 schemas, so they cannot be vocabulary either; `selling` provides them as base

@@ -197,10 +197,8 @@ without the ledger.
 
 ## Status
 
-In design; the design is recorded in `design.md` and revised for its first
-design review's round. The round's dispositions are recorded in
-`interventions.jsonl`; the review records and their triage are kept in the
-change's `reviews/` directory, which the repository keeps untracked as the
-change workflow prescribes. `tasks.md` is authored when the review's gate
-passes. The slice order the
-dependencies impose is in `design.md`.
+Ready for planning. The design in `design.md` passed its design gate on
+2026-10-22 after four external review passes; the round's dispositions are
+recorded in `interventions.jsonl`, and the review records and their triage are
+kept in the change's `reviews/` directory, which the repository keeps untracked
+as the change workflow prescribes. `tasks.md` is authored next.

@@ -6,8 +6,8 @@ The `api` family's vocabulary — the purchase shape and key disposition, the
 issuance request and result, the fulfillment identity and request digest, the
 signed secret-free issuance evidence and portable fulfillment reference, and the
 issuance label type with its label-parameterized operations — MUST live once,
-in the family vocabulary package under `domains/api`, and every API-selling
-domain MUST bind it rather than define or copy its own. The vocabulary MUST
+in the family vocabulary package under `domains/api`, and every domain selling
+prepaid bearer access MUST bind it rather than define or copy its own. The vocabulary MUST
 depend only on foundation kits, never on core, a domain, a role, or a
 family-kit distribution, and MUST NOT name a sibling domain's label value. No
 distribution under `domains/api` MUST import an API-selling domain or a role

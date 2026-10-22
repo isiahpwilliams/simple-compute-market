@@ -32,7 +32,7 @@ _CARD = {
     "architecture": {"modality": "text->text"},
     "supported_parameters": ["tools"],
     "endpoint": {"base_url": "https://inference.acme.example/v1"},
-    "rate_card": {"prompt_credits_per_million": 500, "completion_credits_per_million": 1500},
+    "rate_card": {"asset": "0x" + "01" * 20, "prompt_credits_per_million": 500, "completion_credits_per_million": 1500},
     "capacity_site_id": "site-a",
 }
 _RATE_CARD = _CARD["rate_card"]
@@ -108,9 +108,12 @@ def test_codecs_reject_invalid_inputs(codec, value):
 
 def test_materialization_pins_the_rate_card():
     materialization = InferenceMaterialization.model_validate(_MATERIALIZATION)
-    assert materialization.rate_card.model_dump() == {
-        **_RATE_CARD,
-        "request_credits": 0,
+    assert materialization.rate_card.prompt_credits_per_million == 500
+    assert materialization.rate_card.model_dump(mode="json") == {
+        "asset": _RATE_CARD["asset"],
+        "prompt_credits_per_million": "500",
+        "completion_credits_per_million": "1500",
+        "request_credits": "0",
         "cached_prompt_credits_per_million": None,
         "image_credits_per_unit": None,
     }

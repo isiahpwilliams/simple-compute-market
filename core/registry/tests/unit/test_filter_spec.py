@@ -268,6 +268,7 @@ def test_repo_inference_spec_loads() -> None:
         "context_length_min",
         "prompt_credits_max",
         "completion_credits_max",
+        "rate_card_asset",
         "settlement_asset",
     }
     assert not any("attestation" in declaration.path for declaration in spec.filters)
@@ -287,7 +288,7 @@ def test_repo_inference_spec_loads() -> None:
             "architecture": {"modality": "text->text"},
             "supported_parameters": ["tools"],
             "endpoint": {"base_url": "https://inference.example/v1", "api_style": "openai.v1"},
-            "rate_card": {"prompt_credits_per_million": 500, "completion_credits_per_million": 1500},
+            "rate_card": {"asset": "0x" + "22" * 20, "prompt_credits_per_million": "500", "completion_credits_per_million": "1500"},
             "attestation": {"kind": "tee.example", "schema_version": 1, "payload": {}},
             "capacity_site_id": "site-a",
             "offering_mode": "inference",

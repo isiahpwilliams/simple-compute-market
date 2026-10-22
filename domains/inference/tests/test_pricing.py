@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from market_core.schemas import RateValue, SettlementSelection, derive_settlement_option_id
+from market_core.schemas import RateValue, SettlementOption, SettlementSelection, derive_settlement_option_id
 
 from arkhai_inference.listings.models import INFERENCE_KIND
 from arkhai_inference.listings.pricing import (
@@ -15,6 +15,7 @@ from arkhai_inference.listings.pricing import (
     extract_unit_price_from_order,
     reference_payment,
     selected_unit_price,
+    validate_listing_rates,
 )
 
 _ASSET = "0x" + "01" * 20
@@ -150,3 +151,25 @@ def test_strategy_is_maximize_for_inference_only():
     assert determine_strategy_from_order(_order()) == "maximize"
     assert determine_strategy_from_order({"listing_resource": {"kind": "api_credits.v1"}}) is None
     assert determine_strategy_from_order(None) is None
+
+
+def test_extract_refuses_an_option_outside_the_card_asset():
+    order = _order(_option())
+    order["listing_resource"]["rate_card"] = {"asset": "0x" + "02" * 20, "prompt_credits_per_million": "1", "completion_credits_per_million": "1"}
+    with pytest.raises(ValueError, match="option asset"):
+        extract_unit_price_from_order(order)
+    order["listing_resource"]["rate_card"]["asset"] = _ASSET
+    assert extract_unit_price_from_order(order) == 1
+
+
+def test_validate_listing_rates_holds_options_and_escrows_to_one_asset():
+    option = SettlementOption.model_validate(_option())
+    escrow = {"chain_name": "anvil", "escrow_address": "0x" + "11" * 20, "literal_fields": {"token": _ASSET}}
+    validate_listing_rates([option], [escrow], asset=_ASSET)
+    validate_listing_rates([option], [{"chain_name": "anvil", "escrow_address": "0x" + "11" * 20}], asset=_ASSET)
+    with pytest.raises(ValueError, match="option asset"):
+        validate_listing_rates([option], [], asset="0x" + "02" * 20)
+    with pytest.raises(ValueError, match="escrow token"):
+        validate_listing_rates([], [escrow], asset="0x" + "02" * 20)
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_listing_rates([SettlementOption.model_validate(_option(value=2))], [])

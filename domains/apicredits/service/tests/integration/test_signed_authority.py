@@ -410,7 +410,7 @@ def test_a_deployment_without_an_identity_keeps_the_shared_secret_gate(
 
 
 def _seller_client(signed_app):
-    from apicredits_service.models.keys_model import ISSUANCE_LABEL
+    from apicredits_service.config import ISSUANCE_LABEL
     from arkhai_api_client import AuthorityClient
 
     return AuthorityClient(
@@ -495,7 +495,7 @@ def _issuance_request(negotiation_id: str, quantity: int = 5):
     string. The vocabulary computes the digest over every bound field, so a
     literal never becomes a second source of truth for what the request says.
     """
-    from apicredits_service.models.keys_model import ISSUANCE_LABEL
+    from apicredits_service.config import ISSUANCE_LABEL
     from arkhai_api.issuance import KeyDisposition, issuance_request
 
     return issuance_request(
@@ -587,7 +587,7 @@ async def test_the_seller_client_reads_back_what_it_issued(signed_app):
     key = await seller.get_key(issued.key_id)
     assert key["balance"] == 7
 
-    from apicredits_service.models.keys_model import ISSUANCE_LABEL
+    from apicredits_service.config import ISSUANCE_LABEL
     from arkhai_api.issuance import fulfillment_id
 
     grant = await seller.get_issuance(fulfillment_id(ISSUANCE_LABEL, "neg-2"))
@@ -609,7 +609,7 @@ def _credit_request(
     """An issuance for an eip191 buyer, new key or a top-up of an existing one."""
     from market_identity import Identity
 
-    from apicredits_service.models.keys_model import ISSUANCE_LABEL
+    from apicredits_service.config import ISSUANCE_LABEL
     from arkhai_api.issuance import KeyDisposition, issuance_request
 
     key = (
@@ -706,6 +706,23 @@ async def test_a_deal_issues_spends_tops_up_and_guards_its_key(signed_app):
     detail = await seller.get_key(issued.key_id)
     assert detail["owner_scheme"] == "eip191"
     assert "secret" not in detail and "secret_hash" not in detail
+
+
+@pytest.mark.asyncio
+async def test_issuance_onto_a_revoked_key_is_refused_as_served(signed_app):
+    from arkhai_api_client import AuthorityError
+
+    await _seed_quota(signed_app, resource_id="svc-quota", units=1000)
+    seller = _seller_client(signed_app)
+    issued = await seller.submit_issuance(_credit_request("neg-revoked-1", 2))
+    await seller.revoke_key(issued.key_id)
+
+    with pytest.raises(AuthorityError) as refused:
+        await seller.submit_issuance(_credit_request("neg-revoked-2", 1, existing_key=issued.key_id))
+
+    assert (refused.value.status_code, refused.value.reason) == (409, "key_revoked")
+    assert refused.value.detail == f"key {issued.key_id!r} is revoked"
+    assert (await seller.get_key(issued.key_id))["balance"] == 2
 
 
 @pytest.mark.asyncio

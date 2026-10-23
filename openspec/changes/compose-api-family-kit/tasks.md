@@ -760,7 +760,7 @@ Delivers `domains/api/authority` (`arkhai_api_authority`) and shrinks
 `api-credits` "API credits composes the api family kit"). Touches the new
 project and every module under `domains/apicredits/service/src/apicredits_service/`.
 
-- [ ] 4.1 `domains/api/authority/` (`arkhai-api-authority` 0.1.0; dependencies
+- [x] 4.1 `domains/api/authority/` (`arkhai-api-authority` 0.1.0; dependencies
       `arkhai-api`, `arkhai-api-contracts`, `arkhai-kit-identity`,
       `arkhai-kit-site`, `arkhai-kit-resource-pools`,
       `arkhai-kit-resource-pools-contracts`, `sqlalchemy`; never
@@ -769,7 +769,21 @@ project and every module under `domains/apicredits/service/src/apicredits_servic
       identity and label, deliverable and advertisable modes, backing, capacity
       resource type — and the `AuthorityConfig` carrying it with the issuance
       label, database URL, and key namespace. (D6.)
-- [ ] 4.2 `models.py`, `migrations.py`, and `database.py` moved from the
+      *Done 2026-10-23.* `arkhai-api-authority` 0.1.0 declares exactly the
+      seven distributions this task names and never the client.
+      `profile.py`: `CapacityProfile`, a frozen dataclass validated in
+      `__post_init__` — offering mode, pool provider, pool id and label,
+      deliverable and advertisable modes, backing, resource type; the
+      offering mode must be deliverable and a pool advertises only what it
+      delivers — with `pool_policy_tags()` spelling the seeded pool's
+      declarations as the resolver reads them. `AuthorityConfig` carries
+      the label, the profile, the database URL, the key namespace as
+      `key_prefix` (the `ak` of every key id; required, so two roots never
+      share one by omission), and `distribution`, the name the version route
+      reports, which D14 keeps unchanged for API credits. Both are plain
+      dataclasses, so the library imports no pydantic of its own.
+
+- [x] 4.2 `models.py`, `migrations.py`, and `database.py` moved from the
       service: the SQLAlchemy models, the migration chain with its identifiers
       unchanged, and `create_all`; `initialization.py`: the pool seed and
       `load_pool_directory`, run at startup from the profile rather than inside
@@ -782,7 +796,44 @@ project and every module under `domains/apicredits/service/src/apicredits_servic
       `inference` profile admitting an `inference` reservation and refusing an
       `api_credits` one (`api-family` "A reservation under another offering
       mode"). (D6.)
-- [ ] 4.3 `route_services.py`: a framework-free route service per authority
+      *Done.* `models.py`, `migrations.py`, and `keys_service.py` moved
+      with `git mv`; the migration identifiers are unchanged and
+      `migrations.py`'s messages no longer name a domain. `database.py`
+      keeps the engine, the session factory, and `run_migrations`
+      (`create_all` over the credits, pool, and site metadata, then the
+      chain); the pool seed leaves it for `initialization.py`'s
+      `initialize(engine, profile)`, which seeds the profile's pool when
+      absent, with the profile's provider, label, and declarations, keeps a
+      stored pool as it is, and then refuses any stored pool without valid
+      declarations — the check `run_migrations` used to make;
+      `load_pool_directory` moved beside it. `KeysService` takes
+      `config: AuthorityConfig`: it validates each command through
+      `issuance_request_model(config.label)`, spells the result schema from
+      the label, derives key ids in the configured namespace
+      (`derive_key_id(key_prefix, fulfillment_id)`), and compares and claims
+      the profile's offering mode where `api_credits` was literal; the
+      profile's `resource_type` is carried for the root and read by nothing
+      in the kit today, since the ledger's reservations do not filter by
+      type. Tests: `tests/unit/test_profile.py` (unit, 12: every
+      validation rule, immutability, the declarations' spelling, the
+      configuration's own rules). The literal replacements are proven in
+      `tests/integration/test_keys_service.py` against in-memory SQLite,
+      library integration rather than the unit tests this task names,
+      because the offering-mode check lives inside the ledger's admission:
+      under an `inference` profile the ledger admits an `inference` hold
+      and the key service commits it; an `api_credits` claim is refused at
+      the site ledger's admission as undeclared by the pool the profile
+      seeded, which is the only path a foreign mode has, since the key
+      service claims the profile's mode itself; a purchase conflicts with a
+      hold under another mode; a fresh reservation carries the profile's
+      mode; the result carries the configured label's schema and key
+      prefix. The moved key-service and pool-declaration suites run under a
+      neutral `example` profile and label from
+      `tests/integration/profiles.py`, with the seed, the kept stored pool,
+      and the declaration refusal exercised through `initialize`; the
+      migration suite needs no profile and moved with its imports alone.
+
+- [x] 4.3 `route_services.py`: a framework-free route service per authority
       route — issuance, issuance lookup, consume, consume batch, verify, key
       list, key get, revoke, adjust, grants, usage, system version — each
       validating and performing the route over the key service and reporting a
@@ -791,7 +842,29 @@ project and every module under `domains/apicredits/service/src/apicredits_servic
       objects, in declaration order. Unit tests for every refusal's code and
       body against the 1.3 fixtures; a test that the adapted contracts equal
       the service's former table. (D4, D11.)
-- [ ] 4.4 `domains/apicredits/service` becomes the root: `config.py` builds
+      *Done.* `route_services.py`: `AuthorityRouteService`, one method per
+      authority route over the key service — `issue`, `get_issuance`,
+      `consume`, `consume_batch`, `verify`, `list_keys`, `get_key`,
+      `revoke`, `adjust`, `list_grants`, `list_usage` — each raising
+      `RouteRefusal(status_code, body)` with the status and body the
+      controllers served, and `SystemRouteService(distribution).version()`;
+      one class rather than one per route, since every route shares the
+      one collaborator. `declarations.py`: `site_route_contracts()` adapts
+      the contracts' declarations to `SiteRouteContract` objects in
+      declaration order. Unit tests: `test_route_services.py` (13) replays
+      every refusal the 1.3 fixture records for the route services — the
+      four issuance refusals, the three consumption refusals, the three
+      not-found cases, the adjustment below zero; the recorded
+      `issuance_invalid` 422 is the bound request model's, raised before
+      any route service — over a scripted key service and asserts status
+      and body equal to the record, plus the 422 detail, the
+      pass-throughs, the list totals, and the version route;
+      `test_declarations.py` (2) holds the adapted contracts equal to the
+      declarations field for field, admitting `admin`, and equal to the
+      service's recorded `route_contracts.json` table, which is the
+      service's former table as 1.3 recorded it.
+
+- [x] 4.4 `domains/apicredits/service` becomes the root: `config.py` builds
       the `AuthorityConfig` and the API-credits `CapacityProfile` from its
       unchanged `APICREDITS_*` settings; `container.py` constructs the kit's
       engine, sessions, and key service; `main.py` creates the app, installs
@@ -803,7 +876,45 @@ project and every module under `domains/apicredits/service/src/apicredits_servic
       `models/keys_model.py`, `services/keys_service.py`, and `db/` are
       deleted. The distribution name, image, entry point, and version response
       are unchanged. (D6, D11, D12, D13.)
-- [ ] 4.5 Verification: `make test-api-authority` (unit, library integration
+      *Done.* `config.py` keeps every settings read it had and adds the
+      label, the API-credits `CapacityProfile` (`api_credits` mode and
+      provider, the `default` pool, `api.credits` resource type, backed),
+      and `authority_config`; `container.py` creates the engine from it,
+      `bootstrap`s (migrations, then `initialize` under the profile), and
+      wires the ledger, the key service, the route service, and the system
+      service; `main.py` adapts the declarations once
+      (`CREDITS_ROUTE_CONTRACTS = site_route_contracts()`), installs
+      `SiteAuthMiddleware` over them and the admin-key middleware as
+      before, and mounts the health, system, keys, and capacity routers.
+      `keys_controller.py` and `system_controller.py` keep every decorator,
+      summary, docstring, and response model, so the served OpenAPI
+      document is unchanged, and each handler maps its route to the route
+      service and a `RouteRefusal` to a `JSONResponse`; the bound request
+      and response models come from `issuance_request_model` and
+      `issuance_response_model` under the configured label.
+      `middleware/route_contracts.py`, `models/`, `services/`, and `db/`
+      are deleted; `middleware/auth.py`, `identity.py`, and `settings.toml`
+      stay. The service declares `arkhai-api-authority`, states the
+      runtime reason its identity-kit pin now needs (nothing in the root
+      imports it), and bumps to 0.8.0. Its suite keeps 41 tests (unit and
+      application integration): the three library suites moved to the
+      authority with their 41; `test_schema_baseline` bootstraps through
+      the root's `container.bootstrap`, `test_route_contract_coverage`,
+      the baseline, and the parity test read the adapted table from
+      `main`, the signed round-trip takes it from the adapter, and each
+      takes the label from `config`. 41 passed with every 1.3 and 1.4
+      record diffing to zero; the version record holds the response's
+      shape and service identity, the number itself being the installed
+      distribution's, now 0.8.0. The owner's review asked for coverage of
+      issuance onto a revoked existing key, which 1.3 left out of the
+      refusal record: the route service maps it to the 409
+      `{"error": "key_revoked", "detail": ...}` the controller served
+      (unit), the key service refuses the top-up with no grant, balance, or
+      quota change (library integration), and the served refusal reaches
+      the family client as status, reason, and detail (application
+      integration, `test_signed_authority.py`).
+
+- [x] 4.5 Verification: `make test-api-authority` (unit, library integration
       against SQLite), `make -C domains/apicredits/service test` (application
       integration: every baseline of 1.3 and 1.4 diffs to zero, the pins hold),
       `make test`, `make check-packaging` (the domain library's override row
@@ -811,6 +922,62 @@ project and every module under `domains/apicredits/service/src/apicredits_servic
       finding). End-to-end: `e2e_credits_deal`, `e2e_credits_payment_deal`,
       `e2e_credits_service_rollback` once validation builds the image at this
       commit.
+      *Done 2026-10-23.* `make test-api-authority` 68 passed (`tests/unit/`
+      27, unit; `tests/integration/` 41, library integration against
+      in-memory SQLite). `make -C domains/apicredits/service test` 41 passed
+      (application integration through the real app over `ASGITransport`;
+      the baselines of 1.3 and 1.4 and the pins unchanged). The storefront,
+      domain library, buyer, client, and contracts suites are untouched by
+      this section's code and pass under `make test`. `make test` at this
+      commit: every suite passed except, all inherited and recorded by
+      1.7, 2.9, and 3.4, the provisioning dotenv-layering unit test, the
+      VM storefront's two Alkahest toolchain tests, the three provisioning
+      IaC relay-teardown shell tests, the release-tooling whole-tree
+      checks and `test_publish_matrix` rows that read the stale
+      `.claude/worktrees/` checkout, and the `--eval` case; and one
+      failure this section caused, the domain library's install test of
+      the service wheel, which imported the service's former `db.models`
+      and built no authority wheel to resolve the service against — it
+      now builds the authority wheel and imports the root's `container`
+      and the authority's `models` from site-packages (10 passed). Helm is
+      not installed, so the render checks are unrun; the three middleware
+      toolchains passed. `make check-packaging` passes on the copy: uv
+      setup, locks (the authority's new lock and the service's relocked),
+      Python version, layout, all four architecture parts; hygiene too.
+      `make check-architecture` in place reports only the stale
+      `.claude/worktrees/` checkout; each api wheel, the authority's
+      included, builds once per aggregate target. End-to-end: owed to
+      validation; the three scenarios are the first to run the service as
+      a composition root, and `e2e_credits_service_rollback` compares a
+      pre-kit image with one whose service is the authority library. The
+      fresh-context check found no layering, scope, packaging, or wiring
+      breach; accepted from it: the root's configuration imports moved to
+      module level and the key namespace passed explicitly (and made
+      required), the migration docstrings describing a deployment with a
+      separate migration step rather than a plan, the declarations test
+      comparing every field to the declarations, the version test over an
+      installed distribution that is not the authority, and the counts
+      and wordings corrected above. Declined: the family tests' path
+      coupling to the service's recorded fixtures, which 4.3 prescribes as
+      2.5's contracts tests did; and the service pyproject's
+      runtime-reason comment, which every project with such a table
+      carries. Noted for later sections: the profile's `resource_type`
+      (`api.credits`) is read by nothing in the kit, and the storefront
+      registers quota as `api_credits` while the service's tests and the
+      lane register `api.credits`, a spelling the storefront sections
+      should settle; `SchemaDriftError`'s messages no longer name API
+      credits, operator-facing text outside every baseline.
+      **Handoff.** The service root spells its label and profile in
+      `config.py`; a sibling domain's root passes its own. The route
+      services are one class over the key service; a domain contributing a
+      route binds it beside the authority's routers in its own root
+      (`api-family` "A domain contributes a route"). The key service still
+      names its lookup `get_credit_issuance`. The authority's tests build
+      everything under a neutral `example` profile, so no domain value
+      enters the family tree; the service's suite is the application
+      integration of the API-credits deployment. Section 4 is committed on
+      `feat/compose-api-family-kit-s4-authority`, stacked on section 3's
+      branch.
 
 ## 5. Selling, part one: issuance, settlement persistence, and the bundle
 
@@ -1120,6 +1287,7 @@ change to implementation.
 | D4 — plain-data route declarations adapted by the authority | `openspec/specs/api-family/spec.md` |
 | D5 — side-split mechanism distributions | `openspec/specs/api-family/spec.md`; `docs/development/ARCHITECTURE.md#family-kits` |
 | D6 — per-domain service roots, the capacity profile | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md`; `docs/development/ARCHITECTURE.md#runtime-service-map` and `#authority-boundaries` |
+| D6 — the authority's startup: the migration chain, then the profile's pool seeded in initialization and every stored pool's declarations checked; the API-credits service's in-process migrations are the library's | `openspec/specs/api-credits/architecture.md#implementation-composition`; `docs/development/DEPLOYMENT_AND_CONFIG.md` (migrations at startup) |
 | D7 — the contribution bundles and the issuance projection | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
 | D9, D14 — the compatibility baselines and rollback directions | `openspec/specs/api-credits/spec.md` |
 | D9 — the baselines' refusal records diff bodies, the one exception to the rejection-path status-only rule; the API-credit lane mounts the engine socket and runs the upgrade/rollback scenario | `docs/development/TESTING.md` (rejection paths; the API-credit lane) |

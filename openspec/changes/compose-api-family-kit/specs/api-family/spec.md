@@ -300,3 +300,53 @@ and its error to a response.
 - **WHEN** the API-credits storefront mounts its negotiate route
 - **THEN** the controller delegates every decision to the selling library's
   route service, and the same service serves the inference storefront's binding
+
+### Requirement: A storefront's authentication verifies what was sent and records every outcome
+
+The storefront authentication the selling library binds MUST verify each
+role's signature over the request body as the caller sent it, never over a
+re-serialization that drops or adds fields, and MUST record every
+authenticated outcome — administrator, buyer, and seller alike — so an exact
+retry of a mutation replays the recorded outcome whether or not its replay
+lease has lapsed.
+
+#### Scenario: A client states an optional field as null
+
+- **WHEN** a buyer signs and sends a continuation whose optional fields are
+  stated as null, and another sends one leaving them out
+- **THEN** both verify, and each is dispatched once
+
+#### Scenario: A seller retries a mutation after its lease
+
+- **WHEN** a seller's close is dispatched and the same signed request is sent
+  again after the replay lease has lapsed
+- **THEN** the recorded outcome is answered and the close does not run again
+
+### Requirement: A configuration refusal names the composing storefront's key
+
+The selling library MUST read no configuration itself; a refusal for a setting
+it needs — the pricing floor, the capacity sites — MUST name the setting as the
+composing storefront passed it, in that storefront's own spelling.
+
+#### Scenario: A configuration refusal names the storefront's key
+
+- **WHEN** a negotiation needs the pricing floor and the storefront's
+  configuration states none, or states one that is not decimal text
+- **THEN** the refusal names the floor setting as that storefront's
+  configuration spells it, which the storefront passed to the selling library,
+  and the library read no configuration itself
+
+### Requirement: An opening is recorded in one transaction
+
+The selling library MUST record a negotiation's opening — the thread, its
+opening message, its listing's binding, and its purchase terms — in one
+transaction, through the negotiation runtime's opening unit of work, so a
+failure in any of those writes leaves none of them and no continuation finds a
+bound thread without the terms it validates against.
+
+#### Scenario: The opening's last write fails
+
+- **WHEN** the thread, its opening message, and its binding have been written
+  and the purchase-terms write fails
+- **THEN** the opening is refused and the database holds no thread, message,
+  binding, or terms for the negotiation

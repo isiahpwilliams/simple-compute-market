@@ -125,6 +125,16 @@ sibling domain's package, or any role executable. The existing API-credits servi
 project stays, as a composition root over `authority`; the inference service
 is the stack change's.
 
+`selling`'s dependency on the core storefront is a layer divergence of the
+shape the storefront kit, capacity publication, and the VM and bare-metal
+vocabularies already carry, since the core storefront is a composition. It is
+recorded as an exception row owned by `kit-owned-storefront-auth-and-persistence`,
+whose carve-out of the core storefront's hook shapes and registry into
+`kit/storefront-contracts` retires it with the others. The alternative, keeping
+every module that touches the core storefront in each domain's storefront,
+would leave the binding, persistence, and route services domain-local, which
+D7 and D11 exist to prevent.
+
 `selling` and `buying` are named for the side of the market each serves. They
 cannot carry their roles' names: `storefront`, `buyer`, `service`, and `app`
 are the role words the check reads as "executable", and these are libraries.
@@ -164,8 +174,12 @@ until the ledger-free split under "Open Questions" separates the two. The
 concrete labels are not vocabulary: `api-credits` and `inference` are each
 domain's contribution, so the family package never names a sibling. The
 message, terms, materialization, receipt, and result carriers extend core
-schemas, so they cannot be vocabulary either; `selling` provides them as base
-classes each domain binds to its kind literal. Neither contribution bundle is
+schemas, so they cannot be vocabulary either; `contracts` provides them as base
+classes each domain binds to its kind literal. They cannot live in `selling`:
+a domain's codecs bind them, and its buyer plugin installs those codecs, so a
+buyer would install `selling` and the storefront machinery beneath it, which
+the side split exists to prevent. `contracts` may depend on core, and both
+sides already install it. Neither contribution bundle is
 vocabulary, for the same reason: both are typed against core, storefront, and
 runtime packages. The API-credits terms module becomes a one-line binding of
 the vocabulary's shape, and a test binding under a second kind literal proves
@@ -175,8 +189,9 @@ composes the kit; nothing here touches it.
 
 ### D4. Contracts are plain data, and the client signs from them
 
-`contracts` holds the authority's wire models — issuance request and response,
-consume, verify, adjust, key, grant, and usage shapes — and the route contract
+`contracts` holds the family's wire models — the authority's issuance request
+and response, consume, verify, adjust, key, grant, and usage shapes, and the
+negotiation and delivery carriers D3 places here — and the route contract
 as plain data: for each route its method, path pattern, signed operation name,
 admitted roles, and the path segment naming the bound resource. That is the
 form `kit/resource-pools-contracts` uses, "so a client needs only this package
@@ -288,25 +303,69 @@ its own domain.
 |---|---|---|
 | issuance label | `api-credits` | `inference` |
 | kind literals and schema identity | `api_credits.v1`, `api_credits` | `inference.v1`, `inference` |
+| offering mode, contribution identifier, table prefix | `api_credits`, `apicredits`, `api_credit` | its stack change's design decides |
 | listing schema and publication mapping from a quota resource | the named-service listing | the model-card listing |
 | publication guards | none | the request-priced guard |
 | negotiation-time terms checks | the quota and key guards, from `selling` | the same |
 | acceptance hook | none | pin the rate card |
 | issuance projection | service from `service_name`, resource from `resource_id` | its stack change's design decides; see "Open Questions" |
 | delivery public-result extension | none | the materialization, beside the connection payload, never the secret |
-| consumption rule | a fixed configured amount | the same until metering |
+| consumption rule | a fixed amount per request, configured at the gate | the same until metering |
 | buyer filters and rendering | service name | model card fields |
 
-The **issuance projection** is the field the first review found missing: a
-typed function from the accepted listing and terms to the authority's issuance
-command — one named service identity, one quota resource, the quantity, and
-the key target. It reads the listing as accepted and pinned to the thread,
-never a listing republished since, so a seller cannot change what a settled
-purchase issues. For a quota-backed domain it refuses a listing with no quota
-resource before publication and again before acceptance, since the authority
-cannot reserve against nothing; the inference model card's `resource_id` is
-optional today and becomes required by that guard. `selling` keeps no
-field-name assumption of its own.
+The **issuance projection** is the field the first review found missing. The
+domain's projection maps a listing's resource to the issuance command's
+service identity, its quota resource, and the endpoint returned beside the key;
+`selling` adds the quantity and key target from the accepted terms, which are
+the vocabulary's purchase shape and the same for every domain, so the one
+projection also serves publication, where there are no terms. Together they
+form the authority's issuance command. It reads the listing as accepted and
+pinned to the thread, never a listing republished since, so a seller cannot
+change what a settled purchase issues. For a quota-backed domain `selling`
+refuses a listing with no quota resource before publication and again before
+acceptance, since the authority cannot reserve against nothing; the inference
+model card's `resource_id` is optional today and becomes required by that
+guard. `selling` keeps no field-name assumption of its own: it reads a listing
+only through the projection. The public connection payload a delivery returns
+(`kind`, `service_name`, `base_url`, `key_id`, `quantity`) is the family's
+delivery shape, filled from the projected subject, and keeps those keys because
+the recorded API-credits results carry them.
+
+"Pinned to the thread" is a record of the listing as accepted. Before the
+runtime records the negotiation's success, `selling` binds the thread to its
+listing's durable binding, which core does once per thread, and writes the
+listing, narrowed to the domain's listing schema, to core's immutable
+per-negotiation artifact table under a `listing` slot. Settlement verifies the
+payment and issues from that record, never from the stored listing, so a listing whose service or
+endpoint changes in place after acceptance, under the same quota resource,
+still issues what the buyer accepted. Recording binds the thread, so an
+unbound thread was accepted before acceptances were recorded, and reads the
+stored listing as before; a bound thread without a record, or asked for
+another listing than the one it accepted, is refused. API-credit
+threads are opened unbound today, though the negotiation protocol has a thread
+copy its listing's binding at opening; binding them at opening is section 6's
+(task 6.5), and recording at acceptance does not depend on it. The record lives in the existing artifact table
+because a new table or column would change the schema baseline (D9), and the
+Agreement's `listing_hash` cannot stand in for it: it covers the whole stored
+row, status and timestamps included, which change after acceptance. The `listing`
+slot is new core API, so `arkhai-core-storefront` becomes 0.16.0; the
+capacity-publication kit pins the core storefront exactly, so the bump carries
+through it (0.10.2) to the four packages that pin it exactly and to the VM
+storefront's exact pin on the bare-metal storefront. That cascade is versioning
+fallout of the slot, not new behaviour in those packages. The source check
+before every acceptance also refuses a listing whose projected quota resource
+differs from the one its immutable binding records.
+
+The consumption rule is the rule's kind, a fixed amount per request: the amount
+is the gate's setting, which the storefront does not read, and adding a
+storefront setting would change the configuration baseline. The bundle names
+the offering mode, contribution identifier, and table prefix the storefront's
+binding, registration, and tables are keyed by; the settlement-evidence and
+listing-source envelope kinds and the private-credentials reference are spelled
+from the kind literal and the prefix, which reproduces the recorded API-credits
+names. A storefront holds its bundle wherever its stages, services, and
+persistence can read it without an import cycle; the API-credits storefront
+holds it in `container.py`.
 
 Every field a domain may omit is optional in the bundle, so API credits
 supplies no placeholder. Each caller — both storefronts, each service root,
@@ -434,9 +493,11 @@ wire, digests, data, configuration, and the retained service and package
 identities stay compatible. No database reset
 is required, and the service's in-process migration chain is unchanged.
 `ARCHITECTURE.toml` gains the family row and the `family` attribute on the
-API-credits row, loses the domain library's override row, and needs no row for
-any new project, because every path reads as intended; the inference row gains
-its attribute when that domain's campaign composes the kit.
+API-credits row, loses the domain library's override row, and needs no override
+row for any new project, because every path reads as intended. It gains one
+exception row, for `selling`'s dependency on the core storefront (D2), owned by
+`kit-owned-storefront-auth-and-persistence`, so this change owns none. The
+inference row gains its attribute when that domain's campaign composes the kit.
 
 ## Risks / Trade-offs
 

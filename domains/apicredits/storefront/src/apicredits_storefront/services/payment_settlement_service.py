@@ -20,6 +20,15 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from arkhai_api_selling.issuance import (
+    SettlementRefusal,
+    SettleResult,
+    accepted_agreement,
+    persist_delivery,
+    project_progress,
+    settlement_evidence,
+)
+from arkhai_api_selling.quota_listing import accepted_listing_resource
 from core_storefront.models.settle_models import (
     AgreementSettleResponse,
     RefundSettlementResponse,
@@ -44,15 +53,6 @@ from market_arkhai_payments import (
 )
 from market_core import SettlementEvidence
 from market_identity import Identity
-
-from apicredits_storefront.settlement_stages import (
-    SettlementRefusal,
-    SettleResult,
-    accepted_agreement,
-    persist_delivery,
-    project_progress,
-    settlement_evidence,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,9 @@ class ApiCreditPaymentSettlementService:
         retryable: bool = False,
     ) -> dict[str, Any]:
         if progress is not None:
-            payload = await project_progress(self.db, progress, owner=buyer)
+            payload = await project_progress(
+                self.composition.contributions, self.db, progress, owner=buyer
+            )
         else:
             payload = {"escrow_uid": negotiation_id, "negotiation_id": negotiation_id}
         if status is not None:
@@ -189,11 +191,18 @@ class ApiCreditPaymentSettlementService:
             raise SettlementRefusal(409, "no verified payment exists to refund")
         self._raise_for_unverified(negotiation_id, outcome)
         assert isinstance(outcome, ReceiptVerified)
-        order = await self.db.load_listing(listing_id=agreement.listing_id)
-        if not order:
-            raise SettlementRefusal(409, "credit provisioning terms are unavailable")
+        contributions = self.composition.contributions
+        try:
+            accepted = await accepted_listing_resource(
+                contributions, self.db, domain=self.composition.domain,
+                negotiation_id=agreement.negotiation_id, listing_id=agreement.listing_id,
+            )
+        except (LookupError, ValueError) as exc:
+            # LookupError: the record disagrees with the thread's binding.
+            raise SettlementRefusal(409, "credit provisioning terms are unavailable") from exc
         try:
             evidence = settlement_evidence(
+                contributions,
                 agreement,
                 raw,
                 reference=data.transaction_id,
@@ -202,7 +211,7 @@ class ApiCreditPaymentSettlementService:
                     **wire,
                     "receipt": outcome.receipt.model_dump(mode="json", by_alias=True, exclude_none=True),
                 },
-                order=order,
+                order={"listing_resource": accepted},
             )
             return await self.db.save_settlement_evidence(evidence)
         except ValueError as exc:
@@ -291,7 +300,9 @@ class ApiCreditPaymentSettlementService:
         refunded = current is not None and current.status in _REFUND_STATES
         if result.get("status") == "fulfilled" or not refunded:
             # Credits issued before a refund are recorded beside it.
-            progress = await persist_delivery(self.db, evidence, result, public_ref=negotiation_id)
+            progress = await persist_delivery(
+                self.composition.contributions, self.db, evidence, result, public_ref=negotiation_id
+            )
         if refunded:
             return SettleResult(200, await payload(progress, status="refunded"))
         if progress["status"] == "provisioning":

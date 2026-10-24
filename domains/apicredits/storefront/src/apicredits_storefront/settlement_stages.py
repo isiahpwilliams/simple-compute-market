@@ -5,17 +5,31 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, replace
 from typing import Any
 
-from market_alkahest import AlkahestConditionalEscrowClient, create_alkahest_registration
+from arkhai_api_selling.issuance import (
+    SettlementRefusal,
+    SettleResult,
+    accepted_agreement,
+    delivery,
+    persist_delivery,
+    progress_result,
+    settlement_evidence,
+)
+from arkhai_api_selling.quota_listing import accepted_listing, listing_binding
+
+from market_alkahest import (
+    AlkahestConditionalEscrowClient,
+    AlkahestFulfillmentPublisher,
+    create_alkahest_registration,
+)
 from market_alkahest.proposals import accepted_escrow_artifacts_from_proposal
 from market_alkahest.escrow_verification import verify_escrow_for_settlement
-from market_alkahest.txlock import chain_tx_lock
 from market_arkhai_payments import create_arkhai_payments_registration
 from market_core import SettlementEvidence
-from market_core.schemas import Agreement, EscrowProposal, SettlementOption, SettlementSelection, derive_settlement_option_id
+from market_core.schemas import EscrowProposal, SettlementOption, SettlementSelection, derive_settlement_option_id
 from arkhai_apicredits.settlement import validate_payer_account
 from arkhai_apicredits.settlement.payments import validate_payment_publication_clause
 import apicredits_storefront.container as container
@@ -24,136 +38,11 @@ from market_negotiation_runtime import OfferUnfulfillableError
 from market_settlement_runtime import PreparedSettlement, FulfillmentOutcome, derive_obligation_ref
 from core_storefront.stage_log import stage_event
 
-from apicredits_storefront.listing_binding import api_credit_listing_binding
 from apicredits_storefront.services.capacity_client import build_capacity_runtime
-from apicredits_storefront.services.issuance_evidence import ApiCreditPrivateResultRepository
 from apicredits_storefront.utils.config import CHAINS, settings
-from arkhai_apicredits.domain_runtime import market_domain
-from arkhai_apicredits.negotiation.terms import ApiCreditsProvisionTerms, provision_quantity
-from arkhai_apicredits.schema import ApiCreditsListing
-from arkhai_apicredits.settlement.fulfillment import credit_delivery
-from arkhai_apicredits.settlement.issuance_evidence import ApiCreditsIssuanceEvidenceBodyV1
+from arkhai_apicredits.negotiation.terms import provision_quantity
 
 logger = logging.getLogger(__name__)
-
-
-class SettlementRefusal(RuntimeError):
-    """A settle, status or refund refusal carrying the HTTP status the route returns."""
-
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
-
-
-@dataclass(frozen=True)
-class SettleResult:
-    """A stage's settle, status or refund response and its HTTP status."""
-
-    status_code: int
-    payload: dict[str, Any] = field(default_factory=dict)
-
-
-def accepted_agreement(thread: Mapping[str, Any]) -> tuple[Agreement, bytes]:
-    raw = thread.get("agreement_bytes")
-    if isinstance(raw, memoryview):
-        raw = raw.tobytes()
-    if isinstance(raw, str):
-        raw = raw.encode("utf-8")
-    if thread.get("terminal_state") != "success" or not isinstance(raw, bytes):
-        raise ValueError("accepted Agreement is unavailable")
-    agreement = Agreement.model_validate_json(raw)
-    if agreement.settlement is None:
-        raise ValueError("accepted Agreement has no selected settlement option")
-    if Identity.model_validate(agreement.buyer) != Identity.model_validate(thread["buyer_principal"]):
-        raise ValueError("accepted Agreement buyer differs from negotiation")
-    if Identity.model_validate(agreement.seller) != Identity.model_validate(thread["seller_principal"]):
-        raise ValueError("accepted Agreement seller differs from negotiation")
-    if agreement.negotiation_id != thread["negotiation_id"]:
-        raise ValueError("accepted Agreement negotiation binding differs")
-    return agreement, raw
-
-
-def settlement_evidence(
-    agreement: Agreement, raw: bytes, *, reference: str, status: str,
-    source: Mapping[str, Any], order: Mapping[str, Any],
-) -> SettlementEvidence:
-    provision = agreement.provision_terms or {}
-    terms = ApiCreditsProvisionTerms.model_validate({key: provision[key] for key in ("kind", "version", "payload")})
-    delivery = {
-        "owner": agreement.buyer,
-        "listing_resource": market_domain().codecs.listing({"listing_resource": order.get("listing_resource")}).listing_resource.model_dump(mode="json"),
-        "quantity": terms.quantity, "key_mode": terms.key_mode, "key_id": terms.key_id,
-        "listing_id": agreement.listing_id,
-    }
-    evidence = SettlementEvidence(
-        agreement.negotiation_id, agreement.settlement.mechanism, reference, status,
-        {"kind": "api_credits.settlement-evidence.v1", "schema_version": 1,
-         "agreement_digest": hashlib.sha256(raw).hexdigest(),
-         "source": dict(source), "delivery": delivery},
-    )
-    credit_delivery(evidence, require_verified=False)
-    return evidence
-
-
-async def persist_delivery(db: Any, evidence: SettlementEvidence, result: Mapping[str, Any], *, public_ref: str) -> dict[str, Any]:
-    private = ApiCreditPrivateResultRepository(db.db_path)
-    credentials = result.get("tenant_credentials") or {}
-    credentials_ref = None
-    issuance = result.get("issuance")
-    if credentials.get("secret"):
-        if issuance is None:
-            raise ValueError("private delivery requires canonical issuance identity")
-        stored = await asyncio.to_thread(
-            private.store, fulfillment_id=issuance.fulfillment_id,
-            owner=credit_delivery(evidence).owner, key_id=credentials["key_id"], secret=credentials["secret"],
-        )
-        credentials_ref = stored.credentials_ref
-    public = {key: value for key, value in credentials.items() if key != "secret"}
-    if result.get("connection_details"):
-        public["connection_details"] = result["connection_details"]
-    return await db.save_issuance_progress(
-        negotiation_id=evidence.negotiation_id, public_ref=public_ref,
-        status="ready" if result.get("status") == "fulfilled" else ("provisioning" if result.get("status") == "pending" else "failed"),
-        fulfillment_uid=result.get("fulfillment_uid"), public_result=public,
-        credentials_ref=credentials_ref, reason=result.get("message"),
-    )
-
-
-async def project_progress(db: Any, row: Mapping[str, Any], *, owner: Identity) -> dict[str, Any]:
-    evidence = await db.load_settlement_evidence(negotiation_id=row["negotiation_id"])
-    if evidence is None:
-        raise ValueError("settlement source evidence is missing")
-    if credit_delivery(evidence, require_verified=False).owner != owner:
-        raise PermissionError("settlement result belongs to another principal")
-    public = dict(row["public_result"])
-    connection = public.pop("connection_details", None)
-    result = {
-        "escrow_uid": row["public_ref"], "negotiation_id": row["negotiation_id"],
-        "status": row["status"], "settlement_ref": evidence.settlement_ref,
-        "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "fulfillment_uid": row.get("fulfillment_uid"), "reason": row.get("reason"),
-    }
-    if connection:
-        result["connection_details"] = connection
-    if public:
-        result["tenant_credentials"] = public
-    if row.get("credentials_ref"):
-        private = await asyncio.to_thread(
-            ApiCreditPrivateResultRepository(db.db_path).get,
-            credentials_ref=row["credentials_ref"], owner=owner,
-        )
-        if private is not None:
-            result.setdefault("tenant_credentials", {})["secret"] = private.secret
-    return result
-
-
-async def progress_result(db: Any, row: Mapping[str, Any], *, buyer: Identity, seller: Identity) -> SettleResult:
-    """Project issuance progress for its buyer; terminal progress answers 200, open progress 202."""
-    result = await project_progress(db, row, owner=buyer)
-    result["buyer_principal"] = buyer.model_dump(mode="json")
-    result["seller_principal"] = seller.model_dump(mode="json")
-    return SettleResult(200 if row["status"] in {"ready", "failed"} else 202, result)
 
 
 @dataclass(frozen=True)
@@ -236,29 +125,6 @@ def build_api_credit_accepted_artifacts(
     return artifacts
 
 
-def _domain_order(row: Any) -> dict[str, Any]:
-    """Project a stored listing row onto the domain listing's own fields.
-
-    `order` here is whatever `load_listing` returned -- this storefront's
-    own database row, carrying its bookkeeping columns (`paused`,
-    `publication_clauses`, `seller_principal`, `oracle_address`, the agent
-    URL, and so on). The domain's `normalize_listing` hook validates against
-    `ApiCreditsListing`, which sets `extra="forbid"`, so a raw row fails
-    with `extra_forbidden` errors.
-
-    Narrowed here rather than by relaxing the model. `ApiCreditsListing`
-    describes the domain payload *carried by a registry listing*, which is
-    untrusted wire input, and forbidding extras there is the guard that
-    makes it a contract. A local row passed where a wire payload belongs is
-    the local side's to project.
-
-    Field names are read off the model, so a field added to the domain
-    listing is carried without editing this.
-    """
-    fields = frozenset(ApiCreditsListing.model_fields)
-    return {key: value for key, value in dict(row).items() if key in fields}
-
-
 async def _prepare_alkahest_settlement(
     *,
     sqlite_client: Any,
@@ -267,9 +133,14 @@ async def _prepare_alkahest_settlement(
     negotiation_id: str,
     mechanism_client: Any,
     chain_name: str,
+    load_listing: Callable[[str], Awaitable[Mapping[str, Any]]],
     request: Any = None,
 ) -> Any:
-    """Verify and snapshot the exact durationless API-credit obligation."""
+    """Verify and snapshot the exact durationless API-credit obligation.
+
+    ``load_listing`` returns the listing as the buyer accepted it, which the
+    escrow is verified and the plan rebuilt against.
+    """
     if request is None:
         raise ValueError("settlement request is required")
 
@@ -297,9 +168,7 @@ async def _prepare_alkahest_settlement(
         raise ValueError("settlement seller principal does not match local identity")
 
     listing_id = thread.get("our_listing_id")
-    order = (
-        await sqlite_client.load_listing(listing_id=listing_id) if listing_id else None
-    )
+    order = await load_listing(listing_id) if listing_id else None
     if not order:
         raise ValueError(
             f"Seller's order {listing_id!r} (from negotiation "
@@ -375,7 +244,7 @@ async def _prepare_alkahest_settlement(
         mechanism_receipt={"escrow_uid": escrow_uid},
         fulfillment_input=ApiCreditsFulfillmentInput(
             chain_name=proposal_chain or chain_name,
-            order=_domain_order(order),
+            order=dict(order),
             quantity=int(terms["quantity"]),
             key_mode=str(terms.get("key_mode") or "new"),
             key_id=terms.get("key_id"),
@@ -439,7 +308,7 @@ class ArkhaiPaymentsSellerStage:
         if ttl <= 0 or not quantity:
             return
         try:
-            binding = await api_credit_listing_binding(repository, acceptance.listing_id)
+            binding = await listing_binding(repository, acceptance.listing_id)
             if binding is None:
                 raise RuntimeError("API-credit listing has no durable binding")
             claim: dict[str, Any] = {
@@ -574,12 +443,22 @@ class AlkahestSellerStage:
         pass
 
     async def prepare(self, **context: Any) -> Any:
-        composition = context.pop("composition", None)
-        prepared = await _prepare_alkahest_settlement(**context)
+        composition = context.pop("composition", None) or container.resolved_settlement_composition
+        if composition is None:
+            raise ValueError("settlement composition is unavailable")
         db = context["sqlite_client"]
+
+        async def load_accepted(listing_id: str) -> Mapping[str, Any]:
+            return await accepted_listing(
+                composition.contributions, db, domain=composition.domain,
+                negotiation_id=context["negotiation_id"], listing_id=listing_id,
+            )
+
+        prepared = await _prepare_alkahest_settlement(**context, load_listing=load_accepted)
         thread = await db.load_negotiation_thread_row(negotiation_id=context["negotiation_id"])
         agreement, raw = accepted_agreement(thread)
         evidence = settlement_evidence(
+            composition.contributions,
             agreement, raw, reference=prepared.mechanism_ref, status="verified",
             source={"chain_name": context["chain_name"], "escrow_uid": prepared.mechanism_ref,
                     "obligation_index": prepared.selected_obligation_index,
@@ -590,8 +469,7 @@ class AlkahestSellerStage:
         )
         await db.save_settlement_evidence(evidence)
         return replace(prepared, fulfillment_input=replace(
-            prepared.fulfillment_input, sqlite_client=db,
-            composition=composition or container.resolved_settlement_composition,
+            prepared.fulfillment_input, sqlite_client=db, composition=composition,
         ))
 
     async def _start(self, *, db: Any, composition: Any, coordinator: Any, reference: str, body: Any) -> dict[str, Any] | None:
@@ -610,7 +488,9 @@ class AlkahestSellerStage:
         row = await self._start(db=db, composition=composition, coordinator=coordinator, reference=reference, body=body)
         if row is None:
             raise SettlementRefusal(409, "settlement progress is unavailable")
-        return await progress_result(db, row, buyer=body.buyer_principal, seller=signer.identity)
+        return await progress_result(
+            container.SELLING_CONTRIBUTIONS, db, row, buyer=body.buyer_principal, seller=signer.identity
+        )
 
     async def status(self, *, db: Any, composition: Any, coordinator: Any, reference: str, body: Any, signer: Any, **_context: Any) -> SettleResult | None:
         row = await db.load_issuance_progress(reference=reference)
@@ -630,7 +510,9 @@ class AlkahestSellerStage:
                 raise SettlementRefusal(409, str(exc)) from exc
             except Exception:
                 logger.exception("Settlement re-drive remains pending for %s", body.negotiation_id)
-        return await progress_result(db, row, buyer=body.buyer_principal, seller=signer.identity)
+        return await progress_result(
+            container.SELLING_CONTRIBUTIONS, db, row, buyer=body.buyer_principal, seller=signer.identity
+        )
 
     async def refund(self, *, db: Any, composition: Any, negotiation_id: str) -> SettleResult:
         raise SettlementRefusal(409, "this settlement mechanism refunds through its own path")
@@ -651,7 +533,7 @@ class AlkahestSellerStage:
             evidence = await db.load_settlement_evidence(negotiation_id=params.negotiation_id)
             if evidence is None:
                 raise ValueError("settlement source evidence is unavailable")
-            credit_delivery(evidence)
+            delivery(container.SELLING_CONTRIBUTIONS, evidence)
             thread = await db.load_negotiation_thread_row(negotiation_id=params.negotiation_id)
             agreement, raw = accepted_agreement(thread)
             evidence.validate_identity(
@@ -679,7 +561,9 @@ class AlkahestSellerStage:
                 return FulfillmentOutcome(status="failed", reason=f"issuance_error: {exc}")
             if result.get("status") != "fulfilled":
                 return FulfillmentOutcome(status="failed", reason=result.get("message") or "credit issuance failed")
-            await persist_delivery(db, evidence, result, public_ref=prepared.mechanism_ref)
+            await persist_delivery(
+                container.SELLING_CONTRIBUTIONS, db, evidence, result, public_ref=prepared.mechanism_ref
+            )
             return FulfillmentOutcome(
                 status="fulfilled",
                 fulfillment_ref=result.get("fulfillment_uid"),
@@ -696,33 +580,49 @@ class AlkahestSellerStage:
         if result.get("status") != "fulfilled":
             return result
         issuance = result["issuance"]
-        try:
-            if client is None:
-                raise ValueError("Alkahest attestation client is unavailable")
-            source = evidence.evidence["source"]
-            if issuance.committed_at_unix > int(source["funding_expiration_unix"]):
-                raise ValueError("credit grant committed after accepted funding expiry")
-            body = ApiCreditsIssuanceEvidenceBodyV1(
-                condition_anchor=evidence.settlement_ref, obligation_ref=source["obligation_ref"],
-                fulfillment_id=issuance.fulfillment_id, grant_id=issuance.grant_id,
-                service=issuance.service, resource_id=issuance.resource_id,
-                quantity=issuance.quantity, key_mode=issuance.key_mode, key_id=issuance.key_id,
-                owner=issuance.owner, buyer=credit_delivery(evidence).owner,
-                claimant=composition.local_principal, issuer=composition.local_principal,
-                committed_at_unix=issuance.committed_at_unix, request_digest=issuance.request_digest,
-            )
-            publication = await asyncio.to_thread(composition.evidence_service.publish, body)
-            async with chain_tx_lock(None):
-                fulfillment_uid = await client.string_obligation.do_obligation(
-                    publication.canonical_evidence, evidence.settlement_ref,
-                )
-            return {**result, "fulfillment_uid": fulfillment_uid}
-        except Exception as exc:
+
+        async def roll_back(reason: str) -> dict[str, Any]:
             rollback = await composition.credits_client.rollback_issuance(
                 settlement_ref=evidence.settlement_ref,
                 issuance={"key_id": issuance.key_id, "quantity": issuance.quantity},
                 key_mode=issuance.key_mode,
             )
             stage_event("settlement", "failed_after_issuance", settlement_ref=evidence.settlement_ref,
-                        key_id=issuance.key_id, rollback=rollback, error=str(exc))
-            return {"status": "error", "message": f"On-chain fulfillment failed after issuance: {exc}"}
+                        key_id=issuance.key_id, rollback=rollback, error=reason)
+            return {"status": "error", "message": f"On-chain fulfillment failed after issuance: {reason}"}
+
+        try:
+            if client is None:
+                raise ValueError("Alkahest attestation client is unavailable")
+            source = evidence.evidence["source"]
+            if issuance.committed_at_unix > int(source["funding_expiration_unix"]):
+                raise ValueError("credit grant committed after accepted funding expiry")
+            body = composition.evidence_service.body(
+                condition_anchor=evidence.settlement_ref, obligation_ref=source["obligation_ref"],
+                fulfillment_id=issuance.fulfillment_id, grant_id=issuance.grant_id,
+                service=issuance.service, resource_id=issuance.resource_id,
+                quantity=issuance.quantity, key_mode=issuance.key_mode, key_id=issuance.key_id,
+                owner=issuance.owner, buyer=delivery(composition.contributions, evidence).owner,
+                claimant=composition.local_principal, issuer=composition.local_principal,
+                committed_at_unix=issuance.committed_at_unix, request_digest=issuance.request_digest,
+            )
+            publication = await asyncio.to_thread(composition.evidence_service.publish, body)
+        except Exception as exc:
+            return await roll_back(str(exc))
+        attestation = await AlkahestFulfillmentPublisher(client).publish(
+            condition_anchor=evidence.settlement_ref, data=publication.canonical_evidence,
+        )
+        if attestation.outcome == "published":
+            return {**result, "fulfillment_uid": attestation.reference}
+        if attestation.outcome == "outcome_unknown":
+            # The chain may hold the attestation, so the grant stands and the
+            # submission is not repeated; an operator reconciles it.
+            stage_event("settlement", "attestation_outcome_unknown", settlement_ref=evidence.settlement_ref,
+                        key_id=issuance.key_id, reason=attestation.reason)
+            return {
+                "status": "error",
+                "message": f"On-chain fulfillment outcome is unknown after issuance ({attestation.reason}); "
+                "an operator must reconcile it",
+                "grant_unknown": True,
+            }
+        return await roll_back(f"attestation {attestation.outcome} ({attestation.reason})")

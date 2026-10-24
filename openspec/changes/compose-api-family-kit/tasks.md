@@ -1448,13 +1448,54 @@ and under `apicredits_storefront/`: `negotiation_runtime.py`,
 `services/listing_service.py`, `services/publication_service.py`,
 `services/capacity_client.py`, `services/system_service.py`.
 
-- [ ] 6.1 `negotiation.py`: the negotiation runtime builder, the seller-round
+- [x] 6.1 `negotiation.py`: the negotiation runtime builder, the seller-round
       hook, and the round-zero, quota, and key-ownership guards moved from the
       storefront and the domain library, with the kind literal, refusal codes,
       and guard names read from the bundle; the escrow-specific guard leaves
       for section 8. `pricing.py`: the per-credit pricing helpers from
       `listings/pricing.py`. (D7.)
-- [ ] 6.2 `publication.py` and `listings.py`: the publication hooks, runtime,
+      *Done 2026-10-24.* `negotiation.py` holds the guards as factories
+      (`make_round_zero_guard`, `make_quota_guard`) and
+      `key_owned_by_buyer_principal`, registered by `register_guards` under
+      the names `default_guards(bundle)` spells: the opening guard's from the
+      kind's stem (`api_credits_round_zero_guard`), the quota and key guards
+      under their family names, so a configured chain naming any of them
+      resolves as before; the seller round (`default_seller_round_hook`,
+      `load_chain`, `seller_reference_amount`); and
+      `build_negotiation_runtime` with its hooks, `decode_terms`,
+      `reference_amount`, `place_quota_hold`, and `persist_acceptance` at
+      module level so each is testable. What the bundle supplies: the kind
+      (the plan's service-terms key and the opening guard's name), the
+      listing schema (a listing is the domain's when its resource validates,
+      which replaces the `kind == "api_credits.v1"` checks in the quota guard
+      and the strategy), the projection (the quota guard's resource), and the
+      table prefix (`api_credit_quantity_unavailable`, the one refusal code
+      that spelled the domain). The other refusal codes — `credit_quantity_*`,
+      `key_disposition_invalid`, `key_*`, `quota_exhausted` — are the family's,
+      shared with the authority's issuance re-check, as the withdrawn
+      inference copy kept them; free-text messages that read "API-credit" now
+      read "credit". The escrow-specific parts are injected: the opening
+      guard's escrow canonicalization is `arkhai_apicredits.negotiation.policies.accepted_escrow_proposal`,
+      bound into the domain contract's seller round, and an acceptance that
+      selects no settlement option goes through an `EscrowAcceptance`, which
+      the storefront's `settlement_stages.AlkahestEscrowAcceptance` implements
+      over the Alkahest builder; section 8 moves both. Without one, an escrow
+      proposal is refused. `selling` imports no mechanism kit, and names no
+      mechanism: the round's chain address books arrive as plain paths in
+      `RoundSettings`. `load_chain` registers the guards into
+      `market_policy`'s process-wide registry before it loads any chain, where
+      the domain library registered them once on import; the registry keys
+      them by name, so one process composes one domain's guards. `pricing.py`: the
+      helpers, `determine_strategy(bundle, listing)`, and
+      `domain_listing_resource`. Deleted: `storefront_round.py` and
+      `listings/pricing.py`; `policies.py` keeps only the escrow step; the
+      domain library bumps to 0.10.0 and moves `arkhai-kit-identity`, which
+      only its tests now import, to its dev group. Unit
+      (`test_negotiation_guards.py`, `test_pricing.py`,
+      `test_selection_dispatch.py`, under the neutral `example` bundle; the
+      runtime's `decode_terms`, quota-snapshot refusals, and refusal of an
+      escrow with no escrow step are unit-tested there too).
+- [x] 6.2 `publication.py` and `listings.py`: the publication hooks, runtime,
       publish, close, converge, and the listing service, the publication
       mapping and guards taken from the bundle; `capacity.py` from
       `capacity_client.py`; `lifecycle.py` from `lifecycle_steps.py`, with its
@@ -1464,27 +1505,372 @@ and under `apicredits_storefront/`: `negotiation_runtime.py`,
       status read with every loop's state; `publish_route.py` from
       `listing_publication.py`, the publish-from-quota route's contract and
       typed clients, already in the route-contract form. (D7.)
-- [ ] 6.3 The API-credits storefront composes part two and deletes the moved
+      *Done.* Each module takes its collaborators as arguments where the
+      storefront's read its container and settings. `capacity.py`:
+      `read_capacity_sites` and `QuotaCapacity`, one cached runtime over
+      injected site, signer, and reconciler providers. `publication.py`:
+      `QuotaPublicationHooks`, whose candidate check now validates the
+      resource as the domain's and compares the bundle's offering mode;
+      `QuotaPublication` (publish, close, converge, the three reconciliation
+      passes, and the reconciler the capacity runtime runs) over a
+      `RegistryPublication` provider. `listings.py`: `ListingService`, whose
+      listing resource is the bundle's `publication_mapping` of the request
+      over its `QuotaSource`, refused by any of the bundle's
+      `publication_guards` before anything is written; accepted escrows are
+      the publication form of an injected `escrow_mechanism`, with injected
+      release conditions, where the storefront compared `alkahest.v1`.
+      `lifecycle.py`: `loop_controller`, the loop names and disclosed errors,
+      `StorefrontLoops` (every step, `register_steps`, `register_loops`, and
+      the poller fan-out), `start_background_tasks`, and `ListingSeed`, which
+      passes the `[seed]` table's listing keys to the mapping and finds an
+      existing seeded listing through the projection. `system.py`:
+      `SystemService` with `status(paused, loops)`, the administrator's read
+      with `lifecycle`. `publish_route.py`: the path, operation,
+      `seller_resource`, a `PublishFromQuotaRequest` base holding the fields
+      the service reads, the response, and `ListingClient`/`SyncListingClient`
+      over a domain's request model. The acceptance hook runs first in
+      `persist_acceptance`, before the accepted listing and the plan are
+      recorded. Changes a reader would notice: the publication artifacts'
+      resources no longer carry `service`, which no mechanism reads; the seed
+      registers its quota's `resource_type` as the bundle's offering mode,
+      `api_credits` as before (the authority reads none, 4.5); the seed's log
+      line names no service; the seed now hands the mapping every `[seed]` key
+      that names neither the quota (`resource_id`, `total_units`), the
+      settlement keys the storefront names (its Alkahest escrow's), nor a
+      field the listing service reads, where it named four keys, and finds an
+      existing seeded listing across every page; the seed's admin client and
+      the health checks' mechanism entries (`alkahest`) are the storefront's.
+      Unit (`test_capacity.py`, `test_listings.py`, `test_listing_seed.py`,
+      `test_publish_route.py`, `test_reconcile_order.py`,
+      `test_storefront_loops.py`); library integration (`test_publication.py`
+      against core's real persistence, `test_system.py` against a real SQLite
+      file). The status read is tested with no loop controller; its loop states
+      are the storefront's `test_lifecycle_status.py`. Publish,
+      close, and converge, the background tasks, and the status route are
+      exercised through the storefront's suites, not in `selling`'s.
+- [x] 6.3 The API-credits storefront composes part two and deletes the moved
       modules; its `startup.py` keeps only the preflight that is wiring. The
       three omitted guard tests and the negotiation integration tests pass
       against the kit. (D13.)
-- [ ] 6.4 Reconciliation reads every listing, not the first 200: the close,
+      *Done.* Deleted: `negotiation_runtime.py`, `lifecycle_steps.py`,
+      `listing_publication.py`, and `services/` `listing_service.py`,
+      `publication_service.py`, `capacity_client.py`, `system_service.py`.
+      `startup.py` holds the credits-service preflight alone. The wiring:
+      `container.py` holds `QUOTA_CAPACITY`, `QUOTA_PUBLICATION`, and
+      `STOREFRONT_LOOPS` beside the bundle, and the API-credits
+      `PublishFromQuotaRequest` (the base plus `service_name`, `description`,
+      `openapi_url`, `base_url`, so the recorded OpenAPI component is
+      unchanged); `utils/config.py` reads the capacity sites, poll interval,
+      watchdog policy, loop settings, round settings, system settings, and the
+      `[seed]` table, whose `service_name` defaults to `service` as before;
+      `server.py` builds the negotiation runtime, listing service, system
+      service, and seed over them and holds `_startup_tasks`;
+      `domain_runtime.py` binds the contract's seller round to the bundle and
+      the escrow step and its publication to `QUOTA_PUBLICATION`;
+      `settlement_composition.py` gains the seed's Alkahest escrow, and
+      `settlement_stages.py` the escrow acceptance, both section 8's. The
+      storefront drops `arkhai-core-registry-client`, moves
+      `arkhai-kit-policy` and `arkhai-kit-site-client`, which only its tests
+      import, to its dev group, keeps its exact capacity-publication pin with
+      a stated runtime reason, requires `arkhai-api-selling>=0.2.0`, and bumps
+      to 0.13.0; `selling` bumps to 0.2.0 and declares the registry client,
+      the site client, and the storefront kit. "The three omitted guard
+      tests" is read as `domains/apicredits/tests/test_negotiation_selection.py`'s
+      three opening-guard cases, which now run in `selling` against the kit's
+      guard; the guard, quota, ownership, pricing, and selection-dispatch
+      cases of the storefront's `test_concept_modules.py` and
+      `test_selection_dispatch.py`, the reconcile-order test, and the publish
+      client test moved to `selling` with them. The storefront's negotiation
+      integration tests (`test_sync_negotiation.py`,
+      `test_exact_selection_api.py`, `test_credits_buy_selection.py`,
+      `test_credits_negotiate_cli.py`, `test_force_accept_api.py`,
+      `test_trading_pause_api.py`) run against the kit through
+      `server.build_api_credit_negotiation_runtime`, their seams now the
+      container's `QUOTA_CAPACITY` and the server's `lookup_key_record`; a
+      storefront unit test holds the guard names API credits' configuration
+      uses.
+- [x] 6.4 Reconciliation reads every listing, not the first 200: the close,
       source-mismatch, and reopen passes in `publication_service.py` call
       `list_listings(..., limit=200)` once and never page, so older listings
       can stay open or closed wrongly for good. Page through every listing
       with a stable cursor as they move into `selling`, and prove it with more
       than 200 listings at library integration. (Found by the external
       implementation review of section 5; the behaviour predates this change.)
-- [ ] 6.5 API-credit threads take their listing's binding at opening, as
+      *Done.* `publication.all_listings(db, status=...)` reads every page of
+      every listing, in the store's order, and filters by status after:
+      paging over all statuses is what keeps the offset stable while a pass
+      closes or reopens listings, and a listing created meanwhile only
+      repeats a row, which is dropped. Core's `list_listings` offers offset
+      paging only, ordered by `created_at` with no tie-break, so two listings
+      created in the same microsecond could swap across a page boundary; a
+      keyset cursor would change the core storefront again, and the test
+      gives every row its own timestamp. The tests prove every page is read;
+      that a pass changing statuses cannot shift a page follows from paging
+      over all statuses and is not exercised.
+      Library integration (`test_publication.py`, 250 listings in core's real
+      persistence): an exhausted quota closes all 250 and a replenished one
+      reopens them, and a source mismatch closes all 250; both tests fail
+      with the paging reduced to one page.
+- [x] 6.5 API-credit threads take their listing's binding at opening, as
       the negotiation protocol's opening requirement has them do and the VM and
       bare-metal runtimes already do (`copy_listing_binding_to_thread` in the
       opening hook); today they are bound only when an acceptance is recorded.
       (Found by the fresh-context check of section 5's review round; the
       unbound opening predates this change.)
-- [ ] 6.6 Verification: `make test-api-selling` (unit, library integration),
+      *Done.* The opening hook binds the thread before it records the credit
+      terms; recording at acceptance still copies, which is a no-op on a bound
+      thread, so a thread opened before this change is bound when accepted.
+      Tested through the composed negotiation runtime against real SQLite, with
+      no app (`test_sync_negotiation.py::test_an_opened_thread_takes_its_listings_binding`,
+      in the storefront's `integration/` beside the file's other runtime tests):
+      a countered opening's thread carries its listing's site and domain
+      binding; the test fails with the opening copy removed.
+- [x] 6.6 Verification: `make test-api-selling` (unit, library integration),
       `make -C domains/apicredits/storefront test` (application integration,
       baselines zero), `make test`, `make check-packaging`. End-to-end:
       `e2e_credits_deal`.
+      *Done 2026-10-24.* `selling` 151 passed (unit over fakes under the
+      `example` bundle; library integration of the stores, the accepted
+      listing, and paging against real SQLite). API-credits storefront 168
+      (unit and application integration; 192 before: 26 cases moved to
+      `selling` with their code, 2 added), with 1.5's route,
+      OpenAPI, authentication, refusal, health, configuration, and schema
+      baselines and the storefront pins unchanged, run after `make reinit`
+      installed the current `selling` wheel. Domain library 16 (unit and
+      library integration; 19 before, the 3 opening-guard cases moved),
+      buyer 27, service 42, e2e unit 80. `make -k test`: every suite passed
+      except, all inherited and recorded by 1.7 to 5.6, the provisioning
+      dotenv-layering unit test, the three provisioning IaC relay-teardown
+      shell tests, the VM storefront's two Alkahest toolchain tests, and the
+      release-tooling cases that read another session's stale local checkout
+      inside the tree or need GNU make's `--eval`; one failure was this section's, the
+      release manifest listing `arkhai-api-selling` before the storefront kit
+      it now depends on, fixed in the manifest. Helm is
+      not installed, so the render checks are unrun. On a copy without that
+      checkout: `make check-packaging` passes (uv setup, locks — the
+      selling, domain, storefront, buyer, and `e2e-tests` locks relocked under
+      uv 0.11.17 — Python version, layout, and all four architecture parts),
+      release tooling passes but for `--eval`, comment hygiene passes, and
+      `make check-change` reports only the two `api-family` citations
+      closeout creates. End-to-end: owed to validation. `e2e_credits_deal`
+      negotiates through the kit's runtime and guards on a listing the seed
+      publishes through `selling`, and reconciles it through the capacity
+      pollers; `e2e_credits_payment_deal` does the same under payments; no
+      scenario was added.
+      **Handoff.** The storefront's composition of `selling` is
+      `container.py` (`QUOTA_CAPACITY`, `QUOTA_PUBLICATION`,
+      `STOREFRONT_LOOPS`, `PublishFromQuotaRequest`) and `server.py`
+      (`build_api_credit_negotiation_runtime`, `build_listing_service`,
+      `build_system_service`, `listing_seed`, `_startup_tasks`); tests patch
+      the container's singletons and the server's `lookup_key_record`.
+      Section 7's controllers bind route services over these. Section 8 moves
+      `AlkahestEscrowAcceptance`, `SEED_ESCROW_SETTINGS` and
+      `seed_accepted_escrows`, `policies.accepted_escrow_proposal`, and the
+      Alkahest health check. The exception row for `selling`'s core-storefront
+      edge now names the stage log, placement policies, status models, and
+      escrow backfill section 6 added; the owning change's design names none
+      of them. Refusal messages that read "API-credit" now read "credit"
+      (D7); no baseline records them. `server.py` keeps
+      `ApiCreditsStorefrontServices` as before. Left for the owner from the
+      second fresh-context check: the refusal-message wording above against
+      the `api-credits` delta's unchanged error bodies; the exception row's
+      wider reason, whose added services no change yet owns; the
+      capacity-publication pin's runtime reason; and whether D12's "its seed"
+      means the `[seed]` values, which API credits keeps, or the seed's code,
+      which moved. Also left: `selling`'s lifecycle still names the payments
+      reconciliation loop and runs core's escrow-obligation backfill, and the
+      pricing and capacity refusals name the storefront's configuration keys;
+      `start_background_tasks` takes no thread-store seam, so the startup test
+      patches the kit's import.
+      **Review round (2026-10-24).** An external review of the section's
+      commit (`7b097b91a`) raised nine findings. The owner withdrew the first:
+      no `selling` wrapper pages listings by domain, and core's
+      `list_listings` has no page cap. The owner made the transactional opening a
+      follow-up, task 7.3; section 6 claims none. The owner accepted the status
+      principal as an additive baseline change. The fixes, in one commit:
+      - *Stable reconciliation paging.* Core's `list_listings` orders by
+        `(created_at, listing_id)` and takes a `before` keyset cursor
+        (`arkhai-core-storefront` 0.17.0); `all_listings` pages by it. Core
+        integration (`test_listing_pages.py`): seven listings sharing one
+        timestamp, closed as they are read three to a page, are each read once,
+        and fail with the tie-break removed. `selling` library integration:
+        250 listings sharing one timestamp are each read once while a store
+        wrapper closes every page it serves. The exact-pin cascade follows:
+        capacity publication 0.10.3, the VM and bare-metal storefronts 0.17.2,
+        the provisioning service 0.17.4, and the VM storefront's exact pin on
+        bare metal; the core storefront client 0.27.0 for the principal, with
+        the provisioning service's exact pin on it.
+      - *The amount rate.* An escrow or option prices from its one `amount`
+        rate in a per-credit unit, wherever it sits in the list; two amount
+        rates, another unit, or a non-integer value are refused, and the floor
+        applies only where none is stated. Unit: amount after a duration rate,
+        no amount rate, duplicate, invalid unit, invalid value.
+      - *Byte-identical refusal bodies.* The bundle's `refusal_noun`, which API
+        credits sets to `API-credit`, restores every message section 6 had
+        generalized. Application integration (`test_refusal_bodies.py`,
+        through the canonical client with the response read at the transport):
+        the 409 quota refusal and the 404 pricing refusal bodies equal those
+        served before the kit, and a continuation over changed recorded terms
+        raises its unchanged message.
+      - *Guards on every publication path.* The publication hook runs the
+        bundle's guards and refuses with `PublicationRefused`; the reopen pass
+        leaves a refused listing closed and reopens the rest; an administrator's
+        resume is refused with 409 before anything is unpaused. Library
+        integration: publish refused, reconciliation reopening all but the
+        refused listing; storefront unit: the resume refused, the listing still
+        paused; creation keeps its pre-write check.
+      - *The status principal.* `HealthResponse` and the client's model carry
+        an optional `principal`; the API-credits `health` and `openapi`
+        baselines were re-recorded once, and the re-recording differs from the
+        committed fixtures only by that field (routes, authentication,
+        refusals, and configuration byte-identical). Application integration:
+        the signed status read returns the storefront's principal as a typed
+        field.
+      - *Mechanism lifecycle out of `selling`.* `StorefrontLoops` takes
+        contributed loops (`ContributedLoop`) and `start_background_tasks`
+        contributed startup steps and an injected thread store; the API-credits
+        container contributes payment reconciliation and the server the escrow
+        backfill, which task 8.7 moves to the mechanism distributions and after
+        which no residue is allowed. Unit: a storefront contributing nothing
+        registers only its own three loops and runs no startup step; a
+        contributed loop and step are registered and run in order. The exception
+        row no longer names the escrow backfill.
+      - *Reproducible targeted verification.* The root `test-api-selling` now
+        depends on the root `dist-api-selling`, which builds the selling
+        library's whole internal wheel set (adding the Alkahest kit the
+        storefront kit needs). From a copy with no wheelhouse and no
+        environments, `make test-api-selling` passes, 161.
+      Evidence, from a clean copy with no `.dist`, environments, or stale
+      checkout: `make test-api-selling` 161 passed (before and after
+      `make dist`); `make -C domains/apicredits/storefront test` 173 passed;
+      `make check-architecture` and `make check-packaging` pass;
+      `make check-comment-hygiene` passes; `make check-change` reports only the
+      two `api-family` citations closeout creates; `git diff --check` is clean.
+      `make -k test` from that copy: core 123, core storefront 220 (2
+      skipped), its client 62, capacity publication 97, storefront kit 123,
+      VM storefront 1103 unit and 446 integration, bare metal 134 and its
+      storefront 444, `selling` 161, the API-credits domain 16 and storefront
+      173, each passing but for the failures 1.7 to 5.6 record: the VM
+      storefront's two Alkahest toolchain tests, the three IaC relay-teardown
+      shell tests, and GNU make's `--eval` case. The provisioning service,
+      whose exact client pin the copy predated, was run in place after the
+      pin: 661 unit (the dotenv-layering case failing, as 1.7 records) and 485
+      integration. Helm is not installed, so the render checks are unrun.
+
+      **Second review round (2026-10-24).** A re-review raised two blockers.
+      - *Correction: the clean-copy packaging claim above was overstated.* The
+        copy it was made from kept a `.dist` built earlier, so the wheelhouse
+        was not clean. From a copy holding only tracked files, `make
+        test-api-selling` passed but its environment refresh resolved
+        `arkhai-kit-config` from PyPI, because the root `dist-api-selling` did
+        not build it, and rewrote the `selling` lock; `make check-packaging`
+        then reported that lock. The reviewer's run reported 232 lock problems
+        from its own starting state; the cause found here was this one. The
+        root `dist-api-selling` now builds the config kit too, and the root
+        `test-api-selling` runs `scripts/uv_project.py require-wheels`, which
+        refuses before any refresh when the wheelhouse lacks a wheel the
+        project installs, instead of letting the refresh fall back to an
+        index (`docs/development/BUILD_AND_PACKAGING.md`, project
+        environments). Unit: `require-wheels` names each internal package
+        without a wheel (`scripts/tests/test_uv_project.py`, 14 passed).
+      - *Guards on divergence repair.* `QuotaPublication.converge` loads each
+        divergent listing that is not closed and leaves out, reported
+        unrepaired, any the bundle's guards refuse; the kit's repair republishes
+        an open listing without the publication hook, so it is never given one.
+        Unit (`test_reconcile_order.py`): a refused open listing is reported
+        unrepaired and never republished while its neighbours and a closed
+        listing are repaired; it fails with the filter removed.
+      Evidence, from a copy of the tracked files only (no `.dist`, no
+      environments, no stale checkout), in the reviewer's order: `make
+      test-api-selling` 162 passed, `require-wheels` passing; `make dist`
+      passes; `make check-packaging` passes with every lock unchanged by the
+      run; `make test-api-selling` again 162 passed;
+      `make -C domains/apicredits/storefront test` 173 passed; `make
+      check-architecture` and `make check-comment-hygiene` pass; `make
+      check-change` reports only the two `api-family` documents closeout
+      creates; `git diff --check` is clean. `make test-release-tooling`: 1103
+      passed, 11 skipped, 2 failed — one because the copy is not a git
+      repository (it passes in the checkout), and GNU make's `--eval` case,
+      as 1.7 records.
+
+      **Owner decisions (2026-10-24).** Two of the questions left above are
+      settled. *Correction to 6.3:* the API-credits storefront no longer keeps
+      an exact capacity-publication pin with a runtime reason; its source does
+      not import the kit, so the declaration moves to its dev group, where the
+      three storefront tests that import it read it, and the runtime reason is
+      removed. The lock still resolves 0.10.3, through `selling`. *D12:* "its
+      seed" is the `[seed]` values API credits keeps; the seed code is the
+      family's, in `selling`, and D12 now says so. *Exception row:* the row
+      and its owner stay, `kit-owned-storefront-auth-and-persistence` being
+      the follow-up that resolves `selling`'s edge; its reason names each
+      import and no destination, since that change's design has settled none.
+      (Its open question names the capacity protocols, not the stage log or
+      the status models; the handoff above overstates this as naming none.)
+      *Configuration key names:* `selling`'s refusals keep their
+      byte-identical text, and D7 now says what that text is: `[capacity.sites]`
+      is API credits' key; `[seller.pricing].default_min_price` is no
+      storefront's — API credits reads `[pricing].default_min_price`, as the
+      compute storefronts do — so the pricing refusal does not name the key an
+      operator edits. Naming the composition's key is task 7.4.
+
+      **Third review round (2026-10-24).** A re-review raised five findings,
+      all within this section.
+      - *The repair validates the exact payload.* The earlier fix checked a
+        listing, then let the kit reload and republish whatever it found, and
+        read a malformed resource as nothing to refuse. The kit's repair
+        republishes a diverged open listing as its repository returns it,
+        without the hook it runs on every other publish, and the VM storefront's
+        hook expects a typed payload, so the kit cannot run the hook on a stored
+        row for every domain. `QuotaPublication.converge` therefore runs the
+        kit's repair over a view of the store whose `load_listing` runs the
+        publication hook — the domain's resource, the binding's mode, the
+        guards — on the very object the kit will send, and returns nothing for
+        a listing the hook refuses; the listing is not republished and stays
+        diverged. Library integration (`test_publication.py`, the real store
+        and a two-registry fake): of three listings diverged at one registry,
+        the guard-refused and the foreign-resource listings are not
+        republished and remain diverged, the third is republished and reopened
+        there alone; both cases fail with the hook call removed. The kit-level
+        seam — a hook that builds a repair candidate for every domain — is the
+        capacity-publication kit's to add, not this section's.
+      - *An accurate repair report.* With no pre-filter, the report is the
+        kit's, read from the store after the repairs. Library integration: a
+        refused listing another pass repairs meanwhile is not reported
+        unrepaired. The unit test over a fake runtime is removed, since nothing
+        of its own remains to test.
+      - *`require-wheels` checks the locked version.* It names each internal
+        package as `name==version` whose wheel at the lock's version is absent,
+        so a stale same-name wheel no longer satisfies it (`scripts/tests`,
+        14 passed: a wheel at another version is still reported).
+      - *The pricing key.* D7 and the promotion record claimed the refusal
+        text named the family's configuration layout. It names
+        `[seller.pricing].default_min_price`, which no storefront spells (all
+        read `[pricing]`), while `[capacity.sites]` is API credits' key; D7
+        now says so, the text stays byte-identical, and naming the
+        composition's key is task 7.4.
+      - *The exception row.* Its reason and the owner-decision note above no
+        longer assert destinations the owning change has not settled.
+      - *Inherited, not this section's:* the kit's convergence reads each
+        listing's status with its divergence and repairs to that status, so a
+        status that changes between the read and the repair is repaired to
+        the earlier one until the next pass; the race is the
+        capacity-publication kit's, and predates this change.
+      - *Fourth round (2026-10-24):* `require-wheels` checks every (normalised
+        name, version) pair the lock records, matching wheels by their
+        normalised name, so a name locked at two versions needs both wheels
+        (`scripts/tests`, 15 passed). Task 7.4 is now the decision — the
+        refusals name the composition's key, with the three affected 404
+        bodies named and no baseline to re-record — and the promotion record
+        carries only that final contract.
+      Evidence, from a copy of the tracked files only, in the reviewer's order:
+      `make test-api-selling` 163 passed; `make dist` passes; `make
+      check-packaging` passes with every lock unchanged; `make test-api-selling`
+      again 163; `make -C domains/apicredits/storefront test` 173 passed;
+      `make test-release-tooling` 1103 passed, 11 skipped, 2 failed (the copy
+      is not a git repository; GNU make's `--eval`, as 1.7 records); `make
+      check-architecture` and `make check-comment-hygiene` pass; `make
+      check-change` reports only the two `api-family` documents closeout
+      creates; `git diff --check` is clean.
 
 ## 7. Selling, part three: route services, authentication, persistence client, and bindings
 
@@ -1511,7 +1897,36 @@ scenario "A storefront binds the negotiate route"). Touches
       `retired_settings.py` stay, as the root's own configuration refusal;
       `middleware/` and `utils/migrations.py` and `utils/sqlite_client.py` are
       deleted. (D11, D13.)
-- [ ] 7.3 Verification: `make test-api-selling` (unit), `make -C
+- [ ] 7.3 A negotiation's opening commits in one transaction: the thread, its
+      opening message, its listing's binding, and its credit terms are written
+      together or not at all. Today the negotiation runtime commits the thread
+      and the opening message, then calls the domain's opening hook, whose
+      binding copy and credit-terms write commit separately, so a failed
+      credit-terms write leaves a bound thread every continuation refuses. Give
+      the runtime an opening unit of work the storefront's persistence runs in
+      one transaction, compose it for API credits as its persistence moves into
+      `selling`, and prove with a fault-injection test that a failure in the
+      last write leaves no thread, message, binding, or terms. VM and bare
+      metal open the same way and adopt the unit of work in their own change.
+      (Found by the implementation review of section 6; the separate commits
+      predate this change. Nothing in section 6 claims the opening is
+      transactional.)
+- [ ] 7.4 `selling`'s configuration refusals name the key the composing
+      storefront spells: the pricing floor's three refusals (unconfigured;
+      not a number, twice) and the capacity sites' refusal take the setting's
+      name from the composition. API credits passes
+      `[pricing].default_min_price` and `[capacity.sites]`. Compatibility: the
+      three pricing refusals are served 404 as `{"detail": <message>}` by the
+      negotiate route and change from `[seller.pricing].default_min_price`,
+      which no storefront's settings spell, to `[pricing].default_min_price`;
+      no compatibility baseline records them (`configuration.json` lists the
+      setting, not a body), so none is re-recorded, and the corrected bodies
+      are asserted byte-exact through the canonical client in
+      `test_refusal_bodies.py`. The capacity refusal is a startup refusal, not
+      a served body, and its text is already API credits' key, so it does not
+      change. Every other refusal body stays byte-identical. (Found by the
+      implementation review of section 6.)
+- [ ] 7.5 Verification: `make test-api-selling` (unit), `make -C
       domains/apicredits/storefront test` (application integration through the
       typed storefront client: every route's baseline diffs to zero, the
       startup refusal of a listing without a binding holds), `make test`,
@@ -1577,7 +1992,25 @@ distributions own them.
       publication setting, and prove accept, disable, restart, recover.
       (8.4 to 8.6 were found by the external implementation review of section
       5; each behaviour predates this change and moved unchanged.)
-- [ ] 8.7 Verification: `make test-api-selling-alkahest` and
+- [ ] 8.7 The mechanism-specific lifecycle leaves the API-credits composition
+      for the mechanism distributions that own it: the payment-reconciliation
+      loop, which `container.py` contributes to `StorefrontLoops` as a
+      `ContributedLoop` (`PAYMENT_RECONCILIATION`, `payment_reconciliation_step`,
+      `_payment_loops`), becomes a contribution `selling-arkhai-payments`
+      builds from its stage, and the escrow-obligation backfill, which
+      `server.py` passes to `start_background_tasks` as a startup step
+      (`_backfill_escrow_records`), becomes one `selling-alkahest` supplies.
+      With them go `seed_accepted_escrows` and `SEED_ESCROW_SETTINGS`
+      (`settlement_composition.py`), `AlkahestEscrowAcceptance`
+      (`settlement_stages.py`), `arkhai_apicredits.negotiation.policies.accepted_escrow_proposal`,
+      and the `alkahest` health check (`server._alkahest_check`). Afterwards no
+      mechanism-specific lifecycle, startup, negotiation, or health code
+      remains in `selling` or in the storefront composition beyond selecting
+      and registering the mechanism distributions' contributions; a test
+      proves an Alkahest-only storefront registers no payment loop and a
+      payments-only storefront runs no escrow backfill. (Found by the
+      implementation review of section 6.)
+- [ ] 8.8 Verification: `make test-api-selling-alkahest` and
       `make test-api-selling-arkhai-payments` (unit, library integration),
       `make -C domains/apicredits/storefront test` (application integration,
       baselines zero), `make test`, `make check-packaging`. End-to-end:
@@ -1726,6 +2159,12 @@ change to implementation.
 | D3 — the negotiation and delivery carriers live in `contracts`, so a buyer installs no selling machinery | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
 | D2 — `selling`'s dependency on the core storefront, an exception row owned by `kit-owned-storefront-auth-and-persistence` | `docs/development/ARCHITECTURE.toml` (exception row); `docs/development/ARCHITECTURE.md#family-kits` |
 | D7 — the projection's split, the accepted listing recorded with the negotiation and issued from, the bundle's naming fields | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
+| D7 — negotiation, publication, and lifecycle read the bundle: guard names from the kind, the listing schema and projection, family refusal codes, injected escrow handling, paged reconciliation, binding at opening | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
+| D7 — `selling`'s configuration refusals name the key the composing storefront spells (API credits: `[pricing].default_min_price`, `[capacity.sites]`); task 7.4 delivers it | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
+| D7 — refusal messages through the bundle's `refusal_noun`; one per-credit amount rate per option or escrow; publication guards on creation, resume, reopen, and divergence repair, where the hook runs on the stored listing as it is republished; mechanism loops and startup steps as contributed registrations | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
+| Core listing pages are ordered by `(created_at, listing_id)` with a keyset cursor (`arkhai-core-storefront` 0.17.0) | `openspec/specs/storefront-publication/spec.md` (reconciliation reads every listing once) |
+| System status carries the storefront's own principal (core `HealthResponse`, client 0.27.0); the API-credits health and OpenAPI baselines were re-recorded once for this owner-accepted additive field | `openspec/specs/market-composition/spec.md` (system status); `openspec/specs/api-credits/spec.md` (baselines) |
+| D7, D12 — pricing, the negotiation guards, and the seed code are the family's, not API credits'; API credits keeps its `[seed]` values | `openspec/specs/api-credits/architecture.md` (what the domain owns) |
 | D7 — core's per-negotiation artifacts gain a `listing` slot (`arkhai-core-storefront` 0.16.0) | `openspec/specs/market-composition/architecture.md` (domain artifacts) |
 | A delivery's public record is safe and final: the result checked against its request, the secret-free extension, terminal progress | `openspec/specs/api-family/spec.md` |
 | D5 — side-split mechanism distributions | `openspec/specs/api-family/spec.md`; `docs/development/ARCHITECTURE.md#family-kits` |
@@ -1734,6 +2173,7 @@ change to implementation.
 | D7 — the contribution bundles and the issuance projection | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md` |
 | D9, D14 — the compatibility baselines and rollback directions | `openspec/specs/api-credits/spec.md` |
 | D9 — the baselines' refusal records diff bodies, the one exception to the rejection-path status-only rule; the API-credit lane mounts the engine socket and runs the upgrade/rollback scenario | `docs/development/TESTING.md` (rejection paths; the API-credit lane) |
+| D7 — a project's targeted test target builds its whole internal wheel set and refuses, through `uv_project.py require-wheels`, to refresh an environment the wheelhouse cannot supply at the locked versions | `docs/development/BUILD_AND_PACKAGING.md` (project environments) |
 | D14 — `build-apicredits-service-prekit`, `.worktrees/`, and `BUYER_MACHINE_DOCKER_SOCKET` | `docs/development/BUILD_AND_PACKAGING.md` (images); `e2e-tests/README.md` |
 | D10 — the gate, its parity test, the middleware's retirement | `openspec/specs/api-family/spec.md`; `docs/development/RELEASING.md` |
 | D4 — the storefront composes the family client once at its composition boundary; the authority binds the contracts' wire models to its label and keeps no digest of its own | `openspec/specs/api-credits/architecture.md#implementation-composition` |

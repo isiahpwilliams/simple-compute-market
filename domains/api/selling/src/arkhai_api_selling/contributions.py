@@ -67,8 +67,10 @@ class ConsumptionRule(enum.Enum):
 class SellingContributions:
     """One domain's contributions to the selling library.
 
-    ``kind`` is ``<schema>.v1``, from whose stem the envelope kinds are spelled;
-    ``table_prefix`` names the domain's tables and its credentials reference.
+    ``kind`` is ``<schema>.v1``, from whose stem the envelope kinds and the
+    opening guard's name are spelled; ``table_prefix`` names the domain's
+    tables, its credentials reference, and the one refusal code that names it;
+    ``refusal_noun`` is how refusal messages name what is sold.
     """
 
     label: IssuanceLabel
@@ -83,6 +85,7 @@ class SellingContributions:
     publication_guards: tuple[PublicationGuard, ...] = ()
     acceptance_hook: AcceptanceHook | None = None
     public_result_extension: PublicResultExtension | None = None
+    refusal_noun: str = "credit"
 
     def __post_init__(self) -> None:
         if not _KIND.fullmatch(self.kind):

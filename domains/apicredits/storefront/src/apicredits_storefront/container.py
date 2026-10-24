@@ -1,10 +1,7 @@
-"""Storefront dependency container.
+"""The storefront's dependency container.
 
-``SELLING_CONTRIBUTIONS`` is the API-credits bundle the selling library
-composes, fixed for the process. ``resolved_*`` module-level variables are
-populated once during the FastAPI lifespan in ``server.py``. Controllers
-retrieve services via ``Depends(lambda: _c.resolved_X)`` — the same pattern as
-the VM storefront and the services.
+The selling bundle and the parts composed over it are fixed for the process; the
+``resolved_*`` services are set once by the lifespan in ``server.py``.
 """
 
 from __future__ import annotations
@@ -12,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from arkhai_api_selling.capacity import QuotaCapacity
 from arkhai_api_selling.contributions import (
     ConsumptionRule,
     IssuanceSubject,
@@ -19,9 +17,17 @@ from arkhai_api_selling.contributions import (
     SellingContributions,
 )
 from arkhai_api_selling.evidence_store import IssuanceEvidenceService, PrivateResultRepository
+from arkhai_api_selling.lifecycle import ContributedLoop, StorefrontLoops
+from arkhai_api_selling.listings import ListingService
+from arkhai_api_selling.publication import QuotaPublication, RegistryPublication
+from arkhai_api_selling.publish_route import PublishFromQuotaRequest as QuotaPublishRequest
+from arkhai_api_selling.system import SystemService
 from arkhai_apicredits.label import API_CREDITS_LABEL
 from arkhai_apicredits.schema import API_CREDITS_SCHEMA_KIND, ApiCreditsListing
-from market_storefront_kit import TradingPause
+from core_storefront.multi_registry_client import MultiRegistryClient
+from market_storefront_kit import LifecycleRouteError, TradingPause
+
+from apicredits_storefront.utils import config
 
 if TYPE_CHECKING:
     from market_core import MarketDomainContract
@@ -40,8 +46,6 @@ if TYPE_CHECKING:
     from market_identity import Signer
     from market_storefront_kit import StorefrontLoopController
 
-    from apicredits_storefront.services.listing_service import ListingService
-    from apicredits_storefront.services.system_service import SystemService
     from apicredits_storefront.utils.sqlite_client import SQLiteClient
 
 
@@ -53,6 +57,15 @@ def _issuance_subject(listing_resource: Mapping[str, Any]) -> IssuanceSubject:
         resource_id=str(resource_id) if resource_id else None,
         endpoint=listing_resource.get("base_url"),
     )
+
+
+class PublishFromQuotaRequest(QuotaPublishRequest):
+    """Seller's quota-backed publish request."""
+
+    service_name: str
+    description: str | None = None
+    openapi_url: str | None = None
+    base_url: str | None = None
 
 
 def _listing_resource(request: Mapping[str, Any], source: QuotaSource) -> dict[str, Any]:
@@ -78,6 +91,81 @@ SELLING_CONTRIBUTIONS = SellingContributions(
     publication_mapping=_listing_resource,
     issuance_projection=_issuance_subject,
     consumption_rule=ConsumptionRule.FIXED_PER_REQUEST,
+    refusal_noun="API-credit",
+)
+
+def _registry_client() -> MultiRegistryClient:
+    signer = resolved_marketplace_signer
+    if signer is None:
+        raise RuntimeError("storefront marketplace signer is not initialized")
+    settings = config.settings
+    return MultiRegistryClient(
+        list(settings.registry.urls),
+        caller_role="seller",
+        expected_registries=config.resolve_registry_authorities(),
+        timeout=settings.registry.discovery_timeout,
+        auth=settings.registry.auth,
+        signer=signer,
+    )
+
+
+def _registry_publication() -> RegistryPublication:
+    return RegistryPublication(
+        enabled=config.settings.enable_registry_discovery,
+        registry_urls=tuple(config.settings.registry.urls),
+        storefront_url=config.BASE_URL_OVERRIDE,
+        client_factory=_registry_client,
+    )
+
+
+QUOTA_CAPACITY = QuotaCapacity(
+    sites=config.capacity_sites,
+    signer=lambda: resolved_marketplace_signer,
+    reconciler=lambda factory: QUOTA_PUBLICATION.reconciler(factory),
+)
+QUOTA_PUBLICATION = QuotaPublication(
+    SELLING_CONTRIBUTIONS, capacity=QUOTA_CAPACITY, registry=_registry_publication
+)
+PAYMENT_RECONCILIATION = "payment_reconciliation"
+
+
+def _payment_service() -> Any | None:
+    composition = resolved_settlement_composition
+    if composition is None:
+        return None
+    if resolved_sqlite_client is None:
+        raise LifecycleRouteError(503, "storefront persistence is not initialized")
+    return composition.payment_service(resolved_sqlite_client)
+
+
+async def payment_reconciliation_step() -> Mapping[str, Any]:
+    service = _payment_service()
+    if service is None:
+        return {"loop": PAYMENT_RECONCILIATION, "attempted": 0, "failed": 0}
+    done = await service.reconcile_once()
+    return {"loop": PAYMENT_RECONCILIATION, "attempted": done.attempted, "failed": done.failed}
+
+
+def _payment_loops() -> tuple[ContributedLoop, ...]:
+    """Payment reconciliation, a loop only while Arkhai payments is composed."""
+    if _payment_service() is None:
+        return ()
+    return (
+        ContributedLoop(
+            PAYMENT_RECONCILIATION,
+            route="payment-reconciliation",
+            step=payment_reconciliation_step,
+            interval_seconds=config.seconds_setting("payment_reconciliation_interval", 30),
+        ),
+    )
+
+
+STOREFRONT_LOOPS = StorefrontLoops(
+    sqlite_client=lambda: resolved_sqlite_client,
+    settlement_worker=lambda: resolved_settlement_worker,
+    capacity=QUOTA_CAPACITY,
+    settings=config.LOOP_SETTINGS,
+    contributed_loops=_payment_loops,
 )
 
 resolved_market_domain: "MarketDomainContract | None" = None

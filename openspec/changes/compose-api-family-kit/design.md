@@ -367,6 +367,49 @@ names. A storefront holds its bundle wherever its stages, services, and
 persistence can read it without an import cycle; the API-credits storefront
 holds it in `container.py`.
 
+The negotiation, publication, and lifecycle that `selling` owns read the
+bundle the same way. The opening guard registers under a name spelled from the
+kind's stem (`api_credits_round_zero_guard`), and the quota and key guards under
+their family names, so a configured chain resolves each as before; a listing is
+the domain's when its resource validates as the listing schema, and the quota
+guard reads its resource through the projection. The refusal codes are the
+family's, shared with the authority's issuance re-check, except the one that
+spelled the domain, which the table prefix spells (`api_credit_quantity_unavailable`).
+Refusal messages name what is sold through the bundle's `refusal_noun`, which
+API credits sets to `API-credit`, so its error bodies are byte-identical to
+those it served before the kit. A listing's amount rate is the one `amount`
+rate its selected option or escrow states, in a per-credit unit; two, or one in
+another unit, are refused, and the configured floor applies only where none is
+stated. The domain's publication guards run wherever a listing publishes: at
+creation, on an administrator's resume, on a reconciliation reopen, where a
+refused listing stays closed, and on a registry divergence repair, which runs
+the publication hook on the stored listing it would republish and leaves one
+the hook refuses unrepaired. Escrow handling is injected rather than imported,
+since `selling` knows no mechanism: the opening guard's escrow
+canonicalization, an `EscrowAcceptance` that offers and accepts an escrow, and
+the mechanism a listing's accepted escrows publish under with their release
+conditions. A mechanism's timer loops and startup steps are contributed to
+`selling`'s lifecycle as registrations (`ContributedLoop`, startup steps), never
+named by it. The API-credits storefront supplies the Alkahest and payments
+contributions until the selling-side mechanism distributions own them (task
+8.7). Reconciliation reads every listing by the core store's keyset over
+`(created_at, listing_id)`, which no write changes, so a pass visits each
+listing once; a thread takes its listing's binding when it opens, and whether
+the opening's writes commit in one transaction is task 7.3's.
+
+`selling` reads no configuration itself, so a refusal for a missing or
+malformed setting can only carry the text it was given. Its pricing refusals
+keep the text the storefronts served before the kit, which names
+`[seller.pricing].default_min_price`; no storefront in this repository spells
+the floor there — API credits reads `[pricing].default_min_price`, as the
+compute storefronts do — so the text does not point an operator at the key
+they edit, and it is kept byte-identical for compatibility. The capacity
+refusal names `[capacity.sites]`, which is API credits' key. The contract the
+family keeps is that a configuration refusal names the key the composing
+storefront spells, which task 7.4 delivers: the three pricing refusals, served
+404 on the negotiate route and recorded in no baseline, change to
+`[pricing].default_min_price` for API credits, and no other body changes.
+
 Every field a domain may omit is optional in the bundle, so API credits
 supplies no placeholder. Each caller — both storefronts, each service root,
 each gate, each buyer plugin — composes through its bundle, its capacity
@@ -459,6 +502,11 @@ distribution, image, and entry point. Its domain library shrinks to the listing
 schema, the kind bindings, and the bundle values, and its override row in
 `ARCHITECTURE.toml` is retired, because the mechanism codecs that earned it
 move to the mechanism distributions.
+
+"Its seed" is the seed's values: the quota, listing, and escrow settings under
+`[seed]` that API credits configures and passes in. The code that registers the
+seeded quota and publishes the seeded listing is the family's, in `selling`,
+since any quota-backed domain of the family seeds the same way.
 
 ### D13. Slices, each leaving no copy behind
 

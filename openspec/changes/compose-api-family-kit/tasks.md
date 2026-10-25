@@ -2578,23 +2578,80 @@ conformance runner, the three middleware READMEs, `docs/cookbooks/vllm-apicredit
 `publish-npm.yml`, `tests.yml`, `domains/apicredits/compose.yml`, the root
 and domains Makefiles, `docs/development/RELEASING.md`.
 
-- [ ] 9.1 `domains/api/gate/` (`arkhai-api-gate` 0.1.0; dependencies `httpx`;
+- [x] 9.1 `domains/api/gate/` (`arkhai-api-gate` 0.1.0; dependencies `httpx`;
       optional extra `signed` = `arkhai-kit-identity`; dev group adds
       `arkhai-api-contracts` for 9.3): `gate.py`, `asgi.py`, `config.py`,
       `client.py`, `signing.py` moved from `apicredits_middleware`, the
       environment prefix and the label parameters of `GateConfig` with
       `APICREDITS_MIDDLEWARE_` the value the API-credits deployments pass, so
       no compose file or secret path changes. (D10.)
-- [ ] 9.2 The Python conformance runner moves to `domains/api/gate/tests/` and
+      *Done 2026-10-24.* The five modules moved with `git mv`, behaviour
+      unchanged; `py.typed` added. `GateConfig` is keyword-only and gains a
+      required `authority_label`, how the gate names its authority in a
+      signing diagnostic; `from_env(prefix, *, authority_label)` takes both
+      with no default, so the family package spells no domain prefix.
+      `AuthoritySigning` takes the label for its two verification-failure
+      messages, and the sample app passes `credits-service`, so those messages
+      read as before; the install hint names `arkhai-api-gate[signed]`. The
+      client's three paths are module constants (`VERIFY_PATH`,
+      `CONSUME_PATH`, `CONSUME_BATCH_PATH`) beside the operation names, the
+      local spelling 9.3 compares. The middleware's redundant `test` extra is
+      dropped (the dev group carries pytest), and the package states its
+      allowlist, `arkhai-kit-identity` and `httpx`, under
+      `[tool.arkhai.architecture]`, so `make check-architecture` holds its
+      lightness. Docstrings name the authority, not the credits service, and
+      the signing module's provenance remarks are gone.
+- [x] 9.2 The Python conformance runner moves to `domains/api/gate/tests/` and
       replays `domains/apicredits/middleware/conformance/session.json`, which
       stays where it is; `test_gate.py` and `test_config.py` move with it.
       (D10.)
-- [ ] 9.3 `domains/api/gate/tests/test_contract_parity.py`: for each route the
+      *Done.* `conformance_runner.py` and `test_conformance.py` moved and read
+      the fixture from its unchanged path; `test_gate.py` and `test_config.py`
+      moved, the latter reading a test prefix (`GATE_TEST_`) and gaining a
+      case that the deployment's prefix is read, an `APICREDITS_MIDDLEWARE_`
+      variable beside it is ignored, and the label is carried. Unit: the
+      conformance replay over `httpx.MockTransport`, the batched path over an
+      injected fake client, the ASGI binding over `MockTransport`, and
+      configuration.
+- [x] 9.3 `domains/api/gate/tests/test_contract_parity.py`: for each route the
       gate calls, its method, path, signed operation name, request and
       response fields, and error codes equal `arkhai_api_contracts`'
       declaration; a packaging test that the gate's runtime dependency set is
       httpx alone. (D10, `api-family` "The gate's spelling drifts".)
-- [ ] 9.4 Consumers migrate: the sample app and its tests import
+      *Done.* Amended at implementation: `contracts` declared the three
+      request models but no verify or consume response and no refusal reason,
+      so there was nothing for the response fields and error codes to equal.
+      `arkhai-api-contracts` 0.4.0 adds `VerifyResponse`, `ConsumeOutcome`,
+      `ConsumeRefusal` (models.py), and `refusals.py` (`KEY_NOT_FOUND`,
+      `KEY_REVOKED`, `INSUFFICIENT_CREDITS`, `CONSUME_REFUSALS`), the shapes D4
+      names as the contracts'. None is mounted as a route's response model, so
+      the service's OpenAPI baseline is unchanged; the authority keeps its own
+      constants. `contracts`' new `test_refusals.py` holds `ConsumeRefusal`
+      and the reasons to the service's recorded refusal bodies
+      (`refusals.json`), as `test_routes.py` holds the declarations to its
+      route table; the authority's verify and consume dicts are held to the
+      gate by the service's application-integration suites, which drive the
+      gate's real client against the real service. The parity test, per route
+      and naming it on failure: the operation is declared, the method is
+      `POST`, the gate's path matches the declared pattern, the declared roles
+      admit the gate's `service` role, and the signed resource is the path's
+      `key_id` (or none, with the gate signing `""`); the gate's refusal
+      reasons equal `CONSUME_REFUSALS`; `VerifyResult` and `ConsumeResult`
+      carry exactly the declared response models' fields; the bodies the real
+      client and gate send (verify, consume, a flushed batch) validate as and
+      carry exactly the request models' fields, and responses built from the
+      declared models parse into the expected results. The packaging case
+      reads `pyproject.toml`: runtime dependencies `httpx` alone, the one extra
+      `signed` = `arkhai-kit-identity`. The method each route sent is recorded
+      and compared with its declaration; the consume and batch results parsed
+      from the declared models are asserted. Every assertion names its route.
+      An undeclared consume operation in a scratch run failed naming
+      `[consume]`. Unit (7 cases); `contracts` unit 39. Limit: the gate parses
+      leniently (`data.get` with defaults), so the service suites hold only
+      the fields some test asserts (`valid`, `balance`, `consumed`,
+      `duplicate`, `ok`, `reason`); verify's `status` is not asserted against
+      the authority.
+- [x] 9.4 Consumers migrate: the sample app and its tests import
       `arkhai_api_gate` and declare `arkhai-api-gate`; the service's
       integration tests do the same; `domains/apicredits/middleware/python/` is
       deleted and `test-apicredits-middleware` becomes `test-api-gate` with the
@@ -2604,12 +2661,210 @@ and domains Makefiles, `docs/development/RELEASING.md`.
       and filter with the gate's; `tests.yml` replaces the matrix row;
       `publish-npm.yml` is unaffected, watching only the TypeScript directory.
       (D10, D14.)
-- [ ] 9.5 Verification: `make test-api-gate` (unit, the conformance replay,
+      *Done.* The sample app (0.2.0) declares `arkhai-api-gate[signed]` and
+      passes `ENV_PREFIX = "APICREDITS_MIDDLEWARE_"` and
+      `AUTHORITY_LABEL = "credits-service"`, so its compose environment and
+      secret mounts are unchanged; the compose file's two comments name the
+      gate. The service's dev group declares `arkhai-api-gate[signed]` in the
+      middleware's place (the service wheel is unchanged, so no bump), and its
+      four integration modules import `arkhai_api_gate` and pass the label.
+      `test-apicredits-middleware` is gone from both Makefiles; `test-api-gate`
+      (root: builds the gate and contracts wheels and runs `require-wheels`, as
+      the other `test-api-*` targets do) runs the gate's suite, and the
+      domains `test-api` aggregate includes it, so `make test` runs it;
+      `domains/apicredits`' `test-middleware` keeps the TypeScript and Rust
+      halves under `make test-apicredits`. `dist-api-gate` replaces
+      `dist-apicredits-middleware` in both Makefiles' `dist`; in the root
+      Makefile it replaces the middleware in the service's and sample app's
+      prerequisites, and in `domains/Makefile` the sample app gains it (the
+      service there never listed the middleware). The middleware's rows leave
+      `publish-pypi.yml` (filter and `PACKAGES`),
+      `manifests/published-distributions.json`, `RELEASING.md`, and
+      `tests.yml`'s matrix, and the gate's take their place beside the other
+      family rows; `publish-npm.yml` is unchanged. The conformance README and
+      the TypeScript and Rust READMEs name the gate as the Python reference;
+      the four TypeScript and Rust doc comments citing
+      `apicredits_middleware.config`/`.gate` cite `arkhai_api_gate`'s, a
+      comment-only change. The cookbook says how a gateway built on the gate
+      passes the prefix and label. Amended at implementation, because the deletion
+      left two permanent documents citing a path that no longer exists:
+      `TESTING.md`'s cross-language conformance paragraph names the gate and
+      its runner's new path, and `ARCHITECTURE.md`'s nested-path example in
+      "Kind" reads `domains/vms/provisioning/adapter`. Relocked against
+      contracts 0.4.0 and the gate: contracts, client, authority, selling,
+      both selling-side libraries, the gate, the domain library, buyer,
+      sample app, service, storefront, and `e2e-tests`. `git grep` for
+      `apicredits_middleware` or `arkhai-apicredits-middleware` outside
+      `openspec/` and locks finds the Rust crate's name and its tests, the
+      TypeScript package's name (`package.json`, its lock, its README), the
+      `publish-npm.yml` comment, and the `tests.yml` job names `ts ·` and
+      `rust · apicredits-middleware` — all the TypeScript and Rust packages,
+      which `sign-multi-language-credits-middleware` owns — and a synthetic
+      path in the architecture checker's tests.
+- [x] 9.5 Verification: `make test-api-gate` (unit, the conformance replay,
       the parity test), `make -C domains/apicredits test-sample-app` and the
       service's integration suite (application integration), `make
       test-apicredits-middleware`'s TypeScript and Rust halves unchanged, `make
       test`, `make check-packaging`, `make test-release-tooling`. End-to-end:
       `e2e_credits_deal` consumes through the gated sample app.
+      *Done 2026-10-24.* Correction: `test-apicredits-middleware` is deleted
+      by 9.4; its TypeScript and Rust halves are
+      `make -C domains/apicredits test-middleware`. `make test-api-gate` 16
+      passed (unit), `require-wheels` passing; `make -C domains/api/contracts
+      test` 39 (unit); `make -C domains/apicredits test-sample-app` 1
+      (application integration: the real app over a scripted authority);
+      `make -C domains/apicredits test-service` 42 (application integration:
+      the real service through the gate's real client, every baseline
+      unchanged); `test-middleware` TypeScript 5 and Rust 6 (3 unit, 2
+      adapter, 1 conformance), unchanged. The other checkout under
+      `.claude/worktrees/` fails every whole-tree check in place, so, as in
+      section 8, the checks ran on a copy of the tracked and new files
+      without it: `make check-packaging` passes (uv setup, locks, Python
+      version, layout, all four architecture parts, the gate's allowlist
+      included); `make check-comment-hygiene` passes; `make -k test` passes
+      but for the failures 1.7 to 8.8 record — the three IaC relay-teardown
+      shell tests, the VM storefront's two Alkahest toolchain tests, and GNU
+      make's `--eval` case in `test-release-tooling` (1115 passed there).
+      Helm is not installed, so the render checks are unrun. In place, `make
+      check-change` reports only the stale checkout and the two `api-family`
+      documents closeout creates. Locks were written with the local uv 0.10.9
+      (CI pins 0.11.17), which accepts every existing lock unchanged. The
+      fresh-context fixes below changed only the gate's tests and docstrings
+      and the notes, after which the gate suite passed again (16).
+      End-to-end, owed to validation: `e2e_credits_deal` and
+      `e2e_credits_payment_deal` (a blocked skip with no payments target)
+      consume through the sample app, whose image now installs the gate; no
+      scenario was added.
+      **Handoff.** The gate's local spelling is `client.VERIFY_PATH`,
+      `CONSUME_PATH`, `CONSUME_BATCH_PATH` and the operation constants; a
+      route the gate gains needs a row in the parity test's `GATE_ROUTES`.
+      `arkhai_api_contracts.refusals` is the declared reason vocabulary, but
+      the authority's `keys_service` still spells its own constants; making
+      it import them is a one-line follow-up with no wire change. The
+      TypeScript and Rust packages keep their names; renaming them is
+      `sign-multi-language-credits-middleware`'s.
+      **Fresh-context check.** No layering, scope, kind, packaging, or
+      cross-reference finding. Accepted and fixed: assertions name their
+      route on every failure, the consume body is validated, the sent method
+      and the batch result are asserted, the prefix test ignores an
+      `APICREDITS_MIDDLEWARE_` variable, the gate's docstrings say
+      "authority" throughout, the cookbook names the gate's prefix and label,
+      the promotion record names the contracts' new shapes, and the 9.2 to
+      9.5 notes above were corrected where they overstated. Declined: making
+      the authority import the contracts' reasons (outside the section's
+      files; left as the handoff above), and splitting the gate's tests into
+      `unit/`, since 9.2 and 9.3 place them in `tests/`.
+      **Review round (2026-10-25).** An external review of `6853025d1` raised
+      five findings; the owner accepted a fix for each and waived validation
+      of this round, since the end-to-end pipeline cannot dispatch on the
+      fork. The review record was not kept.
+      - *F1: `make test-api-gate` failed from an empty wheelhouse.* The gate's
+        tests install `arkhai-api-contracts`, which needs `arkhai-core`, and
+        nothing built it. Root `dist-api-contracts` now builds `dist-core`, as
+        the Makefile's rule (a wheel's own internal dependencies) asks, so
+        `dist-api-client` and `dist-api-authority` gain it too. From an empty
+        `.dist`, `make test-api-gate` passes.
+      - *F2: a malformed batch item passed contract validation.*
+        `VerifyResponse`, `ConsumeOutcome`, and `ConsumeRefusal` forbid
+        unknown fields; no route mounts them, so the recorded OpenAPI document
+        is unchanged, and `ConsumeBatchResponse.results` stays untyped for the
+        same reason. `contracts`' `test_models.py` refuses an unknown field on
+        each and a missing one on an outcome; the parity test's batch carries
+        a refusal item. The gate's lenient parsing is unchanged.
+      - *F3: the sample app's tests bypassed its configuration path.*
+        `create_app()` runs with no overrides under the compose file's
+        variables and mounted credential files: the configuration it reads
+        (URL, label, admin key from its file, purchase pointer, signing
+        identity) is asserted and `/health` serves; an unusable credential
+        stops the app before it serves.
+      - *F4: no test showed the label reaching a signing failure.*
+        `tests/test_signing.py`: a trusted response verifies, and a response
+        with no authentication and one signed by an untrusted key each fail
+        with a message naming the deployment's label.
+      - *F5: response parity was checked only against fake bodies.* The
+        service's `test_the_authority_answers_the_gate_in_the_declared_shapes`
+        reads, through the gate's real client and a response hook, the real
+        authority's verify, consume, duplicate, batch, and 402 bodies and
+        validates each against the declared models, verify's `status`
+        included. An omitted defaulted field (`duplicate`, `reason`) still
+        passes, since the authority omits them on an ordinary consume.
+      Evidence: gate 19 passed (unit; `make test-api-gate` from an empty
+      `.dist`), `contracts` 43 (unit), sample app 3 (application
+      integration), service 43 (application integration, baselines
+      unchanged). On the copy without the stale checkout `make
+      check-packaging` and `make check-comment-hygiene` pass, and `make -k
+      test` fails only as 1.7 to 8.8 record. Fresh-context check: the five
+      fixes hold; accepted besides, the malformed-item cases moved from the
+      gate's parity test to `contracts`' tests, a loop that could not fail
+      removed, the service test's imports moved to module level, the core
+      prerequisite moved from `test-api-gate` to `dist-api-contracts`, the
+      sample app's helper given the two purchase URLs and its test renamed,
+      and `arkhai-kit-identity` declared in the gate's dev group (relocked).
+      Declined: asserting every defaulted outcome field is present, which
+      the authority does not send.
+      **Security fix (2026-10-25).** An external report found that the
+      gate cached a successful verification by key id alone, which is the
+      public part of the bearer secret, so for the cache's lifetime a forged
+      secret with a cached key id was authorized and charged without the
+      authority seeing it. The middleware had the same defect; the TypeScript
+      and Rust middlewares still do. `_KeyState` now keeps a SHA-256
+      fingerprint of the verified secret, and a cache hit needs a
+      constant-time match (`hmac.compare_digest`); any other secret goes to
+      the authority, a refused one returns without touching the cached
+      state, and an accepted one (a rotated secret) replaces the
+      fingerprint. Balance estimate and exhaustion stay per key id. The
+      owner kept the TypeScript and Rust fixes, with a conformance step
+      pinning them, out of this PR for a focused security PR immediately
+      after it; `sign-multi-language-credits-middleware` keeps outbound
+      signing. Unit (`test_gate.py`, three cases, each failing on the old
+      cache): a forged secret is denied 401 `invalid_api_key` after the
+      authority is asked and nothing is charged; a refused forgery leaves the
+      cached verification in place; an accepted rotated secret replaces the
+      cached one. Gate 22, sample app 3, service 43 passed; the conformance
+      trace, which uses one secret per key, replays unchanged. On the clean
+      copy `make check-packaging` and `make check-comment-hygiene` pass. A
+      fresh-context check found no remaining bypass through the batched
+      path, the exhausted short-circuit, expiry, or the two lock sections,
+      and no regression; its one nit, this test module's docstring, is
+      fixed.
+      **Ordering fix (2026-10-25).** A further report showed that a
+      verification's answer was installed whenever it arrived, so a
+      delayed answer for an older secret could replace a newer one — a
+      rotated or revoked secret cached again until its entry expired, the
+      newer verification's knowledge lost. Each entry now records when its
+      verification started (`verified_at`), and an answer is installed only
+      if its verification started later than the cached one's; an older
+      answer still decides its own request, which was in flight when the
+      authority gave it. The restored window never outlived the old answer's
+      own TTL, since expiry counts from the verification's start, so this is
+      ordering within the cache's staleness bound rather than a bypass. A
+      refused secret other than the cached one leaves the entry in place but
+      advances its `verified_at`, so an older answer for that secret is not
+      cached over the newer refusal. Unit (`test_gate.py`, each failing
+      without its guard): an old secret's verification is held while a new
+      secret is verified and cached, then released, and the old secret
+      presented again is re-verified and refused; and with the new secret
+      cached, the old secret's held verification is overtaken by its own
+      refusal, then released, and the old secret is again re-verified and
+      refused. Gate 24, sample app 3, service 43 passed. A fresh-context
+      check found the refusal-path gap now fixed; it accepted a strict
+      start-time comparison on equal timestamps, and an uncached older answer
+      charging against the newer entry, which a refused charge already
+      handles. The TypeScript and Rust gates take the same fix in the
+      follow-up security PR.
+      **Ordering by ticket (2026-10-25).** A further review showed the
+      start-time comparison could tie: a monotonic clock may return one value
+      to two reads, and on a tie a delayed older "valid" answer was installed
+      over a newer refusal. Verifications are now ordered by a ticket the
+      gate draws from a strictly increasing counter when each starts, before
+      the authority is called; an entry keeps the highest ticket it has seen
+      (`verified_ticket`), and the clock serves only expiry. `TokenGate`
+      takes an optional `clock`, so a test can freeze it. Unit: both
+      completion-order tests run under the real clock and a frozen one; with
+      every ticket made equal in a scratch run, all four fail. Gate 26,
+      sample app 3, service 43 passed. The TypeScript and Rust gates take
+      the same change in the follow-up security PR, which also has every
+      conformance runner assert the secret each verification sends.
 
 ## 10. Buying and the buying-side mechanism distributions
 
@@ -2729,6 +2984,7 @@ change to implementation.
 | D7 — a project's targeted test target builds its whole internal wheel set and refuses, through `uv_project.py require-wheels`, to refresh an environment the wheelhouse cannot supply at the locked versions | `docs/development/BUILD_AND_PACKAGING.md` (project environments) |
 | D14 — `build-apicredits-service-prekit`, `.worktrees/`, and `BUYER_MACHINE_DOCKER_SOCKET` | `docs/development/BUILD_AND_PACKAGING.md` (images); `e2e-tests/README.md` |
 | D10 — the gate, its parity test, the middleware's retirement | `openspec/specs/api-family/spec.md`; `docs/development/RELEASING.md` |
+| D4, D10 — `contracts` declares the verify and consume response shapes (`VerifyResponse`, `ConsumeOutcome`, `ConsumeRefusal`) and the consume refusal reasons (`refusals.CONSUME_REFUSALS`), which the gate's parity test compares and `contracts`' tests hold to the service's recorded refusals | `openspec/specs/api-family/spec.md` |
 | D4 — the storefront composes the family client once at its composition boundary; the authority binds the contracts' wire models to its label and keeps no digest of its own | `openspec/specs/api-credits/architecture.md#implementation-composition` |
 | D11 — the storefront's authentication verifies the body as sent and records every role's outcome, so the canonical client and each domain's buyer both verify and a seller's exact retry replays after its lease | `openspec/specs/api-family/spec.md` |
 | D11 — route services in the kit, bindings in the compositions: `selling`'s `route_services` (one class per router, `RouteRefusal`), `auth` (`StorefrontAuth`, the library's one framework-facing module), and `persistence` (`StorefrontSQLiteClient`, the family's tables under the bundle's prefix, the purchase-terms table keeping the family name `credit_deal_terms`); the API-credits controllers as class-based bindings, since the recorded OpenAPI document carries the class in each route's name | `openspec/specs/api-family/spec.md`; `openspec/specs/api-family/architecture.md`; `openspec/specs/api-credits/architecture.md#implementation-composition` |

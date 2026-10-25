@@ -1,18 +1,23 @@
-"""Batched-flush behavior and the ASGI binding.
+"""Batched-flush behavior, the ASGI binding, and the verify cache's tie to the secret.
 
 The synchronous decision table is pinned by the conformance session;
-these cover the two things outside it: the optimistic batched charge
-path (timing-dependent, so impl-local) and the ASGI adapter end to end.
+these cover what is outside it: the optimistic batched charge path
+(timing-dependent, so impl-local), the ASGI adapter end to end, and a
+cached verification answering only for the secret that earned it.
 """
 
 from __future__ import annotations
 
-import httpx
+import asyncio
+import time
 
-from apicredits_middleware.client import ConsumeResult, TokensClient, VerifyResult
-from apicredits_middleware.config import GateConfig, PurchasePointer
-from apicredits_middleware.gate import TokenGate
-from apicredits_middleware.asgi import TokenGateMiddleware
+import httpx
+import pytest
+
+from arkhai_api_gate.client import ConsumeResult, TokensClient, VerifyResult
+from arkhai_api_gate.config import GateConfig, PurchasePointer
+from arkhai_api_gate.gate import TokenGate
+from arkhai_api_gate.asgi import TokenGateMiddleware
 
 
 class FakeClient:
@@ -46,7 +51,7 @@ class FakeClient:
 
 def _cfg(**kw) -> GateConfig:
     base = dict(
-        service_url="http://svc", amount_per_request=1,
+        service_url="http://svc", authority_label="test-authority", amount_per_request=1,
         flush_interval_seconds=0.0, low_balance_threshold=0,
         purchase=PurchasePointer(listing_id="lst-1"),
     )
@@ -149,3 +154,114 @@ async def test_asgi_missing_key_is_401():
         assert r.status_code == 401
         assert r.json()["error"] == "missing_api_key"
     await http.aclose()
+
+
+class SecretCheckingClient:
+    """An authority that accepts only the secrets it was given, recording what it was asked."""
+
+    def __init__(self, *accepted: str) -> None:
+        self.accepted = set(accepted)
+        self.verified: list[str] = []
+        self.consumed = 0
+
+    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+        self.verified.append(secret)
+        if secret in self.accepted:
+            return VerifyResult(valid=True, status="active", balance=10)
+        return VerifyResult(valid=False, status=None, balance=0)
+
+    async def consume(self, *, key_id, amount, idempotency_key=None) -> ConsumeResult:
+        self.consumed += 1
+        return ConsumeResult(ok=True, balance=10 - self.consumed, consumed=amount)
+
+
+async def test_a_cached_key_does_not_admit_a_different_secret():
+    client = SecretCheckingClient("ak_victim.real")
+    gate = TokenGate(_cfg(), client)
+
+    assert (await gate.authorize("Bearer ak_victim.real")).allowed
+    forged = await gate.authorize("Bearer ak_victim.forged")
+
+    assert (forged.allowed, forged.status, forged.body) == (False, 401, {"error": "invalid_api_key"})
+    assert client.verified == ["ak_victim.real", "ak_victim.forged"]
+    assert client.consumed == 1
+
+
+async def test_a_refused_secret_leaves_the_cached_verification_in_place():
+    client = SecretCheckingClient("ak_victim.real")
+    gate = TokenGate(_cfg(), client)
+
+    await gate.authorize("Bearer ak_victim.real")
+    await gate.authorize("Bearer ak_victim.forged")
+
+    assert (await gate.authorize("Bearer ak_victim.real")).allowed
+    assert client.verified == ["ak_victim.real", "ak_victim.forged"]
+
+
+async def test_a_rotated_secret_the_authority_accepts_replaces_the_cached_one():
+    client = SecretCheckingClient("ak_k.first", "ak_k.rotated")
+    gate = TokenGate(_cfg(), client)
+
+    await gate.authorize("Bearer ak_k.first")
+    assert (await gate.authorize("Bearer ak_k.rotated")).allowed
+    assert (await gate.authorize("Bearer ak_k.rotated")).allowed
+    await gate.authorize("Bearer ak_k.first")
+
+    assert client.verified == ["ak_k.first", "ak_k.rotated", "ak_k.first"]
+
+
+class HeldVerificationClient(SecretCheckingClient):
+    """Holds the first verification of one secret, answering it valid, until the test releases it."""
+
+    def __init__(self, held: str, *accepted: str) -> None:
+        super().__init__(*accepted)
+        self.held = held
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+        if secret != self.held or self.started.is_set():
+            return await super().verify(key_id=key_id, secret=secret)
+        self.verified.append(secret)
+        self.started.set()
+        await self.release.wait()
+        return VerifyResult(valid=True, status="active", balance=10)
+
+
+async def _hold_old_secret(gate: TokenGate, client: HeldVerificationClient) -> asyncio.Future:
+    old = asyncio.ensure_future(gate.authorize("Bearer ak_k.old"))
+    await asyncio.wait_for(client.started.wait(), timeout=5)
+    return old
+
+
+@pytest.mark.parametrize("clock", [time.monotonic, lambda: 100.0], ids=["monotonic", "frozen"])
+async def test_a_late_answer_for_an_older_secret_does_not_replace_a_newer_one(clock):
+    client = HeldVerificationClient("ak_k.old", "ak_k.new")
+    gate = TokenGate(_cfg(), client, clock=clock)
+
+    old = await _hold_old_secret(gate, client)
+    assert (await gate.authorize("Bearer ak_k.new")).allowed
+    client.release.set()
+    assert (await asyncio.wait_for(old, timeout=5)).allowed
+
+    again = await gate.authorize("Bearer ak_k.old")
+
+    assert (again.allowed, again.status) == (False, 401)
+    assert client.verified == ["ak_k.old", "ak_k.new", "ak_k.old"]
+
+
+@pytest.mark.parametrize("clock", [time.monotonic, lambda: 100.0], ids=["monotonic", "frozen"])
+async def test_a_late_answer_does_not_outlast_a_newer_refusal_of_the_same_secret(clock):
+    client = HeldVerificationClient("ak_k.old", "ak_k.new")
+    gate = TokenGate(_cfg(), client, clock=clock)
+
+    assert (await gate.authorize("Bearer ak_k.new")).allowed
+    old = await _hold_old_secret(gate, client)
+    assert not (await gate.authorize("Bearer ak_k.old")).allowed
+    client.release.set()
+    await asyncio.wait_for(old, timeout=5)
+
+    again = await gate.authorize("Bearer ak_k.old")
+
+    assert (again.allowed, again.status) == (False, 401)
+    assert client.verified == ["ak_k.new", "ak_k.old", "ak_k.old", "ak_k.old"]

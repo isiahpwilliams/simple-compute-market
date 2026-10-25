@@ -9,14 +9,18 @@ back into an HTTP response.
 
 Decision vocabulary (status + machine-readable body) is identical
 across languages — it is the behavioral contract the conformance
-fixtures pin (``../conformance``).
+fixtures pin (``domains/apicredits/middleware/conformance``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import itertools
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,8 +59,14 @@ class _KeyState:
     verify: VerifyResult
     verify_expires: float
     estimated_balance: int
+    secret_fingerprint: bytes
+    verified_ticket: int
     pending: list[dict[str, Any]] = field(default_factory=list)
     exhausted: bool = False
+
+
+def _fingerprint(secret: str) -> bytes:
+    return hashlib.sha256(secret.encode("utf-8")).digest()
 
 
 def parse_bearer(authorization: str | None) -> str | None:
@@ -77,15 +87,25 @@ def parse_bearer(authorization: str | None) -> str | None:
 
 
 def key_id_from_secret(secret: str) -> str | None:
-    """The service issues secrets as ``<key_id>.<random>``."""
+    """The authority issues secrets as ``<key_id>.<random>``."""
     key_id = secret.split(".", 1)[0]
     return key_id or None
 
 
 class TokenGate:
-    def __init__(self, config: GateConfig, client: TokensClient) -> None:
+    def __init__(
+        self,
+        config: GateConfig,
+        client: TokensClient,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._cfg = config
         self._client = client
+        self._clock = clock
+        # Orders verifications by when they start; a clock cannot, since
+        # two reads may return the same value.
+        self._tickets = itertools.count(1)
         self._states: dict[str, _KeyState] = {}
         self._lock = asyncio.Lock()
         self._flush_task: asyncio.Task[None] | None = None
@@ -144,16 +164,39 @@ class TokenGate:
         return await self._charge(key_id, idempotency_key)
 
     async def _verified_state(self, key_id: str, secret: str) -> VerifyResult:
-        now = time.monotonic()
+        # The key id is public, read off any bearer header, so a cached
+        # verification answers only for the exact secret that earned it.
+        now = self._clock()
+        ticket = next(self._tickets)
+        fingerprint = _fingerprint(secret)
         async with self._lock:
             state = self._states.get(key_id)
-            if state is not None and state.verify_expires > now and state.verify.valid:
+            if (
+                state is not None
+                and state.verify_expires > now
+                and state.verify.valid
+                and hmac.compare_digest(state.secret_fingerprint, fingerprint)
+            ):
                 return state.verify
 
         verify = await self._client.verify(key_id=key_id, secret=secret)
 
         async with self._lock:
             existing = self._states.get(key_id)
+            if existing is not None and existing.verified_ticket > ticket:
+                # A verification that started after this one has already
+                # answered; an older answer must not replace what it knew.
+                return verify
+            if (
+                existing is not None
+                and not verify.valid
+                and not hmac.compare_digest(existing.secret_fingerprint, fingerprint)
+            ):
+                # A refused secret other than the cached one says nothing
+                # about the cached credential, so it must not evict it; but
+                # an older answer for this secret must not be cached over it.
+                existing.verified_ticket = max(existing.verified_ticket, ticket)
+                return verify
             estimated = verify.balance
             if existing is not None:
                 # Keep the running estimate (it may be ahead of the
@@ -162,6 +205,8 @@ class TokenGate:
                     if existing.pending else verify.balance
                 existing.verify = verify
                 existing.verify_expires = now + self._cfg.verify_ttl_seconds
+                existing.secret_fingerprint = fingerprint
+                existing.verified_ticket = ticket
                 existing.estimated_balance = estimated
                 if verify.valid:
                     existing.exhausted = False
@@ -170,6 +215,8 @@ class TokenGate:
                     verify=verify,
                     verify_expires=now + self._cfg.verify_ttl_seconds,
                     estimated_balance=estimated,
+                    secret_fingerprint=fingerprint,
+                    verified_ticket=ticket,
                 )
         return verify
 
@@ -188,7 +235,7 @@ class TokenGate:
             go_sync = (not batching) or estimated_after <= self._cfg.low_balance_threshold
             if not go_sync:
                 # Optimistic batched charge: let the request through now,
-                # settle it with the service on the next flush.
+                # settle it with the authority on the next flush.
                 state.pending.append({
                     "key_id": key_id, "amount": amount, "idempotency_key": idem,
                 })
@@ -231,7 +278,7 @@ class TokenGate:
                 continue
 
     async def flush(self) -> None:
-        """Settle all accumulated batched charges with the service."""
+        """Settle all accumulated batched charges with the authority."""
         async with self._lock:
             items: list[dict[str, Any]] = []
             owners: list[str] = []

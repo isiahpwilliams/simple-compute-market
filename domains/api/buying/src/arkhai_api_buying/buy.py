@@ -111,6 +111,34 @@ def select_settlement_for_matches(
     return selected
 
 
+def refuse_mixed_explicit_units(
+    settlement: BuyerSettlementComposition, matches: Iterable[dict[str, Any]],
+) -> None:
+    """Refuse explicit prices across selected listings that settle through different mechanisms.
+
+    One ``--initial-price``/``--max-price`` pair constrains every negotiation in
+    the run, and each mechanism prices in its own units, so a pair scaled for
+    one would misprice the other.
+    """
+    escrow = next(
+        (mechanism for mechanism, stage in settlement.stages.items() if stage.escrow_codec is not None),
+        None,
+    )
+    mechanisms = {
+        proposal.mechanism if isinstance(proposal, SettlementSelection) else escrow
+        for proposal in (match["_selected_buyer_proposal"] for match in matches)
+    }
+    if len(mechanisms) > 1:
+        typer.secho(
+            "--initial-price and --max-price are in one settlement's units, but the selected "
+            f"listings settle through {sorted(str(m) for m in mechanisms)}; omit them to derive "
+            "each listing's price, or enable one mechanism for this buy.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
+
+
 def register(
     group: typer.Typer,
     *,
@@ -332,11 +360,6 @@ def register(
                     fg=typer.colors.RED,
                 )
             raise typer.Exit(2)
-        if explicit_prices:
-            for session in sessions.values():
-                initial_price, max_price = session.scale_explicit_prices(
-                    initial_price, max_price
-                )
         try:
             matches = query_registry_for_matches_multi(
                 reg_urls,
@@ -373,7 +396,13 @@ def register(
             limit=max_matches,
         )
 
-        if not explicit_prices:
+        if explicit_prices:
+            refuse_mixed_explicit_units(settlement, matches)
+            for session in sessions.values():
+                initial_price, max_price = session.scale_explicit_prices(
+                    initial_price, max_price, matches
+                )
+        else:
             initial_price, max_price = resolve_prices_from_matches(
                 matches=matches,
                 console=console,

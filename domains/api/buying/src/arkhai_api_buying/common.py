@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Optional
 
 import typer
+from core_buyer.buyer_config import BuyerProfileResolver, ResolvedBuyerIdentity
 from core_buyer.orchestrator import fetch_listing_dict
 from core_buyer.policy_surface import configured_buyer_policy
+from core_buyer.profile_service import BuyerProfileService
 from core_buyer.run_log import read_run
 from market_identity import Signer, TrustedIdentitySet
 from rich.console import Console
@@ -28,6 +31,8 @@ from core_buyer.registry_config import (  # noqa: F401 — re-exports
     resolve_registry_api_keys,
     resolve_registry_authorities,
 )
+
+from arkhai_api_buying.credentials import UNRECORDED_EXIT, UNSAVED_EXIT, Delivery
 
 
 def make_run_publisher_principals_refresh(
@@ -108,6 +113,11 @@ def make_run_publisher_principals_refresh(
     return refresh
 
 
+def resolve_recovery_buyer_identity_in(run_id: str, directory: Path) -> ResolvedBuyerIdentity:
+    """The run's recorded profile and principal, read from the run log in ``directory``."""
+    return BuyerProfileResolver(BuyerProfileService(run_logs_directory=directory)).recovery(run_id)
+
+
 def resolve_key_disposition(
     *,
     new_key: bool,
@@ -157,12 +167,11 @@ def resolve_prices_from_matches(
     )
 
 
-def render_credentials(console: Console, credentials: dict) -> None:
-    """Show the issued key once — the secret is never returned again.
-
-    The same credentials are appended to the run-log
-    (``credentials_delivered``), which is the buyer's durable copy.
-    """
+def render_credentials(
+    console: Console, delivery: Delivery, *, run_id: str, command_path: str,
+) -> None:
+    """Show the issued key once, then exit if its secret could not be saved privately."""
+    credentials = delivery.credentials
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold")
     table.add_column()
@@ -174,13 +183,33 @@ def render_credentials(console: Console, credentials: dict) -> None:
     ):
         if credentials.get(key) is not None:
             table.add_row(label, str(credentials[key]))
-    console.print(
-        Panel(
-            table,
-            title="API key issued — shown once; saved to the run-log",
-            border_style="green",
+    if delivery.unsaved:
+        title, border = "API key issued — NOT SAVED; copy it now", "red"
+    elif delivery.reference:
+        title, border = "API key issued — shown once; saved privately", "green"
+    else:
+        title, border = "API key delivered — no secret returned", "green"
+    console.print(Panel(table, title=title, border_style=border))
+    if delivery.reference:
+        console.print(
+            f"[dim]Saved to {delivery.location}. Read it again with "
+            f"`{command_path} credentials show --from {run_id}`.[/dim]"
         )
-    )
+    if delivery.unrecorded:
+        typer.secho(
+            f"The run log could not record this delivery; the key is saved at {delivery.location}.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(UNRECORDED_EXIT)
+    if delivery.unsaved:
+        typer.secho(
+            "The issued key could not be saved to the private credential store. "
+            "Copy the secret above now; the run log does not hold it.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(UNSAVED_EXIT)
 
 
 def validate_model(model_type, value):

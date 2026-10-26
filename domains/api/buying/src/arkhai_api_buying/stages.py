@@ -24,6 +24,13 @@ from rich.table import Table
 
 from arkhai_api_buying import common
 from arkhai_api_buying.contributions import BuyingContributions
+from arkhai_api_buying.credentials import (
+    CredentialStore,
+    DeliveryRunLog,
+    end_run,
+    public_text,
+    record_delivery,
+)
 
 
 class EscrowCodec(Protocol):
@@ -162,11 +169,12 @@ class SettlementResume:
     poll_interval: float
     settlement_timeout: float
     console: Console
+    credential_store: CredentialStore
 
-    def open_log(self) -> RunLog:
-        log = open_run_log(
+    def open_log(self) -> DeliveryRunLog:
+        log = DeliveryRunLog.of(open_run_log(
             self.run_id, signer=self.identity.signer, profile_id=self.identity.profile_id,
-        )
+        ))
         log.event("settle_resumed")
         return log
 
@@ -215,18 +223,18 @@ class SettlementResume:
 
     def finish(
         self,
-        log: RunLog,
+        log: DeliveryRunLog,
         final: dict[str, Any],
         *,
         reference: tuple[str, str],
         end_fields: Mapping[str, Any],
         unready_border: str,
     ) -> dict[str, Any]:
-        """Record the terminal status and any issued credentials, show them, and exit unless ready."""
-        credentials = final.get("tenant_credentials")
-        if isinstance(credentials, dict) and credentials:
-            log.event("credentials_delivered", credentials=credentials)
-        log.end(
+        """Keep any issued credential privately, record the terminal status, show both, and exit unless ready."""
+        delivery = record_delivery(log, final.get("tenant_credentials"), self.credential_store)
+        delivery = end_run(
+            log,
+            delivery,
             final.get("status") or "unknown",
             **end_fields,
             fulfillment_uid=final.get("fulfillment_uid"),
@@ -239,11 +247,14 @@ class SettlementResume:
         if final.get("fulfillment_uid"):
             result.add_row("Fulfillment UID", str(final["fulfillment_uid"]))
         if final.get("reason"):
-            result.add_row("Reason", str(final["reason"]))
+            result.add_row("Reason", public_text(str(final["reason"]), log.secrets))
         border = "green" if final.get("status") == "ready" else unready_border
         self.console.print(Panel(result, title="Settlement complete", border_style=border))
-        if isinstance(credentials, dict) and credentials:
-            common.render_credentials(self.console, credentials)
+        if delivery is not None:
+            common.render_credentials(
+                self.console, delivery,
+                run_id=self.run_id, command_path=self.contributions.command_path,
+            )
         if final.get("status") != "ready":
             raise typer.Exit(7)
         return final

@@ -67,7 +67,7 @@ listing_shape:
           items: {type: string, minLength: 1}
         endpoint:
           type: object
-          required: [base_url]
+          required: [base_url, api_style]
           additionalProperties: true
           properties:
             base_url: {type: string, minLength: 1}

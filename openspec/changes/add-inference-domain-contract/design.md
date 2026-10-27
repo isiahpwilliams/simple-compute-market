@@ -213,7 +213,7 @@ amounts and the derived charge use the repository's uint256 wire type —
 Python integers in memory, decimal-digit strings on the wire — and the filter
 specification compares the bounds as exact decimal text. Token counts stay
 plain strict integers; the magnitude lives in the charge.
-### The rate card is pinned at issuance
+### The rate card is carried to issuance and pinned on the grant
 
 A grant carries the rate card in force when it was issued. A seller who
 republishes a listing with a new card changes the price of *new* purchases only;
@@ -221,9 +221,13 @@ credits already bought consume at the rate the buyer saw when paying. Without
 this, a seller could reprice sold credits after the escrow settled, and the
 buyer would have no recourse because the settlement mechanism already closed.
 
-This is stated normatively in the spec delta. The mechanism — where the pinned
-card is stored and how the authority reads it on the consumption path — is
-`meter-inference-usage`'s to implement; the invariant is this change's to state.
+This change holds what a vocabulary can: the materialization handed to
+issuance carries the card, and when it carries the accepted listing the codec
+refuses any other card. The stateful halves are stated where they are built
+(implementation review 02, F3 and F11): recording the accepted listing's card on
+the grant is `compose-inference-domain-stack`'s requirement, and pricing
+consumption by it, so republication reprices only later grants, is
+`meter-inference-usage`'s.
 
 ### Comparability without a derived price field
 
@@ -330,16 +334,22 @@ API-credits issuance evidence enforces with a canary test, applied to usage.
 Verification binds a body to the grant *and the request* the consumer expects
 (implementation review, 2026-10-22): a body is self-consistent for any grant
 and any request, so the consumer must say which it is settling. Grant and
-request together name one usage record and a consumer debits that pair once;
-the hold-and-settle path that enforces the once is `meter-inference-usage`'s.
+request together name one usage record. Debiting each pair at most once is
+`meter-inference-usage`'s requirement, because only the hold-and-settle path
+that enforces it can prove it (implementation review 02, F11).
 
-### Attestation is reserved as an opaque, unverified envelope
+### Attestation is reserved and unverified
 
-The model card and the usage evidence each carry an optional `attestation`
-field shaped as the repository's standard versioned envelope — `kind`,
-`schema_version`, and an opaque `payload`. In version 1 it is empty, nothing
-verifies it, and the registry does not expose it as a filter. Its purpose is to
-fix *where* a proof attaches — to the listing (what the seller claims to run)
+The model card carries an optional `attestation` field shaped as the
+repository's standard versioned envelope — `kind`, `schema_version`, and an
+opaque `payload`, which must be canonical JSON because the card is signed
+canonically. The usage evidence carries a reference instead — `kind`,
+`schema_version`, and a `sha256` digest of a proof held elsewhere — because an
+opaque field in signed, durable evidence could carry a prompt or a secret, and
+the format, not every producer, has to keep it secret-free (implementation
+review 02, F1 and F12). A new proof format is still a new `kind` on either.
+In version 1 both are empty, nothing verifies either, and the registry does not
+expose either as a filter. Their purpose is to fix *where* a proof attaches — to the listing (what the seller claims to run)
 and to each usage record (what served this request) — while the two shapes are
 being designed together, and to give a future trusted-execution proof a place
 to land as a new `kind` rather than a schema change.
@@ -484,7 +494,11 @@ where a task touches one it is an explicit decision gate.
 
 ## Migration Plan
 
-Additive. No existing wire shape, database, deployment, or distribution
+Additive for inference. One existing wire shape tightens: the `api` family's
+purchase shape now refuses a non-integer or boolean quantity and a `key_id`
+beside a new key, for API credits as for inference; a valid purchase produces
+the same payload, and both buyers already send an integer. `arkhai-api` keeps
+its version, because it has never been published. No database or deployment
 changes. Rollback is deleting the new wheel and the registry image's two `COPY`
 lines; no deployed registry selects the new specification until an operator sets
 `REGISTRY_FILTER_SPEC_PATH` to it.

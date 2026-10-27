@@ -18,7 +18,7 @@ from market_identity import (
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from arkhai_inference.listings.models import AttestationEnvelope, InferenceRateCard
+from arkhai_inference.listings.models import InferenceRateCard
 from arkhai_inference.usage.models import InferenceUsageRecord, derive_charge
 
 EVIDENCE_PROTOCOL = "arkhai.inference.usage-evidence.v1"
@@ -35,6 +35,19 @@ class _EvidenceContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+class AttestationRef(_EvidenceContract):
+    """A proof's kind, version, and digest; the proof itself is held elsewhere.
+
+    Evidence carries no opaque payload, because a free-form field could carry a
+    prompt or a secret into a signed, durable record. A future proof format is
+    a new ``kind`` under the same reference.
+    """
+
+    kind: str = Field(pattern=r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$", max_length=64)
+    schema_version: int = Field(ge=1)
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 class InferenceUsageEvidenceBodyV1(_EvidenceContract):
     """Public usage fact signed by the authority or storefront that metered it."""
 
@@ -49,7 +62,7 @@ class InferenceUsageEvidenceBodyV1(_EvidenceContract):
     fulfillment_id: str = Field(min_length=1, max_length=512)
     issuer: Identity
     recorded_at_unix: int = Field(ge=0)
-    attestation: AttestationEnvelope | None = None
+    attestation: AttestationRef | None = None
 
     @model_validator(mode="after")
     def validate_bindings(self) -> Self:

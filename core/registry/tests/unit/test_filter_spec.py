@@ -720,3 +720,21 @@ def test_requires_allows_one_directional_supply(tmp_path: Path) -> None:
     spec = load_filter_spec(path)
     assert spec.filters[1].requires == ["asking_rate_asset"]
     assert spec.filters[0].requires == []
+
+
+@pytest.mark.parametrize(
+    "source,packaged",
+    [
+        ("core/registry/filter-spec.yaml", "filter-spec.yaml"),
+        ("domains/apicredits/registry/filter-spec.yaml", "filter-spec-apicredits.yaml"),
+        ("domains/inference/registry/filter-spec.yaml", "filter-spec-inference.yaml"),
+    ],
+)
+def test_image_carries_each_repo_spec_in_both_stages(source: str, packaged: str) -> None:
+    """Each specification a deployment selects by path is copied into the runtime stage."""
+    repo_root = Path(__file__).resolve().parents[4]
+    dockerfile = (repo_root / "core/registry/Dockerfile").read_text(encoding="utf-8")
+    target = "./" if packaged == "filter-spec.yaml" else f"./{packaged}"
+    assert (repo_root / source).is_file()
+    assert f"COPY {source} {target}" in dockerfile
+    assert f"COPY --from=builder --chown=appuser:appuser /app/{packaged} ./" in dockerfile

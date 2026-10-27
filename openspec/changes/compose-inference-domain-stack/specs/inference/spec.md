@@ -63,3 +63,15 @@ version change.
   later observes a positive quantity
 - **THEN** it closes the listing and subsequently republishes it from the new
   authoritative view
+
+### Requirement: A grant records the accepted listing's rate card
+
+Issuance MUST record on the credit grant the rate card of the listing the buyer
+accepted, read from the accepted listing artifact rather than from the listing
+as currently published.
+
+#### Scenario: Seller republishes between acceptance and issuance
+
+- **WHEN** a seller republishes a model's listing with a new rate card after a
+  buyer accepted the previous one and before the grant is issued
+- **THEN** the issued grant records the card the buyer accepted

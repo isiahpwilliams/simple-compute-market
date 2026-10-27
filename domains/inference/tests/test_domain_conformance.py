@@ -117,3 +117,12 @@ def test_materialization_pins_the_rate_card():
         "cached_prompt_credits_per_million": None,
         "image_credits_per_unit": None,
     }
+
+
+def test_materialization_card_must_be_the_accepted_listings():
+    InferenceMaterialization.model_validate({**_MATERIALIZATION, "listing_resource": _CARD})
+    repriced = {**_RATE_CARD, "completion_credits_per_million": 3000}
+    with pytest.raises(ValidationError, match="accepted listing's rate card"):
+        InferenceMaterialization.model_validate(
+            {**_MATERIALIZATION, "rate_card": repriced, "listing_resource": _CARD}
+        )

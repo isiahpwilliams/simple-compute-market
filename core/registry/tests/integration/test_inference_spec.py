@@ -210,8 +210,9 @@ async def test_a_complete_card_passes_the_dry_run(served_inference_spec, registr
         (_card(offering_mode="api_credits"), "offering_mode"),
         (_card(rate_card={"asset": _ASSET, "prompt_credits_per_million": 500, "completion_credits_per_million": "1500"}), "prompt_credits_per_million"),
         (_card(rate_card={"prompt_credits_per_million": "500", "completion_credits_per_million": "1500"}), "asset"),
+        (_card(endpoint={"base_url": "https://inference.example/v1"}), "api_style"),
     ],
-    ids=["no-rate-card", "no-provenance", "bad-quantization", "wrong-offering-mode", "numeric-rate", "no-rate-card-asset"],
+    ids=["no-rate-card", "no-provenance", "bad-quantization", "wrong-offering-mode", "numeric-rate", "no-rate-card-asset", "no-api-style"],
 )
 async def test_malformed_cards_fail_the_dry_run(served_inference_spec, registry_client, card, field):
     response = await _dry_run(registry_client, card)

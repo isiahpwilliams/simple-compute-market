@@ -3,7 +3,8 @@
 Sections are ordered by real dependency and sized to land in roughly a day each.
 Sections 1–4 are pure vocabulary and tests with no runtime, deployment, or
 packaging effect; Section 5 touches the registry image; Section 6 packages.
-Nothing here starts a service or changes API credits.
+Nothing here starts a service. The one change to API credits is the family
+purchase shape's tightened validation (3.6).
 
 **Decision gates.** Both gates this change carried are closed and recorded in
 `design.md`: 7.1, model identity (decided 2026-09-21, revised 2026-09-24 to a
@@ -317,6 +318,44 @@ across the filters and `SettlementOption.asset`), and tightening the served
 shape against the leading-zero and whitespace strings the model canonicalises
 (only a publisher bypassing the codec meets the shape).
 
+Round 2 (implementation review 02, external). F1: usage evidence carries an
+attestation reference — a short lowercase `kind`, `schema_version`, and a
+`sha256` digest — never a payload, and a canary placed in any slot is refused;
+the card's envelope keeps its opaque payload. F12: that payload must be
+canonical JSON at validation. F15: `schema.py` binds the family's carriers from
+`arkhai_api_contracts.carriers` (message, terms, receipt, result), and
+`InferenceMaterialization` subclasses the family's materialization model with
+`rate_card` (3.2's local carriers are replaced); `arkhai-api-contracts` is
+declared. F3: the materialization refuses a card other than the carried accepted
+listing's. F11: recording the accepted card on the grant moves to
+`compose-inference-domain-stack`'s delta, and pricing consumption by it and
+debiting each grant-and-request pair once to `meter-inference-usage`'s. F2 and
+F10: an option advertises exactly one amount rate and an escrow at most one,
+and the selected-option path runs the same check, the card's asset included. F7:
+the wheel is in `manifests/published-distributions.json`, the PyPI workflow, and
+`docs/development/RELEASING.md`. F4: the filter specification requires
+`endpoint.api_style`. F14: a unit test checks both registry image stages copy
+each repository filter specification. F5: the proposal, Migration Plan, and the
+header above state the purchase-shape tightening and the new dependencies.
+
+Evidence: domain-package unit `make test-inference` 176 passed; family kit
+`make test-api` passed; `make test-apicredits` passed; registry unit and
+integration `make -C core/registry test` passed (132 and 139), with the new
+`api_style` dry-run case and Dockerfile check; release tooling 1135 passed, one
+failure from the host's `make` lacking `--eval`. `make -k test`: every suite
+passed except three named failures, each environmental and failing at the
+round's base commit as well — `test-provisioning-iac`'s relay-teardown shell
+tests, `test-storefront`'s `test_alkahest.py` (needs the development chain), and
+that release-tooling case. `make check-packaging`, `make check-comment-hygiene`,
+and `make check-change` passed. The fresh-context compliance check found five
+must-fix items, all fixed: the reference's `kind` admitted free text; the
+canary scenario for produced evidence had been replaced rather than kept; the
+one-amount-rate and selected-option asset rules were in code but not the spec;
+3.2 and the proposal did not record the carrier binding; and a promotion row
+cited the requirement's old name. Of its suggestions it took the design
+heading and wording fixes and a selected-option two-rate test; declined
+renaming the family factory classes, whose names come from the family.
+
 ## 7. Decision gates
 
 - [x] 7.1 **Decision gate — `model_id` naming authority.** Decided
@@ -411,19 +450,19 @@ shape against the leading-zero and whitespace strings the model canonicalises
 |---|---|
 | The domain owns the shapes a buyer compares on — model card, rate card, usage record — not what a storefront sells or charges; the payment kit converts money, the storefront prices its balance, and a registry operator decides comparability | the `inference` capability's `architecture.md` — "Market shape"; one sentence in `openspec/specs/api-credits/architecture.md` — "Market shape" |
 | One listing is one served model | the `inference` capability's `spec.md` — "One listing is one served model" |
-| One credit is one base unit of the settlement asset; the settlement rate is one; the rate card names its asset and prices in integers of it, carried as decimal-digit strings on the wire; every option and escrow on the listing identifies that asset | the `inference` capability's `spec.md` — "Purchase is priced in settlement-asset base units", "Rate card is integer-valued and pinned at issuance"; rationale in its `architecture.md` |
-| The rate card is pinned at issuance | the `inference` capability's `spec.md` — "Rate card is integer-valued and pinned at issuance" |
+| One credit is one base unit of the settlement asset; the settlement rate is one; the rate card names its asset and prices in integers of it, carried as decimal-digit strings on the wire; every option and escrow on the listing identifies that asset | the `inference` capability's `spec.md` — "Purchase is priced in settlement-asset base units", "Rate card is integer-valued and carried to issuance"; rationale in its `architecture.md` |
+| The handoff to issuance carries the accepted listing's rate card; the grant records it and consumption is priced by it in the changes that build them | the `inference` capability's `spec.md` — "Rate card is integer-valued and carried to issuance"; the recording is `compose-inference-domain-stack`'s delta and the pricing `meter-inference-usage`'s, each promoting with its change |
 | The request charge is added to the ceiling of the token sum; a failed upstream costs nothing | the `inference` capability's `spec.md` — "Usage record and deterministic charge derivation" |
 | A malformed card is refused by the storefront's codec and the registry's dry run; a registry's publish boundary refuses only retired spellings | the `inference` capability's `spec.md` — "One listing is one served model" |
 | Charge derivation is a pure function of record and card | the `inference` capability's `spec.md` — "Usage record and deterministic charge derivation" |
-| Usage evidence is secret-free, and verification binds it to the grant and the request; the pair is debited once | the `inference` capability's `spec.md` — "Usage evidence is secret-free" |
+| Usage evidence is secret-free by format, its attestation a digest reference, and verification binds it to the grant and the request; debiting each pair once is `meter-inference-usage`'s delta | the `inference` capability's `spec.md` — "Usage evidence is secret-free" |
 | Three identities; the bearer credential is delivery | rationale in the `inference` capability's `architecture.md`; the requirement is `compose-inference-domain-stack`'s delta and promotes with it |
 | The authority is the singular synchronous admission decision; rating systems are downstream | rationale in the `inference` capability's `architecture.md`; the requirement is `meter-inference-usage`'s delta and promotes with it |
 | Discovery under the `inference` schema identity | the `inference` capability's `spec.md` — "Discovery under the inference schema identity" |
 | Quota-backed publication in version 1 as the backed value of the declared backing property, quota being a sales cap | trigger in the `inference` capability's `architecture.md` — "Current limits"; the requirement is `compose-inference-domain-stack`'s delta and promotes with it |
 | No derived discovery price; a rate bound co-requires the card's asset (`rate_card_asset`) in the filter specification, so the registry refuses an unpaired bound | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
 | Inference binds the family's purchase shape, which validates exactly the two documented key dispositions and a strict integer quantity for every binding domain | the `api-family` capability's `spec.md` — "The purchase shape admits two key dispositions and an exact quantity" |
-| Attestation is reserved as an opaque envelope on the card and the evidence, unverified and unfilterable in this version | the `inference` capability's `spec.md` — "Attestation is reserved and unverified"; rationale in its `architecture.md` |
+| Attestation is reserved, unverified, and unfilterable in this version: an opaque canonical-JSON envelope on the card, a digest reference on the evidence | the `inference` capability's `spec.md` — "Attestation is reserved and unverified"; rationale in its `architecture.md` |
 | Copies are frozen and extraction blocks metering | `docs/development/ROADMAP.md` Goal 8 current state; the campaign section of `openspec/changes/README.md` |
 | Copy first, extract after two consumers | the `inference` capability's `architecture.md` — "Implementation composition"; `docs/development/ROADMAP.md` Goal 8 current state |
 | `inference` joins the enumerated offering modes; **rate card** and **usage record** join the Terms table | `docs/development/ARCHITECTURE.md` — "One name per concept", "Terms" |

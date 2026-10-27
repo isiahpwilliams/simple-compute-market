@@ -169,8 +169,11 @@ def test_evidence_for_another_grant_is_refused(fact, value):
         _verify(evidence, signer, body, expected=_expected(body, **{fact: value}))
 
 
-def test_attestation_envelope_is_carried_and_ignored_by_verification():
-    signer, body = _fixture(attestation={"kind": "tee.example", "schema_version": 1, "payload": {"quote": "x"}})
+_ATTESTATION = {"kind": "tee.example", "schema_version": 1, "digest": "sha256:" + "e" * 64}
+
+
+def test_attestation_reference_is_carried_and_ignored_by_verification():
+    signer, body = _fixture(attestation=_ATTESTATION)
     evidence = sign_inference_usage_evidence(body, signer)
     verified = _verify(evidence, signer, body)
     assert verified.attestation is not None
@@ -194,3 +197,20 @@ def test_evidence_on_an_eighteen_decimal_card_signs_and_round_trips():
     decoded = decode_signed_usage_evidence(encoded)
     assert decoded.body.charge == 10**21
     assert _verify(decoded, signer, body).rate_card.prompt_credits_per_million == 10**21
+
+
+@pytest.mark.parametrize(
+    "attestation",
+    [
+        {**_ATTESTATION, "payload": {"quote": _SECRET}},
+        {**_ATTESTATION, "digest": _PROMPT},
+        {**_ATTESTATION, "kind": _SECRET},
+        {**_ATTESTATION, "kind": _PROMPT},
+    ],
+    ids=["payload", "digest", "kind-secret", "kind-prompt"],
+)
+def test_attestation_cannot_carry_a_secret_or_a_text(attestation):
+    # The reference is the one field a producer could fill freely; each slot
+    # either refuses free text or bounds it to a digest.
+    with pytest.raises(ValidationError):
+        _fixture(attestation=attestation)

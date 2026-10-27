@@ -173,3 +173,27 @@ def test_validate_listing_rates_holds_options_and_escrows_to_one_asset():
         validate_listing_rates([], [escrow], asset="0x" + "02" * 20)
     with pytest.raises(ValueError, match="exactly one"):
         validate_listing_rates([SettlementOption.model_validate(_option(value=2))], [])
+
+
+def test_selected_option_outside_the_card_asset_is_refused():
+    option = _option()
+    order = _order(option)
+    order["listing_resource"]["rate_card"] = {"asset": "0x" + "02" * 20}
+    with pytest.raises(ValueError, match="option asset"):
+        selected_unit_price(order, _selection(option))
+    with pytest.raises(ValueError, match="option asset"):
+        extract_unit_price_from_order(order, settlement_selection=_selection(option))
+
+
+def test_selected_option_with_two_amount_rates_is_refused():
+    unit = RateValue(field="amount", per="credit", value=1)
+    rates = [unit, unit]
+    option = {
+        "option_id": derive_settlement_option_id(mechanism="alkahest.v1", asset=_ASSET, rates=rates, params={}),
+        "mechanism": "alkahest.v1",
+        "asset": _ASSET,
+        "rates": [rate.model_dump(mode="json") for rate in rates],
+        "params": {},
+    }
+    with pytest.raises(ValueError, match="exactly one amount rate"):
+        selected_unit_price(_order(option), _selection(option))

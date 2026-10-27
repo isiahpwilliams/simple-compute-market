@@ -13,7 +13,7 @@ import json
 from typing import Any, Literal, get_args
 
 from market_core.schemas import OptionalUint256Amount, Uint256Amount
-from market_identity import Identity
+from market_identity import CanonicalizationError, Identity, canonical_json
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 INFERENCE_KIND = "inference.v1"
@@ -102,6 +102,17 @@ class AttestationEnvelope(BaseModel):
     kind: str = Field(min_length=1)
     schema_version: StrictInt = Field(ge=1)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("payload")
+    @classmethod
+    def _canonical_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # The card is signed canonically, so a payload that cannot be is
+        # refused here rather than when the listing is signed.
+        try:
+            canonical_json(value)
+        except CanonicalizationError as exc:
+            raise ValueError("attestation.payload must be canonical JSON") from exc
+        return value
 
 
 class InferenceModelCard(BaseModel):

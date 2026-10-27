@@ -148,17 +148,28 @@ them.
   `domains/inference/src/arkhai_inference/usage/{models,evidence}.py`,
   `domains/inference/registry/filter-spec.yaml`,
   `domains/inference/pyproject.toml`, and `domains/inference/tests/`.
-- **Touched code.** `core/registry/Dockerfile` (one `COPY` per stage),
+- **Touched code.** `domains/api/src/arkhai_api/purchase.py` (the purchase
+  shape's validation), `domains/inference/src/arkhai_inference/schema.py` (the
+  negotiation carriers bound from `arkhai-api-contracts`), two API-credits
+  storefront tests that sent a string quantity,
+  `manifests/published-distributions.json`, `.github/workflows/publish-pypi.yml`
+  and `docs/development/RELEASING.md` (the wheel's release rows), `core/registry/Dockerfile` (one `COPY` per stage),
   `core/registry/tests/unit/test_filter_spec.py` (a load test beside
   `test_repo_api_credits_spec_loads`), `domains/Makefile`
   (`dist-inference-domain`, `test-inference`), and the root `Makefile`'s
   aggregate `dist-domains`/`test` membership.
-- **Wire.** A new schema and a new domain kind. No existing wire shape changes.
+- **Wire.** A new schema and a new domain kind. The `api` family's purchase
+  shape tightens for API credits as for inference: a non-integer or boolean
+  quantity and a `key_id` beside a new key are refused. Valid purchases are
+  unchanged, and no buyer in this repository sends the refused forms.
 - **Database.** None.
 - **Deployment.** The registry image carries one more filter specification;
   nothing selects it until a deployment sets the path.
 - **Packaging.** One new wheel, `arkhai-inference-domain`, depending on
-  `arkhai-core`, `arkhai-kit-identity`, and `pydantic`.
+  `arkhai-api`, `arkhai-api-contracts`, `arkhai-core`, `arkhai-kit-identity`,
+  and `pydantic`, and published through `manifests/published-distributions.json`
+  and the PyPI workflow beside the API-credits domain wheel. `arkhai-api`
+  changes without a version bump, because it has never been published.
 - **Contributor workflow.** None.
 
 ## Permanent documentation impact
@@ -181,10 +192,11 @@ them.
   across sellers is a registry operator's policy — the `inference`
   capability's `architecture.md`.
 - One credit is one base unit of the settlement asset, so the rate card is the
-  price and there is one authoritative number; the card is pinned at issuance
-  — the `inference` capability's `spec.md`.
-- Attestation is reserved as an opaque, unverified envelope on the card and
-  the evidence — the `inference` capability's `spec.md` and `architecture.md`.
+  price and there is one authoritative number; the handoff to issuance carries
+  the accepted listing's card — the `inference` capability's `spec.md`.
+- Attestation is reserved and unverified: an opaque canonical envelope on the
+  card, a digest reference on the evidence — the `inference` capability's
+  `spec.md` and `architecture.md`.
 - One listing is one served model, so the registry compares sellers per model —
   the `inference` capability's `spec.md`.
 - Marketplace principal, bearer credential, and spending authority are three

@@ -183,6 +183,13 @@ def test_attestation_envelope_requires_kind_and_version():
         InferenceModelCard.model_validate(_card(attestation={"payload": {}}))
 
 
+def test_attestation_payload_must_be_canonical_json():
+    # The card is signed canonically; an integer past I-JSON's range would
+    # validate and then fail signing.
+    with pytest.raises(ValidationError, match="canonical JSON"):
+        InferenceModelCard.model_validate(_card(attestation={"kind": "tee.example", "schema_version": 1, "payload": {"n": 2**64}}))
+
+
 def test_model_owner_is_a_marketplace_principal():
     card = InferenceModelCard.model_validate(_card(model_owner=_OWNER.model_dump(mode="json")))
     assert card.model_owner == _OWNER
@@ -274,6 +281,34 @@ def test_duplicate_settlement_option_ids_are_rejected():
         InferenceListing.model_validate(
             {"listing_resource": _card(), "settlement_options": [_OPTION, _OPTION]}
         )
+
+
+def _option_with_rates(rates):
+    return {
+        "option_id": derive_settlement_option_id(
+            mechanism="alkahest.v1", asset=_ASSET, rates=rates, params={}
+        ),
+        "mechanism": "alkahest.v1",
+        "asset": _ASSET,
+        "rates": [rate.model_dump(mode="json") for rate in rates],
+        "params": {},
+    }
+
+
+def test_each_option_advertises_exactly_one_amount_rate():
+    unit = RateValue(field="amount", per="credit", value=1)
+    for option in (_option_with_rates([]), _option_with_rates([unit, unit])):
+        with pytest.raises(ValidationError, match="exactly one amount rate"):
+            InferenceListing.model_validate({"listing_resource": _card(), "settlement_options": [option]})
+
+
+def test_an_escrow_advertises_at_most_one_amount_rate():
+    escrow = _escrow()
+    escrow["rates"] = escrow["rates"] * 2
+    with pytest.raises(ValidationError, match="at most one amount rate"):
+        InferenceListing.model_validate({"listing_resource": _card(), "accepted_escrows": [escrow]})
+    unrated = {k: v for k, v in _escrow().items() if k != "rates"}
+    InferenceListing.model_validate({"listing_resource": _card(), "accepted_escrows": [unrated]})
 
 
 def test_retired_offer_resource_key_is_rejected():

@@ -76,6 +76,16 @@ def _unit_rate(value: Any, per: Any) -> int:
     return UNIT_RATE
 
 
+def _check_option(option: SettlementOption, asset: str | None) -> int:
+    """An option's one amount rate, which must be one per credit, in ``asset``."""
+    if asset is not None and option.asset != asset:
+        raise ValueError("settlement option asset does not match the rate card's asset")
+    amount_rates = [rate for rate in option.rates if rate.field == "amount"]
+    if len(amount_rates) != 1:
+        raise ValueError("an inference settlement option advertises exactly one amount rate")
+    return _unit_rate(amount_rates[0].value, amount_rates[0].per)
+
+
 def validate_listing_rates(
     settlement_options: Iterable[SettlementOption],
     accepted_escrows: Iterable[dict[str, Any]],
@@ -84,28 +94,36 @@ def validate_listing_rates(
 ) -> None:
     """Refuse an advertised rate other than one base unit per credit.
 
-    With ``asset`` given, also refuse a settlement option or an escrow token
-    settling in another asset: the rate card's integers are base units of
-    exactly one asset, and a listing taking payment in two would let a
-    discovery bound read them in whichever matched. An escrow that names no
-    token asserts no asset and is not compared.
+    Each settlement option advertises exactly one amount rate, so a listing
+    that publishes is one a buyer can select. An escrow states at most one;
+    one that states none is priced at the domain's fixed rate. With ``asset``
+    given, also refuse an option or escrow token settling in another asset:
+    the rate card's integers are base units of exactly one asset, and a
+    listing taking payment in two would let a discovery bound read them in
+    whichever matched. An escrow that names no token asserts no asset.
     """
     for option in settlement_options:
-        if asset is not None and option.asset != asset:
-            raise ValueError(
-                "settlement option asset does not match the rate card's asset"
-            )
-        for rate in option.rates:
-            if rate.field == "amount":
-                _unit_rate(rate.value, rate.per)
+        _check_option(option, asset)
     for entry in accepted_escrows:
         literal_fields = entry.get("literal_fields")
         token = literal_fields.get("token") if isinstance(literal_fields, dict) else None
         if asset is not None and token is not None and token != asset:
             raise ValueError("accepted escrow token does not match the rate card's asset")
-        for rate in entry.get("rates") or []:
-            if isinstance(rate, dict) and rate.get("field", "amount") == "amount":
-                _unit_rate(rate.get("value"), rate.get("per", "credit"))
+        amount_rates = [
+            rate
+            for rate in entry.get("rates") or []
+            if isinstance(rate, dict) and rate.get("field", "amount") == "amount"
+        ]
+        if len(amount_rates) > 1:
+            raise ValueError("an accepted escrow advertises at most one amount rate")
+        for rate in amount_rates:
+            _unit_rate(rate.get("value"), rate.get("per", "credit"))
+
+
+def _card_asset(order: dict[str, Any]) -> str | None:
+    rate_card = coerce_resource_dict(order.get("listing_resource")).get("rate_card")
+    asset = rate_card.get("asset") if isinstance(rate_card, dict) else None
+    return asset if isinstance(asset, str) else None
 
 
 def selected_unit_price(
@@ -121,10 +139,7 @@ def selected_unit_price(
     ]
     if len(matches) != 1:
         raise ValueError("settlement selection does not exact-match one listing option")
-    amount_rates = [rate for rate in matches[0].rates if rate.field == "amount"]
-    if len(amount_rates) != 1:
-        raise ValueError("selected inference option requires one amount rate")
-    return _unit_rate(amount_rates[0].value, amount_rates[0].per)
+    return _check_option(matches[0], _card_asset(order))
 
 
 def extract_unit_price_from_order(
@@ -145,12 +160,10 @@ def extract_unit_price_from_order(
             SettlementSelection.model_validate(settlement_selection),
         )
 
-    rate_card = coerce_resource_dict(order.get("listing_resource")).get("rate_card")
-    asset = rate_card.get("asset") if isinstance(rate_card, dict) else None
     validate_listing_rates(
         _settlement_options(order),
         _accepted_escrows(order),
-        asset=asset if isinstance(asset, str) else None,
+        asset=_card_asset(order),
     )
 
     if default_min_price is not None and str(default_min_price).strip():

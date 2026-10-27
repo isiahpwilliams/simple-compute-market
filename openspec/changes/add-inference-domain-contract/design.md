@@ -279,19 +279,24 @@ payload shape. It is the right shape because the purchase layer *is* the same:
 a buyer is buying N credits onto a new or existing key. What differs between the
 domains is the listing and the consumption, not the purchase.
 
-It is copied into `domains/inference/src/arkhai_inference/negotiation/terms.py`, not imported.
-`ARCHITECTURE.md`'s dependency layers forbid a domain importing a sibling, and
-the copy is small. The `api` family vocabulary owns the shape, and the stack
-change replaces this copy with a binding of it; until then this domain carries
-its own.
+Inference binds it from the `api` family vocabulary,
+`provision_terms_model("inference.v1")` in
+`domains/inference/src/arkhai_inference/negotiation/terms.py`, as API credits
+binds it under `api_credits.v1`. The family specification requires every domain
+selling prepaid bearer access to bind the shape rather than define or copy it,
+and the domain's registry row declares `family = "api"`, so the architecture
+check admits the edge.
 
-The inference copy validates what this specification states and no more: a
-strict integer quantity, a new key naming no identifier, an existing key
-naming a non-blank one. The API-credits original is looser on each point and
-is deliberately left so here (implementation review, 2026-10-22, owner's
-direction): the kit change pins API credits before refactoring it, owns the
-extraction of the shape into the shared kit, and corrects the API-credits
-validation there, replacing this copy with an import.
+The shape validates exactly two key dispositions: a new key naming no
+identifier, and an existing key naming a non-blank one. `quantity` is a strict
+integer, and the purchase maker passes it through rather than converting it, so
+a fractional quantity is refused instead of truncated. The vocabulary carried a
+looser form when the family kit landed — lax integer coercion, a `key_id`
+admitted beside a new key, and a maker that truncated through `int()` — and this
+change tightens it there, for both domains. A valid purchase produces the same
+payload as before; API credits now refuses the malformed forms it used to
+coerce, which no buyer in this repository sends, because both buying paths pass
+an `int`.
 
 ### Usage record and charge derivation are domain-owned deterministic semantics
 

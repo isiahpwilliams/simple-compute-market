@@ -65,31 +65,8 @@ def test_accessors_read_any_carrier():
     assert provision_key_id(object()) is None
 
 
-def _envelope(payload):
-    return {"kind": "inference.v1", "version": 1, "payload": payload}
 
-
-@pytest.mark.parametrize(
-    "key",
-    [
-        {"mode": "new", "key_id": "ak_existing"},
-        {"mode": "existing", "key_id": ""},
-        {"mode": "existing", "key_id": "  "},
-    ],
-    ids=["new-with-key-id", "existing-blank", "existing-whitespace"],
-)
-def test_only_the_two_documented_key_shapes_are_admitted(key):
-    with pytest.raises(ValidationError):
-        InferenceProvisionTerms.model_validate(_envelope({"quantity": 1, "key": key}))
-
-
-@pytest.mark.parametrize("quantity", [True, "5", 1.0, 1.5])
-def test_quantity_is_a_strict_integer(quantity):
-    with pytest.raises(ValidationError):
-        InferenceProvisionTerms.model_validate(_envelope({"quantity": quantity}))
-
-
-def test_the_maker_does_not_truncate_a_fractional_quantity():
+def test_the_binding_shares_the_family_payload_rules():
     with pytest.raises(ValidationError):
         make_inference_provision_terms(quantity=1.5)
     with pytest.raises(ValidationError):

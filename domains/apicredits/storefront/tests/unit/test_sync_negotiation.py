@@ -21,7 +21,7 @@ def test_decode_api_credits_message_terms_uses_domain_runtime() -> None:
             kind="api_credits.v1",
             version=1,
             payload={
-                "quantity": "5",
+                "quantity": 5,
                 "key": {"mode": "existing", "key_id": "ak_existing"},
             },
         ),

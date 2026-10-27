@@ -17,6 +17,7 @@ def wheels(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     output = tmp_path_factory.mktemp("inference-wheels")
     projects = {
         "domain": (INFERENCE, "arkhai_inference_domain-*.whl"),
+        "api": (REPO / "domains" / "api", "arkhai_api-*.whl"),
         "core": (REPO / "core", "arkhai_core-*.whl"),
         "identity": (REPO / "kit" / "identity", "arkhai_kit_identity-*.whl"),
     }

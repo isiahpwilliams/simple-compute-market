@@ -5,7 +5,15 @@ from __future__ import annotations
 from functools import cache
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    create_model,
+    field_validator,
+    model_validator,
+)
 
 PROVISION_TERMS_VERSION = 1
 
@@ -17,16 +25,22 @@ class KeyIntent(BaseModel):
     key_id: str | None = None
 
     @model_validator(mode="after")
-    def _existing_key_is_named(self) -> Self:
-        if self.mode == "existing" and not self.key_id:
+    def _validate_key_shape(self) -> Self:
+        # Exactly two shapes are admitted: a new key names no identifier, an
+        # existing key names a non-blank one.
+        if self.key_id is not None and not self.key_id.strip():
+            raise ValueError("key.key_id must be non-blank")
+        if self.mode == "existing" and self.key_id is None:
             raise ValueError("key.key_id is required when key.mode is existing")
+        if self.mode == "new" and self.key_id is not None:
+            raise ValueError("key.key_id is not admitted when key.mode is new")
         return self
 
 
 class PurchasePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    quantity: int = Field(ge=1)
+    quantity: StrictInt = Field(ge=1)
     key: KeyIntent = Field(default_factory=KeyIntent)
 
 
@@ -49,7 +63,7 @@ class ProvisionTerms(BaseModel):
         key: dict[str, Any] = {"mode": key_mode}
         if key_id is not None:
             key["key_id"] = key_id
-        return cls(payload={"quantity": int(quantity), "key": key})
+        return cls(payload={"quantity": quantity, "key": key})
 
     @property
     def quantity(self) -> int | None:

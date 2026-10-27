@@ -76,7 +76,9 @@ them.
 - Define round-zero provision intent `inference.v1`: a positive integer credit
   `quantity` and a key disposition of `new` or `existing` with `key_id`. This is
   the `api` family's purchase shape bound under a new kind, because the purchase
-  layer is identical by design.
+  layer is identical by design. The family vocabulary's validation is tightened
+  to the two key dispositions and a strict integer quantity for every domain
+  that binds it.
 - Define the six market-domain codecs — listing, message, terms,
   materialization, receipt, result — and register the domain's conformance
   examples with the shared `assert_domain_conformance` harness.
@@ -119,9 +121,9 @@ them.
 - No storefront or buyer executables, gateway, authority service deployment,
   Compose stack, development identities, or end-to-end scenario. Those are
   `compose-inference-domain-stack`.
-- No new family vocabulary or kit: inference binds the `api` family's, which
-  `compose-api-family-kit` built, and changes no API-credits behavior, wire
-  shape, digest, database row, or distribution.
+- No family vocabulary or kit, and no change to any API-credits behavior,
+  wire shape, digest, database row, or distribution. That is
+  `compose-api-family-kit`.
 - No admission holds, no post-response settlement, no streaming usage capture,
   no cancellation handling. That is `meter-inference-usage`.
 - No fiat (`arkhai.payments.v1`) option for inference listings, and no

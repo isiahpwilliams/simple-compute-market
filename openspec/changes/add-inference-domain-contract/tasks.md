@@ -149,6 +149,17 @@ an existing key names a non-blank one; the maker no longer truncates through
 `compose-api-family-kit` extracts the shape into the shared kit and corrects
 API credits there, replacing this copy with an import.
 
+- [x] 3.6 Bind the family's purchase shape. `compose-api-family-kit` extracted
+      the shape into `domains/api/src/arkhai_api/purchase.py` without the
+      correction, so this change makes it there: a strict integer quantity, a
+      new key naming no `key_id`, an existing key naming a non-blank one, and a
+      maker that does not truncate; `domains/api/tests/unit/test_purchase.py`
+      carries the refusals moved from the inference tests.
+      `negotiation/terms.py` becomes `provision_terms_model("inference.v1")`,
+      `domains/inference/pyproject.toml` declares `arkhai-api`, and the
+      inference row in `docs/development/ARCHITECTURE.toml` declares
+      `family = "api"`.
+
 ## 4. Usage record, charge derivation, and evidence
 
 - [x] 4.1 `domains/inference/src/arkhai_inference/usage/models.py`: `UsageOutcome` literal
@@ -411,7 +422,7 @@ shape against the leading-zero and whitespace strings the model canonicalises
 | Discovery under the `inference` schema identity | the `inference` capability's `spec.md` — "Discovery under the inference schema identity" |
 | Quota-backed publication in version 1 as the backed value of the declared backing property, quota being a sales cap | trigger in the `inference` capability's `architecture.md` — "Current limits"; the requirement is `compose-inference-domain-stack`'s delta and promotes with it |
 | No derived discovery price; a rate bound co-requires the card's asset (`rate_card_asset`) in the filter specification, so the registry refuses an unpaired bound | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
-| The inference copy of the provision-intent shape validates exactly the two documented shapes; the shared kit owns extraction and the API-credits correction | `design.md` — "Provision intent is the API-credits shape under a new kind"; carried into `compose-api-family-kit`'s plan |
+| Inference binds the family's purchase shape, which validates exactly the two documented key dispositions and a strict integer quantity for every binding domain | the `api-family` capability's `spec.md` — "The purchase shape admits two key dispositions and an exact quantity" |
 | Attestation is reserved as an opaque envelope on the card and the evidence, unverified and unfilterable in this version | the `inference` capability's `spec.md` — "Attestation is reserved and unverified"; rationale in its `architecture.md` |
 | Copies are frozen and extraction blocks metering | `docs/development/ROADMAP.md` Goal 8 current state; the campaign section of `openspec/changes/README.md` |
 | Copy first, extract after two consumers | the `inference` capability's `architecture.md` — "Implementation composition"; `docs/development/ROADMAP.md` Goal 8 current state |

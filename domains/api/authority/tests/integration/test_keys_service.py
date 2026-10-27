@@ -83,7 +83,7 @@ def _composed(config=CONFIG) -> tuple[CapacityLedgerService, KeysService, object
     ledger.register_resource(
         resource_id="svc-quota",
         total_units=1000,
-        resource_type=config.profile.resource_type,
+        resource_type="example.units",
         pool_id=config.profile.pool_id,
     )
     return (
@@ -449,9 +449,7 @@ def test_usage_log_pages_by_event_id(service):
     assert [e["idempotency_key"] for e in page] == ["r2", "r3"]
 
 
-# ---------------------------------------------------------------------------
-# The profile replaces every offering-mode literal
-# ---------------------------------------------------------------------------
+# The profile replaces every offering-mode literal.
 
 
 def _issue_under(config, service, negotiation_id, *, capacity_reservation_id=None):

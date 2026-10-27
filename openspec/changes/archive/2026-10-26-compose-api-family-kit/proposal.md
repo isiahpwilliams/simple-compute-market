@@ -34,7 +34,8 @@ without the ledger.
   set. Every later slice is proven byte-identical against them. A failure here
   is a blocking defect, never a migration.
 - **The `api` family under `domains/api`.** `ARCHITECTURE.toml` gains the
-  family row and both domains join it. The kit lives under the family directory,
+  family row; API credits joins it, and inference joins when its campaign
+  composes the kit. The kit lives under the family directory,
   as the scope rule prescribes; compute's kit sits elsewhere only under override
   rows another change owns.
 - **Eleven projects, each forced by a rule.** The vocabulary `arkhai_api`
@@ -72,7 +73,7 @@ without the ledger.
   service stays, with its distribution, image, entry point, and version response
   unchanged, and shrinks to a composition root that passes the kit its label
   and one immutable capacity profile — offering mode, pool declarations,
-  backing, resource type — in place of the `api_credits` values the service
+  backing — in place of the `api_credits` values the service
   hard-codes today. The inference service root is the stack change's, and
   mounts metering's routes when they come.
 - **The gate relocates under its own name.** `arkhai-api-gate` is the bearer
@@ -124,7 +125,9 @@ without the ledger.
   consumption rule beyond relocating it.
 - No ledger-free access distribution; deferred in `design.md` with its trigger.
 - No TypeScript or Rust gate changes beyond what relocating the Python reference
-  requires; their conformance fixture stays where it is and stays green.
+  requires, and the verify-cache fixes the owner directed onto this change's
+  branch (see `design.md` D10); their conformance fixture stays where it is and
+  stays green.
 
 ## Dependencies and Related Changes
 
@@ -199,9 +202,5 @@ without the ledger.
 
 ## Status
 
-Ready for implementation. The design in `design.md` passed its design gate on
-2026-10-22 after four external review passes; the round's dispositions are
-recorded in `interventions.jsonl`, and the review records and their triage are
-kept in the change's `reviews/` directory, which the repository keeps untracked
-as the change workflow prescribes. `tasks.md` plans eleven sections, pins and
-baselines first. The change stands on `dev` and waits on nothing.
+Archived 2026-10-26. Sections 1–11 are implemented; the API-credit lane has not
+run, and is tracked in the index's Goal 4 unowned work.

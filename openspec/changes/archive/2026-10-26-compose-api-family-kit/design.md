@@ -68,7 +68,7 @@ domain fills with its three modules and wiring; the duplicate digest removed.
 **Non-Goals.** Any change to an API-credits digest, wire shape, database row,
 or observable behaviour. Any inference role, stack, or scenario. Metering,
 holds, or usage capture. A TypeScript or Rust gate change beyond what relocating
-the Python reference requires. A ledger-free access distribution, deferred under
+the Python reference requires and the verify-cache fixes D10 records. A ledger-free access distribution, deferred under
 "Open Questions".
 
 ## Decisions
@@ -77,10 +77,11 @@ the Python reference requires. A ledger-free access distribution, deferred under
 
 Credits is one way to pay for API access; a domain selling access by
 subscription or by invoice would still publish a listing, issue a credential,
-and gate requests on it. The family is named for what is sold, and both domains
-join it: `ARCHITECTURE.toml` gains a `[[families]]` row (`name = "api"`,
+and gate requests on it. The family is named for what is sold, and API credits
+joins it now: `ARCHITECTURE.toml` gains a `[[families]]` row (`name = "api"`,
 `directory = "domains/api"`, `vocabulary = "arkhai-api"`) and the `apicredits`
-and `inference` domain rows gain `family = "api"`.
+domain row gains `family = "api"`; the inference domain joins when its campaign
+composes the kit.
 
 The kit lives under the family directory. The scope rule reads scope from the
 path: "a package under a family's directory [is scoped] to that family", and the
@@ -288,10 +289,12 @@ same shape to the authority.
 The root passes the authority kit two things beside its signer, trusted
 principals, database, and key namespace. The issuance label. And one validated,
 immutable **capacity profile** carrying the offering mode, the seeded pool's
-provider, identity, and label, its deliverable and advertisable modes, its
-backing, and the capacity resource type — the values the service hard-codes as
-`api_credits` today in its pool seed and its reservation check. The kit reads
-every such value from the profile and names none itself.
+provider, identity, and label, its deliverable and advertisable modes, and its
+backing — the values the service hard-codes as `api_credits` today in its pool
+seed and its reservation check. The kit reads every such value from the profile
+and names none itself. The profile carries no capacity resource type: the
+ledger does not filter reservations by type, and a resource's type is what its
+registration states (pre-closeout review 08 F3).
 
 **Rejected:** one family service at `domains/api/service` deployed per domain.
 A family composition root may not import a domain, so a domain's contributions
@@ -516,6 +519,17 @@ maintainer's. There are no third-party sellers installing the package today,
 and sellers are expected to take the pre-built images, so the old name has
 nothing to protect.
 
+Section 9's review found that the gate trusted a cached key identifier for any
+secret that presented it. The cache now answers only for the exact secret that
+earned it, compared by fingerprint; a refusal of another secret leaves it in
+place; and verifications install by ticket, in the order they started, since
+two clock reads can return the same value. The TypeScript and Rust gates had
+the same defect, and at the owner's direction their fixes and the conformance
+steps asserting each verification's secret ride this change's branch, outside
+its original non-goal; `sign-multi-language-credits-middleware` keeps outbound
+signing and the fixture's home. The `api-family` delta states the invariants
+for every gate.
+
 **Rejected:** `gate` depending on `contracts` for one spelling of the routes;
 it would make pydantic and the identity kit hard dependencies of a package
 whose contract is httpx-only. **Rejected:** keeping
@@ -617,13 +631,86 @@ composition (D2): `arkhai-api-selling` on `arkhai-core-storefront`, owned by
 change introduces the rows and owns none of them. The
 inference row gains its attribute when that domain's campaign composes the kit.
 
+## Implementation notes
+
+What implementation settled beneath the decisions above, kept here when the task
+notes were compressed.
+
+- **D2, D11.** `selling`'s `auth` is a third copy of the storefront v2
+  authentication beside VM's and bare metal's, until
+  `kit-owned-storefront-auth-and-persistence` consolidates them. At the owner's
+  decision, the `selling` exception row's reason names each import it excuses
+  and no destination, because the owning change's design has settled none.
+  `selling`'s `arkhai-kit-resource-pools` dependency is planned, and the pool
+  declaration reader's placement is a divergence `ARCHITECTURE.md` already
+  names. The storefront's binding tests patch module functions because core
+  fixes the fulfillment hook's signature.
+- **D3.** `IssuanceLabel` carries a separate `fulfillment_id_prefix`, since the
+  recorded API-credits prefix, `api-credit-fulfillment.v1`, is singular and no
+  rule derives it from `api-credits`. The bound carriers are cached
+  `create_model` subclasses: equal kinds or labels give one class, and a class
+  statement inside the factory cannot name the base it shadows. Their generic
+  class names change only pydantic titles, reprs, and error headers, which no
+  recorded document names. `IssuanceRequest` keeps the service's field order and
+  docstring because the served OpenAPI document carries both.
+- **D4.** `contracts` re-exports the vocabulary's label and result model, so the
+  client, whose kind allowlist admits `contracts` and the identity kit, reads
+  every wire model from one package; widening the allowlist was declined. The
+  client validates an outgoing issuance request under its own label, so another
+  label's command never reaches the authority, and owns one HTTP client for its
+  lifetime with `close()`, since a client per call would close a transport its
+  caller supplied.
+- **D5.** `selling-alkahest` imports no core-storefront module — the stage-event
+  log and the escrow backfill are injected — so it needs no exception row; the
+  settle and refund payload checks sit in `selling` beside the route services
+  for the same reason. `SELLER_STAGES` lives in the storefront's `container.py`,
+  because the stages' loops feed `STOREFRONT_LOOPS` there. A section services
+  the deals accepted under it whether or not it publishes. Saving the credential
+  before submitting the attestation was tried and withdrawn: a restart after
+  submitting re-issued and rotated the secret while the row kept the dead one,
+  and the secret was readable while the attestation was in flight. A typed
+  bundle per library, or one constructor argument per collaborator, was
+  declined for the stages, because the collaborators exist only once the
+  lifespan runs and either would duplicate the composition behind providers.
+- **D6.** `AuthorityRouteService` is one class because every route shares the
+  one key-service collaborator. `key_prefix` is required, so two roots never
+  share a namespace by omission. A foreign offering mode is refused only at the
+  site ledger's admission, as undeclared by the seeded pool, since the key
+  service always claims the profile's own mode.
+- **D7.** The `result_mismatch` check does not compare the reservation, because
+  the authority may replace an expired hold under the same grant. Guards
+  register in `market_policy`'s process-wide registry, keyed by name, so one
+  process composes one domain's guards. On a registry divergence repair the
+  capacity-publication kit republishes without the publication hook, and VM's
+  hook expects a typed payload, so `selling` wraps the store for `load_listing`
+  to run the hook on the object the kit will send; a repair hook every domain
+  can use is that kit's to add. The buyer's run-log credential copy was
+  deferred to `keep-buyer-credentials-private` because no buyer had a private
+  store and the run log was the only durable copy of a once-issued secret; the
+  Alkahest option flags to `derive-buyer-settlement-inputs` because a private
+  key on the command line reaches shell history and process inspection, and
+  removing the flags changes a documented interface.
+- **D9.** The rollback probes run behind the shared-secret gate, since no
+  credential file can be mounted from inside the test container. The
+  storefront's authentication baseline observes each route's operation and
+  resource from an unsigned probe through an outermost test middleware, rather
+  than transcribing them.
+- **D10.** The gate keeps a SHA-256 fingerprint of the secret and matches it in
+  constant time; an answer installs only if its verification started after the
+  cached one's, ordered by a strictly increasing ticket because a monotonic
+  clock can return one value twice. The window the ordering defect reopened
+  never outlived the old answer's own TTL, so it bounded staleness rather than
+  bypassing verification. The gate parses leniently, so the service suites hold
+  only the response fields some test asserts.
+
 ## Risks / Trade-offs
 
 - **Refactoring a live domain.** Mitigated by the pins, the compatibility
   baselines, each slice's suites and lane, and the rule that a slice leaves
-  API credits green. The change's pull request is in the main repository, so
-  the pipeline runs on every push beside the local suites; two storefront
-  jobs fail on the `dev` base itself and are inherited, not this change's.
+  API credits green. The pipeline was meant to run on every push; the change
+  was worked from a fork without push access to the main repository, so it
+  never ran (11.8), and the API-credit lane is tracked in the index's Goal 4
+  unowned work.
 - **Eleven projects where there were five.** Each exists for a rule the
   documents state; the cost is lock files and the aggregate test target, which
   `make check-packaging` and "Aggregate kit tests cover every kit" hold.

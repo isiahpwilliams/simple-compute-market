@@ -128,14 +128,16 @@ version change.
 - **THEN** it closes the listing and subsequently republishes it from the new
   authoritative view
 
-### Requirement: The issuance projection names the served model
+### Requirement: The issuance projection names the served model and pins the accepted terms
 
 The inference storefront's issuance projection MUST digest the accepted
 listing's `served_model_name` as the service identity and its `resource_id`
-as the resource, and MUST deliver the listing's `endpoint.base_url` as the
-connection payload's base URL, so a grant is bound to the model name the
-gateway admits and a buyer's first request needs nothing beyond the kit's
-connection payload.
+as the resource, MUST fill the subject's terms digest with the canonical
+digest of the accepted card's `rate_card` and `attestation` and its request
+charge with the card's `request_credits`, and MUST deliver the listing's
+`endpoint.base_url` as the connection payload's base URL, so a grant is bound
+to the model name the gateway admits and to the price and attestation the
+buyer accepted.
 
 #### Scenario: Two listings of one model are purchased
 
@@ -186,12 +188,13 @@ The gateway MUST expose chat completions and completions in the OpenAI
 version-1 style and MUST forward a request only after the authority has
 verified the bearer credential and charged it. A request naming a model the
 gateway does not serve MUST be refused before any charge, so the gateway reads
-the request body and checks the model before it verifies the key. The served
-model, the charge, and the purchase pointer MUST be read from the listing the
-gateway fronts, so the charge is the published `request_credits`. A retried
-request is a second charge, and a request after a top-up is admitted once the
-gate's verification entry expires, until metered consumption replaces the
-per-request charge. The gateway MUST
+the request body and checks the model before it verifies the key. The
+gateway's executable MUST project the listing it fronts into the family's
+offering, and the charge a request pays MUST be the `request_credits` the key
+was issued under, returned by verification, so a republished price reaches
+only keys issued after it. A retried request is a second charge, and a
+request after a top-up is admitted once the gate's verification entry
+expires, until metered consumption replaces the per-request charge. The gateway MUST
 answer `401` for a missing or unknown credential, `403` for a revoked one, and
 `402` with a pointer to where credits can be bought for an exhausted one. A
 gateway MUST serve exactly one model at one configured charge, and its model
@@ -227,8 +230,9 @@ list MUST contain only that model.
 
 The gateway MUST call a verification hook after the key is verified and
 before it is charged, and the buyer plugin MUST call one before it proposes
-settlement; each receives the attestation envelope of the listing the gateway
-fronts, read at startup, or of the listing being bought, and may refuse.
+settlement; the gateway's receives the offering's current attestation envelope
+and the key's accepted terms digest, the plugin's the envelope of the listing
+being bought, and either may refuse.
 In this version both hooks admit everything, and the gateway image MUST be
 built from digest-pinned inputs so a later proof format can measure it.
 

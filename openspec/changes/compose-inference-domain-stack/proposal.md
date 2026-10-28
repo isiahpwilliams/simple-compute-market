@@ -48,10 +48,11 @@ only request-priced rate cards are publishable until then.
   upstream responses unbuffered, serves `/v1/models` listing the one configured
   model, and carries a per-request verification seam for a later attestation
   proof. Inference composes it as the `arkhai:inference-gateway` image from a
-  `gateway-service` root that names the listing the gateway fronts, the
-  upstream, and the gate's `service`-role signing credential; the served
-  model, the per-request charge, and the purchase pointer are read from that
-  listing at startup.
+  `gateway-service` root that reads and validates the listing the gateway
+  fronts, projects it to the family's offering, and supplies the upstream and
+  the gate's `service`-role signing credential; a request is charged the
+  `request_credits` its key was issued under, which issuance pins on the key
+  and verification returns.
 - **Buyer.** An `arkhai-inference-buyer` plugin under `market.buyer_domains`
   composing the kit's purchase flow and contributing `market inference listing
   list|show`, `buy`, `negotiate`, `settle`, and `settlement status`, the
@@ -84,8 +85,9 @@ only request-priced rate cards are publishable until then.
   until metering lands.
 - `api-family`: the kit's contribution surface gains its second consumer; the
   family gains a gateway library in front of OpenAI-style model servers; the
-  authority scopes a key to its first grant; the gate gains a separable verify
-  step.
+  issuance subject may carry accepted terms, which the authority pins on the
+  key and `verify` returns; the authority scopes a key to its first grant; the
+  gate gains a separable verify step.
 - `market-composition`: the "shipped domains are loaded" scenario gains the
   inference plugin.
 - `deployment-state`: a third registry schema is deployable locally; the
@@ -154,8 +156,10 @@ only request-priced rate cards are publishable until then.
 | Compose files, identities, lane (D10, D11) | the `deployment-state` and `test-compatibility` capabilities' `spec.md`; `dev-env/identities/README.md` |
 | Verification seams and the measurable image (D16) | the `inference` capability's `architecture.md`; the `api-family` capability's `architecture.md` |
 | The three-party constraint on settlement composition (D17) | the `inference` capability's `architecture.md` |
-| A key is scoped to its first grant's service and resource (F4) | the `api-family` capability's `spec.md` |
-| The gateway charges what the listing publishes, read at startup (F1) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` |
+| A key is scoped to its first grant's service, resource, and accepted terms (F4, review 02 F1) | the `api-family` capability's `spec.md` |
+| The issuance subject carries the accepted terms digest and request charge; the gateway charges the key's verified charge (F1) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` and `architecture.md` contribution table |
+| The family gateway consumes a domain-neutral offering the domain executable projects (review 02 F3) | the `api-family` capability's `spec.md` and `architecture.md` |
+| The proof hook binds to the accepted attestation through the terms digest (review 02 F2) | the `inference` capability's `architecture.md` |
 | Verification precedes the charge; the gate's separable verify step (F3) | the `api-family` capability's `spec.md` and `architecture.md` |
 | A top-up is admitted after the gate's verification TTL (F2) | the `inference` capability's `spec.md`; `architecture.md` — "Current limits" |
 
@@ -164,5 +168,5 @@ only request-priced rate cards are publishable until then.
 Returned to design on 2026-10-19; the copy-based `design.md` and `tasks.md`
 were withdrawn with the copied implementation. Redesigned on 2026-10-28
 against the `api` family kit, archived on 2026-10-26, and the contract as
-implemented; design review 01 was triaged on 2026-10-28 and its four blocking
-gaps are decided in `design.md`, which awaits a second design review.
+implemented; design reviews 01 and 02 were triaged on 2026-10-28 and their
+gaps are decided in `design.md`, which awaits a third design review.

@@ -80,11 +80,11 @@ library therefore lives in the family as `domains/api/gateway`
 (`arkhai-api-gateway`), depending on `arkhai-api-gate` and `httpx`, and
 inference adds `domains/inference/gateway-service` (`arkhai-inference-gateway-service`),
 a composition root the architecture check reads as an executable through the
-hyphen rule, which supplies the listing the gateway fronts (its registry or
-storefront URL and `listing_id`), the upstream base URL and credential
-reference, and the gate's signing credential. The served model name, the
-per-request charge, and the purchase pointer are read from that listing (F1
-below), not configured twice.
+hyphen rule, which reads the listing the gateway fronts (its registry or
+storefront URL and `listing_id`), validates it as an `InferenceListing`, and
+projects it to the family's `GatewayOffering` (review 02, F3); it also
+supplies the upstream base URL and credential reference and the gate's
+signing credential. The library understands only the offering.
 
 The gate middleware cannot be used as-is: it authorizes on headers alone, so
 an unlisted model would be charged before refusal. The route calls
@@ -238,9 +238,11 @@ seams a first proof format would need, each a no-op in version 1: a
 per-request verification hook in the family gateway library and a
 purchase-time verification hook in the buyer plugin, called before settlement
 is proposed; both take the listing's attestation envelope and return a refusal
-or nothing. The gateway's hook receives the envelope of the listing the gateway
-loaded at startup (F1) and runs after the key is verified and before it is
-charged (F3), so a refused proof costs the buyer nothing. The inference
+or nothing. The gateway's hook receives the offering's current verification
+input and the key's accepted terms digest returned by verification (review 02,
+F2), so it can tell whether the seller changed the attestation since the
+buyer accepted it; it runs after the key is verified and before it is charged
+(F3), so a refused proof costs the buyer nothing. The inference
 gateway image is built reproducibly from a digest-pinned base and compose, so
 it can later be measured. No proof `kind` is defined. The first `kind`'s
 input is the verification chain a comparable open-source market already
@@ -282,8 +284,9 @@ one, and planning's sections depend on the answer.
 ### F4 (design review 01). A key is scoped to its first grant
 
 The family authority binds a key to the `(service, resource_id)` of the grant
-that created it and refuses an existing-key issuance whose subject differs,
-with a named error. A key's balance is one number, so without this a buyer
+that created it, and to its accepted terms digest (review 02, F1), and
+refuses an existing-key issuance whose subject or terms differ, with a named
+error. A key's balance is one number, so without this a buyer
 could top up a key for one model from the same seller's cheaper listing for
 another and spend the pooled balance through the first model's gateway. The
 grant row already records both values, so the rule is a comparison against
@@ -296,20 +299,30 @@ entitlement. The right shape if a key is ever meant to span models, but it
 changes the ledger, the verify payload, and the gate's pinned conformance
 contract, and nothing in the campaign asks for a multi-model key.
 
-### F1 (design review 01). The gateway charges what the listing publishes
+### F1 (design review 01, amended by review 02 F1). The gateway charges the key's accepted terms
 
-The gateway is configured with the listing it fronts and, at startup, reads
-that listing: its `served_model_name` is the one model the gateway admits, its
-`rate_card.request_credits` is the per-request charge, and its storefront and
-registry are the purchase pointer. Readiness refuses a card that is not
-request-priced or a listing that cannot be read, so the published price and
-the charged price have one source. A republished price takes effect at the
-gateway's next start; flat per-request charging ends with metering.
+The inference gateway root reads the listing it fronts at startup and projects
+it to the family's offering: its `served_model_name` is the one model the
+gateway admits, its `rate_card.request_credits` is the offering's default
+charge, and its storefront and registry are the purchase pointer. Readiness
+refuses a card that is not request-priced or a listing that cannot be read.
+But the charge a request pays is the one the buyer accepted, not the one the
+listing shows today: the issuance projection fills the family subject's
+optional **terms digest** (the canonical digest of the accepted card's
+`rate_card` and `attestation`) and **request charge** (`request_credits`), the
+authority stores both on the grant and pins them on the key at its first
+grant, `verify` returns them, and the gateway charges the verified charge,
+falling back to the offering's default only when verification returns none.
+A republished price therefore reaches new keys only; an existing key's top-up
+under different terms is refused (F4), so one balance never mixes two prices.
+API credits leaves both values unset, so its issuance digests, verify
+responses, and gate behaviour are byte-identical, which the pins prove.
 
-Rejected: a shared environment value both roles read, which is still two
-configurations that can disagree per deployment, and a storefront-side check
-against a configured value, which binds the listing to the configuration
-rather than the gateway to the listing.
+Rejected: a gateway-global charge read from the current listing, which
+reprices credits already bought when the seller republishes. Rejected:
+grant-scoped balances with an entitlement chosen at consumption, the right
+shape if a key is ever meant to span terms, but a ledger, verify, and gate
+contract change nothing in the campaign asks for.
 
 ### F3 (design review 01). Verification precedes the charge
 
@@ -319,6 +332,30 @@ verification (D16's hook, a no-op now), charge, forward. The split is additive
 and produces the same authority exchanges as `authorize`, so the gate's
 conformance trace is unchanged. The hook's input is the attestation envelope
 of the listing the gateway loaded under F1.
+
+### F2 (design review 02). The proof hook binds to the accepted attestation
+
+The accepted terms digest pinned under F1 covers the card's attestation
+envelope, so the gateway's verification hook receives the offering's current
+verification input together with the key's accepted digest from `verify`. A
+first proof format can therefore refuse a credential whose seller replaced the
+attestation since the buyer accepted it, or verify against the accepted one;
+in this version the hook admits everything.
+
+### F3 (design review 02). The family gateway consumes a domain-neutral offering
+
+The family gateway library understands one value, `GatewayOffering`: the
+service name it admits in a request, the default per-request charge, the
+purchase pointer, the upstream base URL and credential reference, and an
+opaque verification input. Each domain's executable validates its own listing
+and projects it: inference from `InferenceListing` (`served_model_name`,
+`request_credits`, the storefront and registry, the attestation envelope), API
+credits from its resource (`service_name`, its configured charge, no
+verification input). The library imports no domain, and the two-domains
+scenario holds through the projection.
+
+Rejected: the library reading a listing itself, which made it interpret
+inference's fields and contradicted the family's import rule.
 
 ### F2 (design review 01). A top-up is admitted after the gate's verification TTL
 
@@ -337,8 +374,9 @@ path metering retires.
   what is domain-neutral in the family, once.
 - **A retried request is charged twice** until metering replaces the charge
   path. Accepted; recorded as metering's seam.
-- **A republished price reaches the gateway at its next start** (F1).
-  Accepted for flat per-request charging, which metering replaces.
+- **A republished price reaches new keys only** (F1); an existing key keeps
+  its accepted charge and refuses a top-up under other terms. Accepted for
+  flat per-request charging, which metering replaces.
 - **The stub proves the plumbing, not a model.** The `vllm` profile exists for
   a contributor to run a real server; the lane does not.
 - **Quota as a sales cap.** A seller whose declared quota reaches zero leaves

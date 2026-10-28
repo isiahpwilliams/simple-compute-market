@@ -3,17 +3,19 @@
 ### Requirement: A gateway in front of a model server is one family library
 
 The family MUST provide one gateway library that fronts an OpenAI-style model
-server behind the bearer gate: it reads the listing it fronts at startup and
-takes the served model, the per-request charge, and the purchase pointer from
-it, refusing to become ready on a card that is not request-priced; it reads
-the request's `model` and refuses one the listing does not serve before any
-charge; it verifies the key, calls a per-request verification hook that
-admits everything until a proof format is configured, and only then charges
-and forwards; it replaces the buyer's credential with the deployment's own
-upstream credential, forwards streamed responses as they arrive, and lists
-only the served model. A domain composes it in its own executable, supplying
-the listing reference, the upstream, and the signing credential; the library
-MUST import no domain.
+server behind the bearer gate. It consumes one family-owned offering value
+— the service name it admits, a default per-request charge, the purchase
+pointer, the upstream and its credential reference, and an opaque
+verification input — which the composing domain's executable projects from
+its own validated listing; the library MUST import no domain and MUST NOT
+read a listing itself. It reads the request's `model` and refuses one the
+offering does not serve before any charge; it verifies the key, calls a
+per-request verification hook with the offering's verification input and the
+key's accepted terms digest, which admits everything until a proof format is
+configured, and only then charges the key's verified charge, or the
+offering's default when verification returns none, and forwards; it replaces
+the buyer's credential with the deployment's own upstream credential,
+forwards streamed responses as they arrive, and lists only the served model.
 
 #### Scenario: Two domains front model servers
 
@@ -28,13 +30,13 @@ MUST import no domain.
   gateway library
 - **THEN** the check fails naming the import
 
-#### Scenario: The published price and the configured charge disagree
+#### Scenario: The seller reprices after a sale
 
-- **WHEN** a gateway is started against a listing whose `request_credits` is
-  not the amount an operator configured elsewhere
-- **THEN** there is nothing to disagree with: the gateway charges the
-  listing's `request_credits`, and a card with any non-zero per-token rate
-  keeps the gateway from becoming ready
+- **WHEN** a key was issued under a listing charging one credit per request,
+  the seller republishes the listing at ten, and the gateway is restarted
+- **THEN** requests on that key are charged one credit, a key issued after the
+  republication is charged ten, and a top-up of the first key from the
+  repriced listing is refused
 
 ### Requirement: The gate verifies and charges in separable steps
 
@@ -49,12 +51,29 @@ charge without charging a request it then refuses.
 - **THEN** the key's balance is unchanged and the authority saw only the
   verification
 
+### Requirement: The issuance subject may carry accepted terms
+
+The family issuance subject MAY carry a terms digest and a per-request charge
+that the domain's projection reads from the accepted listing. When present,
+both MUST enter the issuance request digest and the signed evidence, the
+authority MUST record them on the grant, and `verify` MUST return the key's
+pinned values; when absent, digests, evidence, and `verify` MUST be
+byte-identical to their form before the fields existed.
+
+#### Scenario: API credits issues without terms
+
+- **WHEN** an API-credits issuance request, which sets neither value, is
+  digested and its key verified
+- **THEN** the digest, the evidence, and the verify response match the
+  recorded pins byte for byte
+
 ### Requirement: A key is scoped to its first grant
 
-The authority MUST bind a key to the service and resource of the grant that
-created it and MUST refuse an existing-key issuance whose service or resource
-differs, naming the refusal, so a key's one balance is only ever spent on what
-every one of its grants bought.
+The authority MUST bind a key to the service, resource, and accepted terms
+digest of the grant that created it and MUST refuse an existing-key issuance
+whose service, resource, or terms differ, naming the refusal, so a key's one
+balance is only ever spent on what every one of its grants bought, at the
+charge each was bought at.
 
 #### Scenario: A key is topped up from another listing
 

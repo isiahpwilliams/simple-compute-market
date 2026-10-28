@@ -88,14 +88,16 @@ class InferenceMaterialization(materialization_model(INFERENCE_SCHEMA_KIND, Infe
     """The family's handoff plus the rate card the grant pins.
 
     ``rate_card`` is the card in force at issuance, so a later republication
-    cannot reprice a balance already sold. When the accepted listing travels
-    with the handoff, its card is that card.
+    cannot reprice a balance already sold. The accepted listing is required
+    here, unlike the family's handoff, because the card is checked against it:
+    without the listing an issuer could pin any card.
     """
 
+    listing_resource: InferenceModelCard
     rate_card: InferenceRateCard
 
     @model_validator(mode="after")
     def _card_is_the_listings(self) -> "InferenceMaterialization":
-        if self.listing_resource is not None and self.listing_resource.rate_card != self.rate_card:
+        if self.listing_resource.rate_card != self.rate_card:
             raise ValueError("rate_card must equal the accepted listing's rate card")
         return self

@@ -104,7 +104,7 @@ check to the option a buyer selects.
 - **WHEN** a buyer requests a quantity of 2,000,000 from a listing settling in an
   asset with six decimals
 - **THEN** the reference payment is 2,000,000 base units (two whole units of the
-  asset) and the issued key's balance is 2,000,000
+  asset)
 
 #### Scenario: Seller advertises a non-unit credit rate
 
@@ -139,8 +139,8 @@ MUST reject fractional or negative values. Rate-card amounts and the derived
 charge MUST be carried on the wire as decimal-digit strings in the uint256
 domain, never as JSON numbers, so a signed listing or usage-evidence body
 stays canonical at any asset precision. The materialization handed to
-issuance MUST carry the rate card the grant is to pin, and when it carries the
-accepted listing, that card MUST equal the listing's card.
+issuance MUST carry the accepted listing and the rate card the grant is to pin,
+and that card MUST equal the listing's card.
 
 #### Scenario: Handoff carries a card other than the accepted listing's
 
@@ -148,6 +148,12 @@ accepted listing, that card MUST equal the listing's card.
   higher rates than that listing's card
 - **THEN** the materialization codec refuses it, so issuance cannot pin a card
   the buyer did not accept
+
+#### Scenario: Handoff omits the accepted listing
+
+- **WHEN** a materialization carries a rate card and no accepted listing
+- **THEN** the materialization codec refuses it, because there is nothing to
+  hold the card to
 
 #### Scenario: Rate card carries a fraction
 

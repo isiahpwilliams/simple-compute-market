@@ -110,7 +110,11 @@ them.
 
 ### Modified Capabilities
 
-- None normatively. `registry-discovery`'s schema-driven validation and opaque
+- `api-family`: the family vocabulary's purchase shape admits exactly two key
+  dispositions and a strict integer quantity, for every domain that binds it —
+  API credits included. Inference binds the shape and the family's carriers
+  rather than copying them, and this is the correction that binding needs.
+- `registry-discovery` and `deployment-state`, not normatively. `registry-discovery`'s schema-driven validation and opaque
   payload storage already admit any filter specification; this change adds a
   third deployed instance, not a rule. `deployment-state`'s registry image
   contract gains one carried file, on the pattern the API-credits specification
@@ -121,9 +125,9 @@ them.
 - No storefront or buyer executables, gateway, authority service deployment,
   Compose stack, development identities, or end-to-end scenario. Those are
   `compose-inference-domain-stack`.
-- No family vocabulary or kit, and no change to any API-credits behavior,
-  wire shape, digest, database row, or distribution. That is
-  `compose-api-family-kit`.
+- No change to the family kit beyond the purchase shape's validation above, and
+  no change to API-credits behavior, digests, database rows, or distributions
+  beyond the purchase payloads that validation now refuses.
 - No admission holds, no post-response settlement, no streaming usage capture,
   no cancellation handling. That is `meter-inference-usage`.
 - No fiat (`arkhai.payments.v1`) option for inference listings, and no

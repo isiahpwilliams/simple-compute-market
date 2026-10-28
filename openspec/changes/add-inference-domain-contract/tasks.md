@@ -356,6 +356,32 @@ cited the requirement's old name. Of its suggestions it took the design
 heading and wording fixes and a selected-option two-rate test; declined
 renaming the family factory classes, whose names come from the family.
 
+Round 3 (implementation review 03, external). F5: `InferenceMaterialization`
+requires the accepted listing, unlike the family's handoff, and always compares
+its card, so no handoff pins a card without the listing to hold it to; the spec
+gains "Handoff omits the accepted listing". F7: `make test-inference` builds
+`dist-api-contracts` first and runs `require-wheels`, as the family's targets
+do. F6: the proposal declares the `api-family` modification and narrows the
+non-goal. F8: "Buyer purchases a balance" ends at the reference payment; the
+issued balance is the stack change's to prove. F4: the copy-first promotion
+rows became one family-kit-first row. F1–F4 moved the corrected plan into the
+plan branch, which this branch is rebased onto unchanged. F9: 5.5's
+integration test loads the specification from the source tree, the unit test
+checks both image stages' `COPY` lines, and the image was built and inspected by
+hand once; that the packaged `/app/filter-spec-inference.yaml` loads in a
+running registry is left to validation, whose pipeline builds the image.
+
+Evidence: domain-package unit `make test-inference` 177 passed, and from a
+fresh checkout with no `.dist` it built its wheels and passed; `make
+check-packaging`, `make check-comment-hygiene`, and `make check-change` passed.
+`make -k test`: every suite passed except the three environmental failures
+round 2 recorded (`test-provisioning-iac`'s relay-teardown tests, which fail at
+the base commit too; `test_alkahest.py`, which needs the development chain; and
+the release-tooling case needing GNU make's `--eval`). The fresh-context
+compliance check passed F5–F8 and found the plan branch still carried copy and
+buyer-plugin text in `design.md`, `proposal.md`, and `tasks.md`, closeout parts
+9 and 10 misdescribed, and one stale filter name here; all fixed.
+
 ## 7. Decision gates
 
 - [x] 7.1 **Decision gate — `model_id` naming authority.** Decided
@@ -392,7 +418,7 @@ renaming the family factory classes, whose names come from the family.
       the delta is synchronized at archival, per `AGENTS.md`'s rule that
       promotion follows code review. Re-check accepted decisions against
       `openspec/README.md`'s placement rules; confirm the domain-versus-extension
-      rationale and the copy-first rule landed in
+      rationale and the family-kit-first rule landed in
       the `inference` capability's `architecture.md` and the normative statements in
       the `inference` capability's `spec.md`, not only here. Promote only what
       this branch implements: the vocabulary, pricing, usage, evidence,
@@ -463,7 +489,6 @@ renaming the family factory classes, whose names come from the family.
 | No derived discovery price; a rate bound co-requires the card's asset (`rate_card_asset`) in the filter specification, so the registry refuses an unpaired bound | the `inference` capability's `spec.md` — "Discovery under the inference schema identity"; `architecture.md` — "Current limits" |
 | Inference binds the family's purchase shape, which validates exactly the two documented key dispositions and a strict integer quantity for every binding domain | the `api-family` capability's `spec.md` — "The purchase shape admits two key dispositions and an exact quantity" |
 | Attestation is reserved, unverified, and unfilterable in this version: an opaque canonical-JSON envelope on the card, a digest reference on the evidence | the `inference` capability's `spec.md` — "Attestation is reserved and unverified"; rationale in its `architecture.md` |
-| Copies are frozen and extraction blocks metering | `docs/development/ROADMAP.md` Goal 8 current state; the campaign section of `openspec/changes/README.md` |
-| Copy first, extract after two consumers | the `inference` capability's `architecture.md` — "Implementation composition"; `docs/development/ROADMAP.md` Goal 8 current state |
+| The family kit first, the stack on it: inference binds the `api` family's purchase shape and carriers rather than copying API credits | `design.md` — "The family kit first, the stack on it"; the `api-family` capability's `spec.md` — "The api family shares one vocabulary and one kit"; `docs/development/ROADMAP.md` Goal 8 current state |
 | `inference` joins the enumerated offering modes; **rate card** and **usage record** join the Terms table | `docs/development/ARCHITECTURE.md` — "One name per concept", "Terms" |
 | Model identity is seller-asserted with a SHOULD derivation rule; the domain keeps no model list; quantization is an enumerated field; provenance is required and resale legitimate; a registry may curate but never mints; `model_owner` is the three-party hook with no royalty field | the `inference` capability's `spec.md` — "One listing is one served model"; rationale in its `architecture.md` |

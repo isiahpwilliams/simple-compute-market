@@ -315,7 +315,8 @@ test-vms-buyer:
 test-apicredits:
 	$(MAKE) -C domains test-apicredits
 
-test-inference:
+test-inference: dist-api-contracts ## Run the inference domain tests, building every internal wheel they install first
+	python3 scripts/uv_project.py require-wheels --project domains/inference
 	$(MAKE) -C domains test-inference
 
 test-kits:

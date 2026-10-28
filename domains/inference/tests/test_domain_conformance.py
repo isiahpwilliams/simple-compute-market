@@ -43,6 +43,7 @@ _MATERIALIZATION = {
     "fulfillment_id": "inference-fulfillment.v1:" + "d" * 64,
     "quantity": 10,
     "rate_card": _RATE_CARD,
+    "listing_resource": _CARD,
 }
 _RECEIPT = {"status": "fulfilled", "obligation_ref": _OBLIGATION}
 _RESULT = {"action": "issue"}
@@ -120,9 +121,16 @@ def test_materialization_pins_the_rate_card():
 
 
 def test_materialization_card_must_be_the_accepted_listings():
-    InferenceMaterialization.model_validate({**_MATERIALIZATION, "listing_resource": _CARD})
+    InferenceMaterialization.model_validate(_MATERIALIZATION)
     repriced = {**_RATE_CARD, "completion_credits_per_million": 3000}
     with pytest.raises(ValidationError, match="accepted listing's rate card"):
+        InferenceMaterialization.model_validate({**_MATERIALIZATION, "rate_card": repriced})
+
+
+def test_materialization_without_the_accepted_listing_is_refused():
+    # Otherwise any card could be pinned, since there is nothing to compare it with.
+    unlisted = {k: v for k, v in _MATERIALIZATION.items() if k != "listing_resource"}
+    with pytest.raises(ValidationError, match="listing_resource"):
         InferenceMaterialization.model_validate(
-            {**_MATERIALIZATION, "rate_card": repriced, "listing_resource": _CARD}
+            {**unlisted, "rate_card": {**_RATE_CARD, "completion_credits_per_million": 3000}}
         )

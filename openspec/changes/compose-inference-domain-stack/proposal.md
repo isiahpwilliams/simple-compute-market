@@ -48,8 +48,10 @@ only request-priced rate cards are publishable until then.
   upstream responses unbuffered, serves `/v1/models` listing the one configured
   model, and carries a per-request verification seam for a later attestation
   proof. Inference composes it as the `arkhai:inference-gateway` image from a
-  `gateway-service` root that supplies the served model name, the charge, the
-  upstream, and the gate's `service`-role signing credential.
+  `gateway-service` root that names the listing the gateway fronts, the
+  upstream, and the gate's `service`-role signing credential; the served
+  model, the per-request charge, and the purchase pointer are read from that
+  listing at startup.
 - **Buyer.** An `arkhai-inference-buyer` plugin under `market.buyer_domains`
   composing the kit's purchase flow and contributing `market inference listing
   list|show`, `buy`, `negotiate`, `settle`, and `settlement status`, the
@@ -80,8 +82,10 @@ only request-priced rate cards are publishable until then.
 - `inference`: the storefront, authority, gateway, and buyer roles exist and
   complete one deal; flat per-request consumption is the version-1 posture
   until metering lands.
-- `api-family`: the kit's contribution surface gains its second consumer, and
-  the family gains a gateway library in front of OpenAI-style model servers.
+- `api-family`: the kit's contribution surface gains its second consumer; the
+  family gains a gateway library in front of OpenAI-style model servers; the
+  authority scopes a key to its first grant; the gate gains a separable verify
+  step.
 - `market-composition`: the "shipped domains are loaded" scenario gains the
   inference plugin.
 - `deployment-state`: a third registry schema is deployable locally; the
@@ -101,14 +105,16 @@ only request-priced rate cards are publishable until then.
 
 ## Dependencies and Related Changes
 
-- **Depends on** `add-inference-domain-contract` accepted;
-  `compose-api-family-kit` is archived, and its kit is what this change
-  composes.
+- **Depends on** `add-inference-domain-contract` and
+  `repair-storefront-alkahest-configuration` accepted. `compose-api-family-kit`
+  is closed out and archived; its index row advances at archive cleanup, and
+  its kit is what this change composes.
 - **Consumes** `sign-multi-language-credits-middleware`'s Python signing path
   as it stands; does not wait on its TypeScript and Rust work.
 - **Enables** `meter-inference-usage` by supplying the stack it changes.
 - `repair-storefront-alkahest-configuration` owns the development stack's
-  Alkahest readiness; this change's scenario needs it green.
+  Alkahest readiness; this change's scenario needs it green, so it gates
+  implementation.
 
 ## Impact
 
@@ -148,10 +154,15 @@ only request-priced rate cards are publishable until then.
 | Compose files, identities, lane (D10, D11) | the `deployment-state` and `test-compatibility` capabilities' `spec.md`; `dev-env/identities/README.md` |
 | Verification seams and the measurable image (D16) | the `inference` capability's `architecture.md`; the `api-family` capability's `architecture.md` |
 | The three-party constraint on settlement composition (D17) | the `inference` capability's `architecture.md` |
+| A key is scoped to its first grant's service and resource (F4) | the `api-family` capability's `spec.md` |
+| The gateway charges what the listing publishes, read at startup (F1) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` |
+| Verification precedes the charge; the gate's separable verify step (F3) | the `api-family` capability's `spec.md` and `architecture.md` |
+| A top-up is admitted after the gate's verification TTL (F2) | the `inference` capability's `spec.md`; `architecture.md` — "Current limits" |
 
 ## Status
 
 Returned to design on 2026-10-19; the copy-based `design.md` and `tasks.md`
 were withdrawn with the copied implementation. Redesigned on 2026-10-28
 against the `api` family kit, archived on 2026-10-26, and the contract as
-implemented; `design.md` records the decisions and awaits design review.
+implemented; design review 01 was triaged on 2026-10-28 and its four blocking
+gaps are decided in `design.md`, which awaits a second design review.

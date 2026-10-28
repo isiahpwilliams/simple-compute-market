@@ -80,9 +80,11 @@ library therefore lives in the family as `domains/api/gateway`
 (`arkhai-api-gateway`), depending on `arkhai-api-gate` and `httpx`, and
 inference adds `domains/inference/gateway-service` (`arkhai-inference-gateway-service`),
 a composition root the architecture check reads as an executable through the
-hyphen rule, which supplies the served model name, the per-request charge,
-the upstream base URL and credential reference, the purchase pointer, and the
-gate's signing credential.
+hyphen rule, which supplies the listing the gateway fronts (its registry or
+storefront URL and `listing_id`), the upstream base URL and credential
+reference, and the gate's signing credential. The served model name, the
+per-request charge, and the purchase pointer are read from that listing (F1
+below), not configured twice.
 
 The gate middleware cannot be used as-is: it authorizes on headers alone, so
 an unlisted model would be charged before refusal. The route calls
@@ -233,10 +235,12 @@ limit and costs nothing here.
 The contract already fixes where a proof attaches: the model card's attestation
 envelope and the usage evidence's attestation reference. This change adds the
 seams a first proof format would need, each a no-op in version 1: a
-per-request verification hook in the family gateway library, called after
-`authorize` and before forwarding, and a purchase-time verification hook in
-the buyer plugin, called before settlement is proposed; both take the
-listing's attestation envelope and return a refusal or nothing. The inference
+per-request verification hook in the family gateway library and a
+purchase-time verification hook in the buyer plugin, called before settlement
+is proposed; both take the listing's attestation envelope and return a refusal
+or nothing. The gateway's hook receives the envelope of the listing the gateway
+loaded at startup (F1) and runs after the key is verified and before it is
+charged (F3), so a refused proof costs the buyer nothing. The inference
 gateway image is built reproducibly from a digest-pinned base and compose, so
 it can later be measured. No proof `kind` is defined. The first `kind`'s
 input is the verification chain a comparable open-source market already
@@ -269,10 +273,62 @@ library with its unit tests, and the storefront, service root, and buyer
 plugin, which are configuration over precedent. Round 2: the inference gateway
 executable, the model stub, the Compose stack and identities, and the
 end-to-end lane. The gateway and the stack are where the risk is, and they get
-their own review. Before round 2 starts, the campaign answers who the first
+their own review. Before planning closes, the campaign answers who the first
 seller is, who the first paying buyer is, and which settlement option they
-use, because those decide whether an Alkahest-only development-chain scenario
-is the proof that matters or only the cheapest one.
+use (review 01, F6), because those decide whether an Alkahest-only
+development-chain scenario is the proof that matters or only the cheapest
+one, and planning's sections depend on the answer.
+
+### F4 (design review 01). A key is scoped to its first grant
+
+The family authority binds a key to the `(service, resource_id)` of the grant
+that created it and refuses an existing-key issuance whose subject differs,
+with a named error. A key's balance is one number, so without this a buyer
+could top up a key for one model from the same seller's cheaper listing for
+another and spend the pooled balance through the first model's gateway. The
+grant row already records both values, so the rule is a comparison against
+the key's prior grants and no schema change; it holds for API credits too,
+where one deployment serves one service and nothing crosses it today. The
+buyer plugin surfaces the refusal rather than retrying.
+
+Rejected: balances per grant with the gate consuming from the matching
+entitlement. The right shape if a key is ever meant to span models, but it
+changes the ledger, the verify payload, and the gate's pinned conformance
+contract, and nothing in the campaign asks for a multi-model key.
+
+### F1 (design review 01). The gateway charges what the listing publishes
+
+The gateway is configured with the listing it fronts and, at startup, reads
+that listing: its `served_model_name` is the one model the gateway admits, its
+`rate_card.request_credits` is the per-request charge, and its storefront and
+registry are the purchase pointer. Readiness refuses a card that is not
+request-priced or a listing that cannot be read, so the published price and
+the charged price have one source. A republished price takes effect at the
+gateway's next start; flat per-request charging ends with metering.
+
+Rejected: a shared environment value both roles read, which is still two
+configurations that can disagree per deployment, and a storefront-side check
+against a configured value, which binds the listing to the configuration
+rather than the gateway to the listing.
+
+### F3 (design review 01). Verification precedes the charge
+
+The family gate gains a separable verify step beside `authorize`, so the
+gateway orders a request as: model check, key verification, proof
+verification (D16's hook, a no-op now), charge, forward. The split is additive
+and produces the same authority exchanges as `authorize`, so the gate's
+conformance trace is unchanged. The hook's input is the attestation envelope
+of the listing the gateway loaded under F1.
+
+### F2 (design review 01). A top-up is admitted after the gate's verification TTL
+
+The gate remembers an exhausted key until its verification entry expires, so
+a request immediately after a top-up answers `402` until the TTL passes. The
+API-credits lane already handles this: a three-second TTL in the stack and a
+scenario that polls through it. Inference does the same, and the requirement
+says so. The gate is not changed: forcing re-verification on an exhausted key
+would alter behaviour the cross-language conformance trace pins, for a charge
+path metering retires.
 
 ## Risks / Trade-offs
 
@@ -281,6 +337,8 @@ is the proof that matters or only the cheapest one.
   what is domain-neutral in the family, once.
 - **A retried request is charged twice** until metering replaces the charge
   path. Accepted; recorded as metering's seam.
+- **A republished price reaches the gateway at its next start** (F1).
+  Accepted for flat per-request charging, which metering replaces.
 - **The stub proves the plumbing, not a model.** The `vllm` profile exists for
   a contributor to run a real server; the lane does not.
 - **Quota as a sales cap.** A seller whose declared quota reaches zero leaves
@@ -296,4 +354,4 @@ is the proof that matters or only the cheapest one.
 - **Charge idempotency on retries.** Trigger: `meter-inference-usage`, whose
   hold-and-settle path replaces the per-request charge.
 - **First seller, first paying buyer, settlement option.** Answered before
-  round 2 (D18).
+  planning closes (D18).

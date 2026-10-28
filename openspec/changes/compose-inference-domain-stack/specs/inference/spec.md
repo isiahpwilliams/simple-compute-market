@@ -186,8 +186,12 @@ The gateway MUST expose chat completions and completions in the OpenAI
 version-1 style and MUST forward a request only after the authority has
 verified the bearer credential and charged it. A request naming a model the
 gateway does not serve MUST be refused before any charge, so the gateway reads
-the request body and checks the model before it authorizes. A retried request
-is a second charge until metered consumption replaces the per-request charge. The gateway MUST
+the request body and checks the model before it verifies the key. The served
+model, the charge, and the purchase pointer MUST be read from the listing the
+gateway fronts, so the charge is the published `request_credits`. A retried
+request is a second charge, and a request after a top-up is admitted once the
+gate's verification entry expires, until metered consumption replaces the
+per-request charge. The gateway MUST
 answer `401` for a missing or unknown credential, `403` for a revoked one, and
 `402` with a pointer to where credits can be bought for an exhausted one. A
 gateway MUST serve exactly one model at one configured charge, and its model
@@ -209,13 +213,22 @@ list MUST contain only that model.
 #### Scenario: A buyer tops up
 
 - **WHEN** a buyer purchases more credits onto an exhausted key
-- **THEN** a subsequent request on that key is admitted
+- **THEN** a request on that key is admitted once the gate's verification
+  entry for it has expired
+
+#### Scenario: A buyer tops up from another model's listing
+
+- **WHEN** a buyer holding a key issued for one served model purchases onto it
+  from the same seller's listing for another
+- **THEN** the storefront's issuance is refused by the authority, the buyer
+  plugin reports the key's scope, and the first model's balance is unchanged
 
 ### Requirement: The gateway and buyer carry verification seams for a later proof
 
-The gateway MUST call a verification hook after a request is authorized and
-before it is forwarded, and the buyer plugin MUST call one before it proposes
-settlement; each receives the listing's attestation envelope and may refuse.
+The gateway MUST call a verification hook after the key is verified and
+before it is charged, and the buyer plugin MUST call one before it proposes
+settlement; each receives the attestation envelope of the listing the gateway
+fronts, read at startup, or of the listing being bought, and may refuse.
 In this version both hooks admit everything, and the gateway image MUST be
 built from digest-pinned inputs so a later proof format can measure it.
 

@@ -1,0 +1,299 @@
+# Design — compose-inference-domain-stack
+
+## Context
+
+### What exists
+
+`add-inference-domain-contract` defines the vocabulary: the model-card listing
+and its rate card, the `inference.v1` purchase shape bound from the `api`
+family, the family's negotiation carriers bound under that kind, an
+`InferenceMaterialization` that carries the accepted listing and refuses a card
+other than its own, the usage record and charge derivation, secret-free usage
+evidence, and the registry filter specification. The `api` family kit
+(`compose-api-family-kit`, archived 2026-10-26) owns everything an API-selling
+domain needs to sell against such a vocabulary, filled through one typed
+contribution bundle per side: `SellingContributions` (label, kind, offering
+mode, listing schema, publication mapping, issuance projection, publication
+guards, public-result extension), `BuyingContributions` (schema identity,
+provision terms, command, rendering), and the authority's `AuthorityConfig`
+with its `CapacityProfile`. API credits fills each in a few dozen lines and is
+the precedent every decision below copies the shape of.
+
+Three facts about the kit decide more than the proposal assumed:
+
+- The kit records the accepted listing artifact at acceptance and reads it back
+  at fulfilment; it never constructs the family `Materialization` carrier in
+  production. The accepted rate card is therefore pinned by the kit for every
+  domain; what inference adds is surfacing it.
+- The kit's negotiation prices from its own `extract_unit_price_from_order`
+  with no contribution hook, so the contract's own pricing helpers are not on a
+  kit-composed storefront's path; the listing codec's rate check at publication
+  is the load-bearing rule.
+- The kit's bearer gate admits or denies on the `Authorization` header and
+  then calls the wrapped app, charging first; nothing in the repository
+  proxies, streams, or reads a request body. The gateway is the one role with
+  no precedent.
+
+### What governs the design
+
+`docs/development/ARCHITECTURE.md`'s package layers and family-kit rules, the
+`api-family` capability's specification and architecture (a kit never imports
+a domain; each domain composes the authority in its own service root; a
+domain contributes through the typed bundles), `registry-discovery` (a buyer
+compiles against the served filter specification), `test-compatibility` (one
+end-to-end lane per domain), and `deployment-state` (Compose topology files
+and development identities). Each decision names the rule that decides it
+where one does.
+
+## Decisions
+
+### D1. The issuance projection names what the gateway serves
+
+`issuance_projection(card)` returns `IssuanceSubject(service=card.served_model_name,
+resource_id=card.resource_id, endpoint=card.endpoint.base_url)`. The digested
+service identity is the served model name, so a grant is bound to what the
+gateway admits in a request's `model` field, and the kit's existing connection
+payload (`service_name`, `base_url`, `key_id`, `quantity`) already gives the
+buyer a working first request. The gateway URL is delivery metadata, as API
+credits' `base_url` is; it is not digested.
+
+Rejected: `model_id` as the service. It names the convergent identity, but the
+buyer would then need the served name delivered separately and could confuse
+the two, and a seller could re-point a `model_id` at another served model under
+the same grant. The convergent identity is not lost: it is in the accepted
+listing the kit pins (D3). Rejected: a composite of both, which puts a
+structured string in a field every domain uses as a plain name. Rejected: no
+endpoint, which gains nothing since the endpoint is not digested and the kit's
+credential store is built around `base_url`.
+
+### D2. The gateway is a family library composed by an inference executable
+
+The reverse proxy knows nothing inference-specific: it parses the request
+body, refuses a `model` the deployment does not serve before any charge,
+authorizes and charges through `TokenGate.authorize` inside the route, replaces
+the buyer's `Authorization` with the deployment's own upstream credential from
+a mounted secret, forwards to the model server with `httpx` streaming
+pass-through (server-sent events when `stream` is set), serves `/v1/models`
+listing only the configured model, and leaves `/health` ungated. API credits'
+vLLM cookbook describes exactly this component and does not ship it. The
+library therefore lives in the family as `domains/api/gateway`
+(`arkhai-api-gateway`), depending on `arkhai-api-gate` and `httpx`, and
+inference adds `domains/inference/gateway-service` (`arkhai-inference-gateway-service`),
+a composition root the architecture check reads as an executable through the
+hyphen rule, which supplies the served model name, the per-request charge,
+the upstream base URL and credential reference, the purchase pointer, and the
+gate's signing credential.
+
+The gate middleware cannot be used as-is: it authorizes on headers alone, so
+an unlisted model would be charged before refusal. The route calls
+`TokenGate.authorize` after the model check.
+
+Rejected: everything under inference. Less to design now, but API credits
+copies it the moment the cookbook's gateway ships, which the family exists to
+prevent. Rejected: adding `gateway` to the architecture's role words; the
+hyphen rule already classifies `gateway-service`, and a new role word is a
+repository-wide vocabulary change this change does not need.
+
+### D3. The delivery's public result carries the contract's materialization
+
+`public_result_extension(listing_resource, result)` returns, under one key,
+`InferenceMaterialization` built from the accepted listing the kit hands it and
+that listing's rate card, with the issuance's `fulfillment_id`, `mechanism`,
+and `obligation_ref`. The contract's model refuses a card other than the
+listing's, so the public record cannot show a buyer a rate they did not
+accept. This is for the buyer and for audit; the authority's pinned card for
+metering is the accepted-listing artifact the kit records at acceptance,
+which `meter-inference-usage` reads, so there is one source of truth and no
+acceptance hook or extra table.
+
+Rejected: nothing public, which leaves the buyer unable to see the rate bought
+at. Rejected: a card-only extension, which saves little since the listing is
+small and loses the model identity beside the card.
+
+### D4. Retries are charged as the kit charges them
+
+The gateway passes no idempotency key to `authorize`, so a retried request is a
+second charge, as it is for API credits today. The gate's contract is pinned
+by a cross-language conformance trace, and metering's hold-and-settle replaces
+this charge path. The seam is recorded for `meter-inference-usage`.
+
+Rejected: honouring a client `Idempotency-Key` header now. Cheap in the
+gateway, but it changes the family gate's pinned contract for API credits too,
+for a path metering retires.
+
+### D5. The deterministic model server is a test image
+
+The stub lives under `e2e-tests/` beside the end-to-end image, outside the
+architecture check, because it knows no market: an OpenAI-style server
+answering `/v1/models`, `/v1/chat/completions`, and `/v1/completions` with
+responses keyed on the prompt, streamed when asked, so the scenario asserts
+exact text. A Compose profile `vllm` swaps in the CPU vLLM image and small
+instruct model the API-credits cookbook already names.
+
+Rejected: `domains/inference/model-stub`, which would need an architecture
+override row for a project that is neither a role nor a library of the domain.
+
+### D6. Contribution values follow API credits' pattern
+
+Label `IssuanceLabel("inference")`, whose fulfilment prefix defaults to
+`inference-fulfillment.v1`; kind `inference.v1`; offering mode, contribution
+id, and pool provider `inference`; table prefix `inference`; key prefix `ik`;
+pool id `default`; backing `BACKED`, the only value the contract admits.
+`AuthorityConfig` names the distribution `arkhai-inference-service` and the
+authority's own database. The storefront's seed and quota lookup name the same
+pool and mode.
+
+### D7. The publish request carries the model card
+
+The domain's publish request extends the kit's `PublishFromQuotaRequest` with a
+`model_card` object; the storefront's `[seed.model_card]` table reaches it as
+`request["model_card"]` through the kit's `ListingSeed`, which passes fields it
+does not own through. `publication_mapping(request, quota)` validates the card
+as `InferenceModelCard` with `resource_id`, `capacity_site_id`, and
+`offering_mode` filled from the `QuotaSource`, so a seller's card cannot name
+another resource than the one its quota backs.
+
+### D8. The request-priced guard is one removable entry
+
+`publication_guards` holds one function refusing a card whose prompt,
+cached-prompt, completion, or image rate is non-zero, naming the field, while
+the gate charges `request_credits` per request. `meter-inference-usage` deletes
+that one entry. The guard is the withdrawn branch's `rate_card_guard.py`,
+adapted to the kit's signature.
+
+### D9. Alkahest only, refused at startup
+
+The storefront's `SettlementStageTable` and the buyer's hold one stage,
+Alkahest. Startup compares the configured settlement priority against the
+table and refuses any mechanism the table lacks, naming it; the kit itself
+ignores an unknown mechanism, so the refusal is the new piece. Neither
+inference wheel declares the fiat payments distribution.
+
+### D10. Compose files, identities, and env targets mirror API credits
+
+`domains/inference/compose.yml` carries topology only: the inference registry
+(the packaged image with `REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml`,
+no bind mount, since the image already carries the specification), the
+authority, the gateway and model stub, and the storefront, with named volumes.
+`compose.inference.yml` is the standalone wrapper over `compose.dev.yml`;
+`compose.inference-local.yml` binds development credentials, signer
+identifiers, and a one-shot buyer; `compose.inference-lane.yml` adds the
+lane-only compute and API-credits registries; the root `docker-compose.yml`
+includes the domain file. Identities: `inference-registry.ed25519`,
+`inference-service.ed25519`, `inference-gateway.ed25519`, an
+`inference.identity.env` and `inference.wallet.env` on an Anvil account no
+other storefront uses, `inference-admin-key`, and a buyer configuration pinning
+the inference registry, all derived by the identities README's rule and pinned
+where they are consumed. Root targets `e2e-inference-stack-env` and
+`e2e-inference-dev-env` print them; `e2e-dev-identities-env` gains the stack.
+
+### D11. The scenario runs in its own lane
+
+`test-e2e-inference` builds the inference images and every registry its
+scenarios read, brings the inference wrapper up with the lane overlay, and runs
+`e2e_inference_deal` on the lane's network, with its own job in the end-to-end
+workflow and its own `e2e-inference-down` and `-logs` targets. The compute and
+API-credits registries are present only for the schema-filter scenario, through
+`compose.inference-lane.yml`. The scenario is written over the domain-neutral
+helpers (`DomainDealState`, `ordered_events`, `create_profiled_buyer_cli`); the
+inference-specific parts are the `market inference buy` invocation, the
+model-card resource filter, the credential shape, and the model calls. A
+missing lane setting fails, as the lane rule requires.
+
+### D12. The buyer plugin's contributions
+
+`BuyingContributions(schema_id="inference", provision_terms=InferenceProvisionTerms,
+command="inference", noun="inference", ...)` with a rendering whose summary is
+the model identity and whose columns are quantization, context length,
+provenance, and the request charge; one `AlkahestBuyerStage`. Discovery
+filters compile from the served specification, which already pairs each rate
+bound with `rate_card_asset`, so the plugin encodes no pairing rule.
+
+### D13. The withdrawn modules are recovered, not rewritten
+
+`model_card.py`, `rate_card_guard.py`, and `materialization.py` are recovered
+from the withdrawn storefront branch and adapted to D7, D8, and D3; the
+withdrawn authority is not reused, since the service root is configuration
+over the kit.
+
+### D14. The gateway signs as the service role
+
+The gateway holds its own development credential and signs toward the
+authority as the `service` role, which the authority trusts by role, as the
+API-credits sample application does.
+
+### D15. The authority's database starts on the family chain
+
+The inference database runs the family's migration chain from its first,
+API-credits-named step, on its own database. This is the family's recorded
+limit and costs nothing here.
+
+### D16. Forward compatibility with privacy proofs
+
+The contract already fixes where a proof attaches: the model card's attestation
+envelope and the usage evidence's attestation reference. This change adds the
+seams a first proof format would need, each a no-op in version 1: a
+per-request verification hook in the family gateway library, called after
+`authorize` and before forwarding, and a purchase-time verification hook in
+the buyer plugin, called before settlement is proposed; both take the
+listing's attestation envelope and return a refusal or nothing. The inference
+gateway image is built reproducibly from a digest-pinned base and compose, so
+it can later be measured. No proof `kind` is defined. The first `kind`'s
+input is the verification chain a comparable open-source market already
+ships, whose published claim carries the image digest, the compose digest,
+the platform measurements, and the build provenance, and whose verification
+runs at session open and per prompt; its own documentation records that such
+a claim attests the software, not that the listed model is the one answering,
+which is the gap a listing-level claim must close.
+
+Rejected: no seams now. Zero cost today; the first proof format then becomes a
+gateway rewrite rather than a plugin.
+
+### D17. Forward compatibility with a three-party arrangement
+
+No royalty field is added. `model_owner` on the card and `provenance`, with
+`hosted-for-owner` reserved under a version bump, stand as the contract left
+them. The constraint this change holds is that the inference storefront's
+settlement composition is the kit's obligation list unmodified, so a second
+claimant in one deal is a later addition to that list, not a new mechanism;
+and D1 keeps the grant bound to the host's served name, so a model owner's
+identity lives in the pinned listing rather than in the grant.
+
+Rejected: a declared-but-unpaid royalty number. It encodes a direction of
+money that the hosting domain has not decided.
+
+### D18. Implementation cadence
+
+Two rounds, each one session, reviewed after each. Round 1: the family gateway
+library with its unit tests, and the storefront, service root, and buyer
+plugin, which are configuration over precedent. Round 2: the inference gateway
+executable, the model stub, the Compose stack and identities, and the
+end-to-end lane. The gateway and the stack are where the risk is, and they get
+their own review. Before round 2 starts, the campaign answers who the first
+seller is, who the first paying buyer is, and which settlement option they
+use, because those decide whether an Alkahest-only development-chain scenario
+is the proof that matters or only the cheapest one.
+
+## Risks / Trade-offs
+
+- **A second consumer of a young family.** A gap the kit left for API credits
+  surfaces here (the gateway, the public-result key set). Mitigated by placing
+  what is domain-neutral in the family, once.
+- **A retried request is charged twice** until metering replaces the charge
+  path. Accepted; recorded as metering's seam.
+- **The stub proves the plumbing, not a model.** The `vllm` profile exists for
+  a contributor to run a real server; the lane does not.
+- **Quota as a sales cap.** A seller whose declared quota reaches zero leaves
+  discovery while the model server is fine; the seed defaults it large.
+
+## Open Questions
+
+- **The first attestation `kind`.** Trigger: a seller who can produce a
+  measured image and a buyer who will verify it. Input: the verification chain
+  D16 names.
+- **The hosting domain** (owner pays host to serve, or host pays owner a
+  share). Trigger: a model owner who is not a seller. D17 keeps the door open.
+- **Charge idempotency on retries.** Trigger: `meter-inference-usage`, whose
+  hold-and-settle path replaces the per-request charge.
+- **First seller, first paying buyer, settlement option.** Answered before
+  round 2 (D18).

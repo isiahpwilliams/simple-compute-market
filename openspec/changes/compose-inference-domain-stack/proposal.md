@@ -31,34 +31,37 @@ only request-priced rate cards are publishable until then.
   shell, registered under `market.storefront_domains`, composing the family
   kit's issuance fulfillment, reconciler, and settlement composition with
   Alkahest as its only settlement mechanism, and contributing publication of
-  model-card listings from the quota authority, the seller round hook over
-  per-credit pricing, the request-priced guard, and the rate-card
-  materialization, which it delivers in the delivery's public result.
+  model-card listings from the quota authority, the kit's seller round hook,
+  the request-priced guard, and the delivery's public result, which carries the
+  contract's `InferenceMaterialization` built from the accepted listing the kit
+  pins at acceptance.
 - **Authority.** An `arkhai:inference-service` image composing the kit's key
   authority and credits ledger under the issuance digest label `inference`,
   with its own database and key namespace, as a service root of its own over
   the kit's `authority` library: the family keeps each domain's root separate,
   since two domains never share a process (the `api-family` capability's
   `architecture.md`, "Service roots and the capacity profile").
-- **Gateway.** An `arkhai:inference-gateway` image: an OpenAI-compatible reverse
-  proxy in front of a model server, gated by the kit's bearer gate signing as
-  the `service` role, charging the listing's per-request credits on admission,
-  serving one model at one price with `/v1/models` listing only it. A request
-  naming an unlisted model is refused before any charge, and the buyer's
-  credential is never forwarded. Streaming responses pass through unbuffered
-  even though nothing yet reads their usage.
+- **Gateway.** A family library, `arkhai-api-gateway` under `domains/api`: an
+  OpenAI-compatible reverse proxy in front of a model server that checks the
+  requested model before charging, authorizes and charges through the kit's
+  bearer gate inside the route, never forwards the buyer's credential, streams
+  upstream responses unbuffered, serves `/v1/models` listing the one configured
+  model, and carries a per-request verification seam for a later attestation
+  proof. Inference composes it as the `arkhai:inference-gateway` image from a
+  `gateway-service` root that supplies the served model name, the charge, the
+  upstream, and the gate's `service`-role signing credential.
 - **Buyer.** An `arkhai-inference-buyer` plugin under `market.buyer_domains`
   composing the kit's purchase flow and contributing `market inference listing
   list|show`, `buy`, `negotiate`, `settle`, and `settlement status`, the
   `inference` schema identity, model-card discovery filters, and model-card
   rendering, with Alkahest settlement only.
-- **Stack.** `domains/inference/compose.yml` (inference registry with the
-  filter specification mounted, authority, gateway, storefront, and a model
-  server) with the per-domain `compose.inference.yml`,
+- **Stack.** `domains/inference/compose.yml` (inference registry selecting the
+  packaged filter specification by path, authority, gateway, storefront, and a
+  model server) with the per-domain `compose.inference.yml`,
   `compose.inference-local.yml`, and `compose.inference-lane.yml` files;
   development identities under `dev-env/identities/` and the
   `e2e-inference-dev-env` variables. The model server is a deterministic
-  OpenAI-compatible stub built from this repository, so the scenario runs
+  OpenAI-compatible stub built under `e2e-tests/`, so the scenario runs
   without a GPU or an external model download and asserts exact responses; a
   Compose profile swaps in the CPU vLLM image with a small instruct model.
 - **Scenario.** `e2e_inference_deal`: discover by model, negotiate a new key,
@@ -77,7 +80,8 @@ only request-priced rate cards are publishable until then.
 - `inference`: the storefront, authority, gateway, and buyer roles exist and
   complete one deal; flat per-request consumption is the version-1 posture
   until metering lands.
-- `api-family`: the kit's contribution surface gains its second consumer.
+- `api-family`: the kit's contribution surface gains its second consumer, and
+  the family gains a gateway library in front of OpenAI-style model servers.
 - `market-composition`: the "shipped domains are loaded" scenario gains the
   inference plugin.
 - `deployment-state`: a third registry schema is deployable locally; the
@@ -108,7 +112,9 @@ only request-priced rate cards are publishable until then.
 
 ## Impact
 
-- New: `domains/inference/{storefront,buyer,service,gateway,model-stub}/`,
+- New: `domains/api/gateway/`,
+  `domains/inference/{storefront,buyer,service,gateway-service}/`, the model
+  stub under `e2e-tests/`,
   `domains/inference/compose.yml`, the per-domain Compose files, development
   identities, the `e2e-inference-dev-env` target, the e2e lane targets, the
   e2e scenario and marker.
@@ -125,12 +131,27 @@ only request-priced rate cards are publishable until then.
       deployment topology gain the inference roles and third registry schema.
 - [x] Existing subsystem specification — `market-composition`,
       `deployment-state`, `test-compatibility` scenarios; `api-family`'s
-      second consumer.
+      second consumer and its gateway library.
 - [x] New subsystem specification — `inference` gains the role-composition and
       end-to-end requirements.
 
+### Knowledge to promote
+
+| Decision | Permanent destination |
+|---|---|
+| The issuance projection names the served model and delivers the gateway URL (D1) | the `inference` capability's `spec.md`; the `api-family` capability's `architecture.md` contribution table, inference column |
+| The gateway is a family library composed by a domain executable (D2) | the `api-family` capability's `spec.md` and `architecture.md`; `docs/development/ARCHITECTURE.md` runtime service map |
+| The public result carries the contract's materialization; the kit's accepted-listing artifact is the pinned card (D3) | the `inference` capability's `spec.md` and `architecture.md` |
+| Retry charges and the metering seam (D4) | the `inference` capability's `architecture.md` — "Current limits" |
+| The stub model server is a test image; the `vllm` profile (D5) | `docs/development/DEPLOYMENT_AND_CONFIG.md`; the `deployment-state` capability's `spec.md` |
+| Contribution values, publish request, guard, Alkahest-only refusal (D6–D9, D12) | the `inference` capability's `spec.md` |
+| Compose files, identities, lane (D10, D11) | the `deployment-state` and `test-compatibility` capabilities' `spec.md`; `dev-env/identities/README.md` |
+| Verification seams and the measurable image (D16) | the `inference` capability's `architecture.md`; the `api-family` capability's `architecture.md` |
+| The three-party constraint on settlement composition (D17) | the `inference` capability's `architecture.md` |
+
 ## Status
 
-Returned to design on 2026-10-19. The copy-based `design.md` and `tasks.md`
-were withdrawn with the copied implementation; the design is authored against
-the `api` family kit, archived on 2026-10-26, and the contract as implemented.
+Returned to design on 2026-10-19; the copy-based `design.md` and `tasks.md`
+were withdrawn with the copied implementation. Redesigned on 2026-10-28
+against the `api` family kit, archived on 2026-10-26, and the contract as
+implemented; `design.md` records the decisions and awaits design review.

@@ -3,8 +3,8 @@
 ### Requirement: Local inference stack composition
 
 The development stack MUST be able to stand up the inference market beside the
-compute and API-credits markets: a registry instance selecting the `inference`
-filter specification with its own authority identity, the inference authority,
+compute and API-credits markets: a registry instance selecting the packaged
+`inference` filter specification by path, with its own authority identity, the inference authority,
 the gateway in front of a model server, and the inference storefront. Each
 signing role MUST have its own development credential supplied through an
 explicit, role-scoped reference, and no credential value may be committed in a

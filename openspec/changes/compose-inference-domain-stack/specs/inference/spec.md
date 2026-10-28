@@ -29,7 +29,9 @@ API-credits distribution.
 The inference storefront and buyer plugin MUST compose exactly one settlement
 mechanism, `alkahest.v1`, and MUST NOT depend on the fiat payments
 (`arkhai.payments.v1`) distribution. A configuration naming any other mechanism MUST be refused at
-startup rather than ignored.
+startup rather than ignored. The storefront's settlement composition MUST be
+the kit's obligation list unmodified, so a second claimant in one deal is a
+later addition to that list rather than a new mechanism.
 
 #### Scenario: Another mechanism is configured
 
@@ -126,18 +128,37 @@ version change.
 - **THEN** it closes the listing and subsequently republishes it from the new
   authoritative view
 
-### Requirement: The materialization pins the rate card at acceptance
+### Requirement: The issuance projection names the served model
 
-On issuance the storefront MUST deliver a materialization carrying the rate card
-of the listing the accepted negotiation was made against, as stored when the
-negotiation was accepted. Republishing the listing MUST NOT change a
-materialization already determined.
+The inference storefront's issuance projection MUST digest the accepted
+listing's `served_model_name` as the service identity and its `resource_id`
+as the resource, and MUST deliver the listing's `endpoint.base_url` as the
+connection payload's base URL, so a grant is bound to the model name the
+gateway admits and a buyer's first request needs nothing beyond the kit's
+connection payload.
+
+#### Scenario: Two listings of one model are purchased
+
+- **WHEN** a buyer purchases from two sellers whose cards share a `model_id`
+  but serve under different names
+- **THEN** the two grants' digested service identities differ, and each
+  credential's base URL is its own seller's gateway
+
+### Requirement: The delivery's public result carries the accepted card
+
+The inference storefront MUST extend the delivery's public result with the
+contract's materialization built from the accepted listing the kit recorded
+at acceptance and that listing's rate card, under one key, so a buyer and an
+auditor read the rate the purchase was made at. The authority's pinned card is
+the accepted-listing artifact; the public result repeats it and is not a
+second source.
 
 #### Scenario: The seller reprices between acceptance and fulfillment
 
 - **WHEN** a negotiation is accepted and the seller republishes the listing with
   a different rate card before fulfillment completes
-- **THEN** the materialization carries the rate card in force at acceptance
+- **THEN** the public result's materialization carries the rate card in force
+  at acceptance, and it validates against the listing it carries
 
 ### Requirement: Only request-priced rate cards are publishable without metered consumption
 
@@ -164,7 +185,9 @@ charges.
 The gateway MUST expose chat completions and completions in the OpenAI
 version-1 style and MUST forward a request only after the authority has
 verified the bearer credential and charged it. A request naming a model the
-gateway does not serve MUST be refused before any charge. The gateway MUST
+gateway does not serve MUST be refused before any charge, so the gateway reads
+the request body and checks the model before it authorizes. A retried request
+is a second charge until metered consumption replaces the per-request charge. The gateway MUST
 answer `401` for a missing or unknown credential, `403` for a revoked one, and
 `402` with a pointer to where credits can be bought for an exhausted one. A
 gateway MUST serve exactly one model at one configured charge, and its model
@@ -187,6 +210,21 @@ list MUST contain only that model.
 
 - **WHEN** a buyer purchases more credits onto an exhausted key
 - **THEN** a subsequent request on that key is admitted
+
+### Requirement: The gateway and buyer carry verification seams for a later proof
+
+The gateway MUST call a verification hook after a request is authorized and
+before it is forwarded, and the buyer plugin MUST call one before it proposes
+settlement; each receives the listing's attestation envelope and may refuse.
+In this version both hooks admit everything, and the gateway image MUST be
+built from digest-pinned inputs so a later proof format can measure it.
+
+#### Scenario: No proof format is configured
+
+- **WHEN** a request is admitted and forwarded, or a purchase proceeds to
+  settlement, with no verification configured
+- **THEN** behaviour is as without the hooks, and the hooks' presence is
+  observable only in the gateway's and plugin's extension points
 
 ### Requirement: The buyer's credential stops at the gateway
 

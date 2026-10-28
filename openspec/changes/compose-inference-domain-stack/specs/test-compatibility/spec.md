@@ -13,7 +13,8 @@ its assertions are exact.
 
 #### Scenario: The lane runs
 
-- **WHEN** the end-to-end lane that carries the VM and API-credits scenarios runs
+- **WHEN** the inference end-to-end lane runs, building the inference images
+  and every registry its scenarios read
 - **THEN** the inference deal scenario runs in it and observes each stage in
   order through the public buyer and seller boundaries
 
@@ -23,7 +24,7 @@ its assertions are exact.
   API-credits registries also configured
 - **THEN** only the inference registry is queried
 
-#### Scenario: The stack is unavailable
+#### Scenario: A lane setting is missing
 
-- **WHEN** the inference registry, authority, gateway, or storefront is absent
-- **THEN** the scenario is reported blocked or skipped and not as passed
+- **WHEN** the lane's configuration lacks a value the inference scenario reads
+- **THEN** the scenario fails naming the setting rather than skipping

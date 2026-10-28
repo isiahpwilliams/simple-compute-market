@@ -36,9 +36,10 @@ only request-priced rate cards are publishable until then.
   materialization, which it delivers in the delivery's public result.
 - **Authority.** An `arkhai:inference-service` image composing the kit's key
   authority and credits ledger under the issuance digest label `inference`,
-  with its own database and key namespace. Whether this is the kit's service
-  deployed with inference configuration or a composition root of its own is
-  `compose-api-family-kit`'s decision, and this change follows it.
+  with its own database and key namespace, as a service root of its own over
+  the kit's `authority` library: the family keeps each domain's root separate,
+  since two domains never share a process (the `api-family` capability's
+  `architecture.md`, "Service roots and the capacity profile").
 - **Gateway.** An `arkhai:inference-gateway` image: an OpenAI-compatible reverse
   proxy in front of a model server, gated by the kit's bearer gate signing as
   the `service` role, charging the listing's per-request credits on admission,
@@ -96,8 +97,9 @@ only request-priced rate cards are publishable until then.
 
 ## Dependencies and Related Changes
 
-- **Depends on** `add-inference-domain-contract` and `compose-api-family-kit`
-  accepted.
+- **Depends on** `add-inference-domain-contract` accepted;
+  `compose-api-family-kit` is archived, and its kit is what this change
+  composes.
 - **Consumes** `sign-multi-language-credits-middleware`'s Python signing path
   as it stands; does not wait on its TypeScript and Rust work.
 - **Enables** `meter-inference-usage` by supplying the stack it changes.
@@ -131,4 +133,4 @@ only request-priced rate cards are publishable until then.
 
 Returned to design on 2026-10-19. The copy-based `design.md` and `tasks.md`
 were withdrawn with the copied implementation; the design is authored against
-`compose-api-family-kit`'s kit once its design passes review.
+the `api` family kit, archived on 2026-10-26, and the contract as implemented.

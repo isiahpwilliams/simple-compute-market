@@ -51,6 +51,12 @@ directory = "domains/apicredits"
 family = "api"
 tokens = ["api_credits.v1"]
 
+[[domains]]
+name = "inference"
+directory = "domains/inference"
+family = "api"
+tokens = ["inference.v1"]
+
 [[mechanisms]]
 name = "alkahest"
 kit = "arkhai-kit-alkahest"

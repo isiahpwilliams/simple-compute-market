@@ -34,8 +34,11 @@ whose `api_style` is `openai.v1`, a complete rate card, a `provenance` of
 `self-hosted` or `resold`, and `offering_mode` equal to `inference`; it MAY
 carry an `artifact_digest`, a mutable `display_name`, a `model_owner` principal
 distinct from the seller, and an `attestation` envelope. A listing omitting any
-required field MUST be rejected at publication rather than published with the
-field absent.
+required field MUST be refused before it is published: the domain's listing
+codec refuses it on the storefront's publication path, and a registry's dry-run
+validation refuses it against the served shape. A registry's publish boundary
+refuses only retired shape spellings, so a malformed card is stopped at the
+seller, not at the index.
 
 A listing SHOULD derive `model_id` by the domain's derivation rule — the
 upstream owner and repository name, lowercased, with revision and quantization
@@ -84,28 +87,42 @@ listing is a legitimate listing.
 ### Requirement: Purchase is priced in settlement-asset base units
 
 One inference credit MUST equal one base unit of the asset the selected
-settlement option settles in. An inference settlement option MUST advertise a
-per-credit rate of exactly one base unit, provision intent's `quantity` MUST be
+settlement option settles in. An inference settlement option MUST advertise
+exactly one amount rate, of one base unit per credit, and an accepted escrow at
+most one, of the same value; provision intent's `quantity` MUST be
 read as base units purchased, and the scalar reference payment MUST equal that
 quantity. A rate card MUST name the asset its values are denominated in, and
 every settlement option and escrow token on the listing MUST identify that
 asset; rate-card values MUST be read as base units of it per million tokens
 or per request. The domain's listing codec MUST refuse, before publication, a
 listing whose settlement option or escrow advertises a per-credit rate other
-than one or names another asset.
+than one or names another asset, and the pricing path MUST apply the same
+check to the option a buyer selects.
 
 #### Scenario: Buyer purchases a balance
 
 - **WHEN** a buyer requests a quantity of 2,000,000 from a listing settling in an
   asset with six decimals
 - **THEN** the reference payment is 2,000,000 base units (two whole units of the
-  asset) and the issued key's balance is 2,000,000
+  asset)
 
 #### Scenario: Seller advertises a non-unit credit rate
 
-- **WHEN** an inference settlement option carries a per-credit rate other than
-  one
-- **THEN** the listing is rejected before publication
+- **WHEN** an inference settlement option or accepted escrow carries a
+  per-credit rate other than one
+- **THEN** the listing codec rejects the listing before publication
+
+#### Scenario: Option advertises no amount rate, or two
+
+- **WHEN** an inference settlement option carries no amount rate, or two
+- **THEN** the listing codec rejects the listing before publication, so no
+  published option is one a buyer cannot select
+
+#### Scenario: Buyer selects an option in another asset
+
+- **WHEN** a negotiation's settlement selection names an option whose asset is
+  not the rate card's
+- **THEN** pricing refuses the selection
 
 #### Scenario: Listing takes payment in a second asset
 
@@ -113,27 +130,41 @@ than one or names another asset.
   escrow token names another
 - **THEN** the listing codec rejects the listing before publication, so a rate
   bound never reads the card in an asset the seller did not price in
-### Requirement: Rate card is integer-valued and pinned at issuance
+### Requirement: Rate card is integer-valued and carried to issuance
 
 A rate card MUST express base units per million prompt tokens and base units per
 million completion tokens as non-negative integers, MAY express an integer flat
 charge per request and integer rates for cached prompt tokens and images, and
-MUST reject fractional or negative values. A credit grant MUST record the rate
-card in force at issuance, and consumption against that grant MUST be priced by
-the recorded card. A republished listing with a different rate card MUST affect
-only grants issued after republication.
+MUST reject fractional or negative values. Rate-card amounts and the derived
+charge MUST be carried on the wire as decimal-digit strings in the uint256
+domain, never as JSON numbers, so a signed listing or usage-evidence body
+stays canonical at any asset precision. The materialization handed to
+issuance MUST carry the accepted listing and the rate card the grant is to pin,
+and that card MUST equal the listing's card.
 
-#### Scenario: Seller reprices after a sale
+#### Scenario: Handoff carries a card other than the accepted listing's
 
-- **WHEN** a seller republishes a model's listing with higher rates after a buyer
-  has purchased a balance under the previous card
-- **THEN** the buyer's existing grant consumes at the previous card and only new
-  purchases consume at the new one
+- **WHEN** a materialization carries the accepted listing and a rate card with
+  higher rates than that listing's card
+- **THEN** the materialization codec refuses it, so issuance cannot pin a card
+  the buyer did not accept
+
+#### Scenario: Handoff omits the accepted listing
+
+- **WHEN** a materialization carries a rate card and no accepted listing
+- **THEN** the materialization codec refuses it, because there is nothing to
+  hold the card to
 
 #### Scenario: Rate card carries a fraction
 
 - **WHEN** a rate card entry is not a non-negative integer
 - **THEN** the listing is rejected before publication
+
+#### Scenario: Seller prices on an eighteen-decimal asset
+
+- **WHEN** a rate card carries an amount above the JSON-safe integer range
+- **THEN** the card validates, the listing publishes under the publisher's
+  canonical signature, and usage evidence pinning the card signs and verifies
 ### Requirement: Usage record and deterministic charge derivation
 
 A usage record MUST carry the model and key the request ran under, a request
@@ -150,8 +181,8 @@ same integer charge.
 - **WHEN** a client stops a streamed request after 400 completion tokens were
   produced against a card of 200 credits per million completion tokens with a
   request floor of 1
-- **THEN** the record's outcome is `cancelled` and its charge is 1 credit, the
-  ceiling of 0.08 plus the floor
+- **THEN** the record's outcome is `cancelled` and its charge is 2 credits: the
+  ceiling of 0.08, which is one, plus the request charge of one
 
 #### Scenario: Upstream fails to answer
 
@@ -162,8 +193,13 @@ same integer charge.
 ### Requirement: Usage evidence is secret-free
 
 Inference usage evidence MUST carry the usage record, the pinned rate card, the
-derived charge, and the grant and fulfillment identities, and MUST NOT carry the
-bearer secret, the prompt, the completion, or any response payload.
+derived charge, the request identity, and the grant and fulfillment identities,
+and MUST NOT carry the bearer secret, the prompt, the completion, or any
+response payload. Its format MUST admit no free-form field: an attestation it
+carries is a reference — a `kind`, a `schema_version`, and a `sha256` digest of
+the proof, which is held elsewhere — never an opaque payload. Verification MUST
+bind evidence to the grant and the request the consumer expects; the grant and
+request identities together name one usage record.
 
 #### Scenario: Evidence is emitted for a completed request
 
@@ -171,11 +207,26 @@ bearer secret, the prompt, the completion, or any response payload.
 - **THEN** a canary bearer secret, prompt text, and completion text supplied to
   the producing code are absent from the serialized body
 
+#### Scenario: A producer places a secret in the attestation slot
+
+- **WHEN** a usage evidence body is built with a canary bearer secret or prompt
+  text as its attestation's payload, digest, or kind
+- **THEN** the body is refused, so no signed evidence carries it: the reference
+  admits no payload, a digest only as `sha256:` hex, and a kind only as a short
+  lowercase identifier
+
+#### Scenario: Evidence for another request is presented
+
+- **WHEN** valid evidence for one request is verified against expected facts
+  naming another request on the same grant
+- **THEN** verification refuses it
+
 ### Requirement: Attestation is reserved and unverified
 
-The model card and the usage evidence MAY each carry an optional `attestation`
-envelope with a `kind`, a `schema_version`, and an opaque `payload`. In this
-version no component MUST verify, interpret, or act on its contents, a consumer
+The model card MAY carry an optional `attestation` envelope with a `kind`, a
+`schema_version`, and an opaque `payload` that MUST be canonical JSON, and the
+usage evidence MAY carry an attestation reference as its own requirement
+states. In this version no component MUST verify, interpret, or act on its contents, a consumer
 MUST treat a listing or record with the envelope exactly as one without it, and
 a registry MUST NOT expose the envelope as a filter. A future proof format is
 introduced as a new `kind` under the same envelope.
@@ -185,49 +236,16 @@ introduced as a new `kind` under the same envelope.
 - **WHEN** a listing carries an `attestation` envelope
 - **THEN** publication, discovery, negotiation, and settlement proceed exactly as
   for a listing without one, and no filter selects on its presence or contents
-### Requirement: Bearer credential is delivery, not identity or payment authority
-
-The inference domain MUST treat the marketplace principal that negotiates and
-pays, the bearer credential that admits a request, and any authority that
-authorizes spending as three separate identities. A bearer credential MUST admit
-requests only against its own grant's balance and MUST NOT be accepted as
-authorization to negotiate, purchase, top up another key, or authorize a charge
-outside its grant.
-
-#### Scenario: Bearer credential is presented to a market operation
-
-- **WHEN** a bearer credential is offered as the credential for a negotiation,
-  purchase, or top-up
-- **THEN** the operation is refused as unauthenticated rather than treated as
-  the key owner's marketplace signature
-
-### Requirement: Admission authority is synchronous and singular
-
-The inference authority that holds keys, grants, pinned rate cards, and
-balances MUST be the only component consulted on whether a request may proceed.
-An external rating, metering, or billing system MAY receive usage records as a
-downstream feed and MUST NOT be consulted on the admission path or hold a
-balance the authority treats as authoritative.
-
-#### Scenario: Downstream rating system is unavailable
-
-- **WHEN** a configured downstream usage consumer cannot be reached
-- **THEN** admission decisions continue from the authority's own balance and the
-  undelivered records are retained for later delivery rather than blocking
-  requests
-
 ### Requirement: Discovery under the inference schema identity
 
 A registry serving inference listings MUST declare schema identity `inference`
 version `1` and MUST validate and filter listings from the inference filter
 specification: exact filters on `model_id`, `model_family`, `quantization`,
 modality, `supported_parameters`, and `provenance`; range filters on
-`context_length` and on the rate card's base-unit integers; an exact filter on
-the rate card's asset; and the settlement mechanism, asset, and funding
-projections. Each rate bound MUST declare `rate_card_asset` as a co-required
-filter, so a registry refuses an unpaired bound rather than comparing across
-assets. The inference buyer plugin MUST declare the `inference` schema identity
-and MUST query only registries declaring it.
+`context_length` and on the rate card's decimal-text amounts; an exact filter
+on the rate card's asset; and the settlement mechanism and asset projections.
+Each rate bound MUST declare `rate_card_asset` as a co-required filter, so a
+registry refuses an unpaired bound rather than comparing across assets.
 
 #### Scenario: Buyer bounds a rate
 
@@ -240,37 +258,3 @@ and MUST query only registries declaring it.
 
 - **WHEN** a query supplies a rate bound and no `rate_card_asset`
 - **THEN** the registry refuses it rather than evaluating it
-
-#### Scenario: Compute and API-credit registries are also configured
-
-- **WHEN** the buyer's configuration names a compute registry, an API-credits
-  registry, and an inference registry
-- **THEN** inference discovery queries only the registry declaring the
-  `inference` schema identity
-### Requirement: Quota-backed publication
-
-An inference listing MUST identify an authoritative quota resource at a
-configured site, and publication MUST require that resource to exist with
-available credits. Reconciliation MUST close an open listing when authoritative
-availability reaches zero and MAY reopen it when availability later becomes
-positive; an unavailable authority MUST preserve the last complete listing state
-rather than be read as zero.
-
-The declared quota is a sales cap, not capacity. An inference listing MUST carry
-the backed value of the declared backing property; a listing MUST NOT change
-backing in place, and admitting the unbacked value is a filter-specification
-version change.
-
-#### Scenario: Seller declares no sellable quantity
-
-- **WHEN** a seller submits an inference listing candidate with no quota resource
-  or a zero declared quantity
-- **THEN** publication is refused, because version 1 admits only the backed
-  value, and the seller declares a cap instead
-
-#### Scenario: Declared credits are sold out and later replenished
-
-- **WHEN** reconciliation observes zero available credits for an open listing and
-  later observes a positive quantity
-- **THEN** it closes the listing and subsequently republishes it from the new
-  authoritative view

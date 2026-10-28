@@ -289,6 +289,11 @@
       "dist": "arkhai-apicredits-domain"
     },
     {
+      "key": "inference-domain",
+      "path": "domains/inference",
+      "dist": "arkhai-inference-domain"
+    },
+    {
       "key": "apicredits-buyer",
       "path": "domains/apicredits/buyer",
       "dist": "arkhai-apicredits-buyer",

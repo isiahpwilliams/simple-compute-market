@@ -65,3 +65,30 @@ def test_the_accessors_read_any_carrier():
     assert provision_key_mode({}) == "new"
     assert provision_key_id({"payload": {"key": {"mode": "new"}}}) is None
     assert provision_quantity({"payload": {"quantity": "many"}}) is None
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        {"mode": "new", "key_id": "ak_existing"},
+        {"mode": "existing", "key_id": ""},
+        {"mode": "existing", "key_id": "  "},
+    ],
+    ids=["new-with-key-id", "existing-blank", "existing-whitespace"],
+)
+def test_only_the_two_key_shapes_are_admitted(key):
+    with pytest.raises(ValidationError):
+        FIRST(payload={"quantity": 1, "key": key})
+
+
+@pytest.mark.parametrize("quantity", [True, "5", 1.0, 1.5])
+def test_quantity_is_a_strict_integer(quantity):
+    with pytest.raises(ValidationError):
+        FIRST(payload={"quantity": quantity})
+
+
+def test_a_purchase_does_not_truncate_a_fractional_quantity():
+    with pytest.raises(ValidationError):
+        FIRST.purchase(quantity=1.5)
+    with pytest.raises(ValidationError):
+        FIRST.purchase(quantity=1, key_id="ak_1")

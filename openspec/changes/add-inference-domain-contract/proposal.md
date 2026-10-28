@@ -61,10 +61,13 @@ them.
   policy, and the registry never mints or resolves identifiers.
 - Define **one credit as one base unit of the listing's settlement asset**.
   The settlement option's per-credit rate is exactly one, `quantity` at
-  purchase is base units bought, and the **rate card** is exact integers in
-  that asset: base units per million prompt tokens, per million completion
-  tokens, an optional flat charge per request, and optional cached-prompt and
-  image rates. One authoritative number is what the buyer sees, what the meter
+  purchase is base units bought, and the **rate card** names that asset and
+  prices in exact integers of it, carried as decimal-digit strings on the
+  wire: base units per million prompt tokens, per million completion tokens,
+  an optional flat charge per request, and optional cached-prompt and image
+  rates. Every settlement option and escrow on the listing identifies the
+  card's asset; the listing codec refuses any other, and any per-credit rate
+  other than one. One authoritative number is what the buyer sees, what the meter
   charges, and what the balance is kept in. The card in force at issuance is
   pinned to the grant.
 - Reserve an opaque, unverified `attestation` envelope on the model card and
@@ -73,7 +76,9 @@ them.
 - Define round-zero provision intent `inference.v1`: a positive integer credit
   `quantity` and a key disposition of `new` or `existing` with `key_id`. This is
   the `api` family's purchase shape bound under a new kind, because the purchase
-  layer is identical by design.
+  layer is identical by design. The family vocabulary's validation is tightened
+  to the two key dispositions and a strict integer quantity for every domain
+  that binds it.
 - Define the six market-domain codecs — listing, message, terms,
   materialization, receipt, result — and register the domain's conformance
   examples with the shared `assert_domain_conformance` harness.
@@ -105,7 +110,11 @@ them.
 
 ### Modified Capabilities
 
-- None normatively. `registry-discovery`'s schema-driven validation and opaque
+- `api-family`: the family vocabulary's purchase shape admits exactly two key
+  dispositions and a strict integer quantity, for every domain that binds it —
+  API credits included. Inference binds the shape and the family's carriers
+  rather than copying them, and this is the correction that binding needs.
+- `registry-discovery` and `deployment-state`, not normatively. `registry-discovery`'s schema-driven validation and opaque
   payload storage already admit any filter specification; this change adds a
   third deployed instance, not a rule. `deployment-state`'s registry image
   contract gains one carried file, on the pattern the API-credits specification
@@ -116,9 +125,9 @@ them.
 - No storefront or buyer executables, gateway, authority service deployment,
   Compose stack, development identities, or end-to-end scenario. Those are
   `compose-inference-domain-stack`.
-- No new family vocabulary or kit: inference binds the `api` family's, which
-  `compose-api-family-kit` built, and changes no API-credits behavior, wire
-  shape, digest, database row, or distribution.
+- No change to the family kit beyond the purchase shape's validation above, and
+  no change to API-credits behavior, digests, database rows, or distributions
+  beyond the purchase payloads that validation now refuses.
 - No admission holds, no post-response settlement, no streaming usage capture,
   no cancellation handling. That is `meter-inference-usage`.
 - No fiat (`arkhai.payments.v1`) option for inference listings, and no
@@ -137,23 +146,34 @@ them.
 
 ## Impact
 
-- **New code.** `domains/inference/{__init__,domain_runtime,schema}.py`,
-  `domains/inference/listings/{models,pricing}.py`,
-  `domains/inference/negotiation/terms.py`,
-  `domains/inference/usage/{models,evidence}.py`,
+- **New code.** `domains/inference/src/arkhai_inference/{__init__,domain_runtime,schema}.py`,
+  `domains/inference/src/arkhai_inference/listings/{models,pricing}.py`,
+  `domains/inference/src/arkhai_inference/negotiation/terms.py`,
+  `domains/inference/src/arkhai_inference/usage/{models,evidence}.py`,
   `domains/inference/registry/filter-spec.yaml`,
   `domains/inference/pyproject.toml`, and `domains/inference/tests/`.
-- **Touched code.** `core/registry/Dockerfile` (one `COPY` per stage),
+- **Touched code.** `domains/api/src/arkhai_api/purchase.py` (the purchase
+  shape's validation), `domains/inference/src/arkhai_inference/schema.py` (the
+  negotiation carriers bound from `arkhai-api-contracts`), two API-credits
+  storefront tests that sent a string quantity,
+  `manifests/published-distributions.json`, `.github/workflows/publish-pypi.yml`
+  and `docs/development/RELEASING.md` (the wheel's release rows), `core/registry/Dockerfile` (one `COPY` per stage),
   `core/registry/tests/unit/test_filter_spec.py` (a load test beside
   `test_repo_api_credits_spec_loads`), `domains/Makefile`
   (`dist-inference-domain`, `test-inference`), and the root `Makefile`'s
   aggregate `dist-domains`/`test` membership.
-- **Wire.** A new schema and a new domain kind. No existing wire shape changes.
+- **Wire.** A new schema and a new domain kind. The `api` family's purchase
+  shape tightens for API credits as for inference: a non-integer or boolean
+  quantity and a `key_id` beside a new key are refused. Valid purchases are
+  unchanged, and no buyer in this repository sends the refused forms.
 - **Database.** None.
 - **Deployment.** The registry image carries one more filter specification;
   nothing selects it until a deployment sets the path.
 - **Packaging.** One new wheel, `arkhai-inference-domain`, depending on
-  `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-policy`, and `pydantic`.
+  `arkhai-api`, `arkhai-api-contracts`, `arkhai-core`, `arkhai-kit-identity`,
+  and `pydantic`, and published through `manifests/published-distributions.json`
+  and the PyPI workflow beside the API-credits domain wheel. `arkhai-api`
+  changes without a version bump, because it has never been published.
 - **Contributor workflow.** None.
 
 ## Permanent documentation impact
@@ -176,16 +196,18 @@ them.
   across sellers is a registry operator's policy — the `inference`
   capability's `architecture.md`.
 - One credit is one base unit of the settlement asset, so the rate card is the
-  price and there is one authoritative number; the card is pinned at issuance
-  — the `inference` capability's `spec.md`.
-- Attestation is reserved as an opaque, unverified envelope on the card and
-  the evidence — the `inference` capability's `spec.md` and `architecture.md`.
+  price and there is one authoritative number; the handoff to issuance carries
+  the accepted listing's card — the `inference` capability's `spec.md`.
+- Attestation is reserved and unverified: an opaque canonical envelope on the
+  card, a digest reference on the evidence — the `inference` capability's
+  `spec.md` and `architecture.md`.
 - One listing is one served model, so the registry compares sellers per model —
   the `inference` capability's `spec.md`.
 - Marketplace principal, bearer credential, and spending authority are three
   identities; the bearer credential is delivery, never payment authorization —
-  the `inference` capability's `spec.md`, restating the API-credits companion's
-  "Commercial and usage identity" for the new domain.
+  rationale in the `inference` capability's `architecture.md`; the normative
+  requirement is `compose-inference-domain-stack`'s delta, which builds the
+  credential.
 - Model identity is seller-asserted with a SHOULD derivation rule; the domain
   keeps no model list; quantization is an enumerated field; provenance is
   required and resale is legitimate; a registry may curate but never mints;
@@ -217,11 +239,11 @@ them.
   Admitting the unbacked value is an inference filter-specification bump;
   `design.md` records the trigger. Its publication-hook changes are in the
   publication roles the family kit takes from current `dev`.
-- [`publish-indicative-listing-rates`](../archive/2026-10-01-publish-indicative-listing-rates/) —
-  now design-complete and unblocked; owns the exact-decimal filter value type and declarative filter
-  co-requirements the generic registry lacks. Inference does not duplicate that
-  work; it filters on integer credit rates and the settlement asset today and
-  revisits a monetary `asking_rate` when those primitives land.
+- [`publish-indicative-listing-rates`](../archive/2026-10-01-publish-indicative-listing-rates/)
+  — archived 2026-10-01; delivered the exact-decimal filter value type and
+  declarative filter co-requirements. The inference specification uses the
+  co-requirement to pair each rate bound with `settlement_asset`; it compares
+  on integer base-unit rates within an asset and publishes no `asking_rate`.
 - [`add-future-domain-shape-validation`](../add-future-domain-shape-validation/)
   — admits a bounded fixture for an inference domain "the product does not
   have" and forbids that fixture from carrying domain design. Once this change

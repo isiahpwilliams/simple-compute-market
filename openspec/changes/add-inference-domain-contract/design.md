@@ -14,9 +14,9 @@ stated in any specification and the decisions below depend on it.
 | Admission hold | — | None. Nothing reserves a worst-case cost before work runs |
 | Gate charge model | `apicredits_middleware/gate.py` | Charges `amount_per_request` *before* proxying; optional optimistic batching flushes above a low-balance threshold |
 | Gate outbound authentication | `apicredits_middleware/signing.py` | Signs as the `service` role under marketplace identity v2; `market_identity` is an optional extra so the published library keeps an httpx-only default |
-| Issuance identity | `domains/apicredits/settlement/credits_client.py` and the mirror in `service/src/models/keys_model.py` | `fulfillment_id` derives from `obligation_ref` under a payload containing the literal `"domain": "api-credits"`; the request digest hashes a payload containing the literal schema string `arkhai.api-credits.issuance-request.v1`. Both strings are inside SHA-256 inputs |
+| Issuance identity | `domains/apicredits/src/arkhai_apicredits/settlement/credits_client.py` and the mirror in `domains/apicredits/service/src/apicredits_service/models/keys_model.py` | `fulfillment_id` derives from `obligation_ref` under a payload containing the literal `"domain": "api-credits"`; the request digest hashes a payload containing the literal schema string `arkhai.api-credits.issuance-request.v1`. Both strings are inside SHA-256 inputs |
 | Settlement rate unit | `market_core.schemas.RateValue.per` | Free string, default `"hour"`. API-credits pricing accepts `credit`, `token`, `request` |
-| Registry filter operators | `core/registry/src/api/filter_spec.py` | `in`, `not_in`, `range`, `exists`. Range bounds are float-parsed; exact-decimal ranges do not exist |
+| Registry filter operators | `core/registry/src/core_registry/api/filter_spec.py` | `in`, `not_in`, `range`, `exists`. Range bounds are float-parsed; exact-decimal ranges do not exist |
 | Deployed filter specifications | `core/registry/Dockerfile` | Two: compute and API credits, each `COPY`ed into both stages and selected by `REGISTRY_FILTER_SPEC_PATH` |
 | Second registry in Helm | `helm/Chart.yaml`, `helm/values.yaml` | The `registry` subchart is aliased as `api-credits-registry` with its own identity, descriptor, and filter-spec path |
 | Storefront composition for a non-compute domain | `apicredits_storefront/domain_runtime.py` | Own executable on the `kit/storefront` shell, registered under `market.storefront_domains`. The compute-family shell (`market.storefront_contributions`) explicitly excludes API credits in `multi-domain-storefront-composition` |
@@ -187,24 +187,33 @@ listing 5 credits per million charge the same real price and show numbers a
 filter cannot relate. Two knobs per seller guarantee that denominations vary,
 and a filter over the credit figure looks like a price filter and is not.
 
-Costs, accepted: on an 18-decimal asset the integers are large (the existing
-uint256 overflow guards apply); on a fiat-cent asset the finest expressible rate
-is one cent per million tokens, which nobody undercuts. Integers remain required
-so two independent implementations of the charge arithmetic cannot disagree by
-rounding.
+Costs, accepted: on an 18-decimal asset the integers are large; on a fiat-cent
+asset the finest expressible rate is one cent per million tokens, which nobody
+undercuts. Integers remain required so two independent implementations of the
+charge arithmetic cannot disagree by rounding.
 
-**The card names its asset.** "Base units of the listing's settlement asset"
-presumes one asset per listing, and a listing may carry several settlement
-options: a card beside options in two assets would be read in whichever a
-buyer's bound named. The rate card therefore carries `asset`, the listing codec
-refuses any settlement option or escrow token naming another asset, and the
-discovery bounds co-require `rate_card_asset`, the card's own field, as the
-compute specification pairs `asking_rate` with its asset. The alternative, a
-codec rule that all options share one asset with the card left numeric, is
-rejected because the served shape could not express it and the bound would
-still pair through a projection over options. The pinned card thus also pins
-the asset the grant's balance is kept in.
-### The rate card is pinned at issuance
+**The card names its asset** (implementation review, 2026-10-22). "Base units
+of the listing's settlement asset" presumed one asset per listing, and nothing
+held a listing to one: a card beside options in two assets would be read in
+whichever a buyer's bound named. The rate card therefore carries `asset`, the
+listing codec refuses any settlement option or escrow token naming another
+asset, and the discovery bounds co-require `rate_card_asset`, the card's own
+field, as the compute specification pairs `asking_rate` with its asset. The
+alternative, a codec rule that all options share one asset with the card left
+numeric, was rejected because the served shape could not express it and the
+bound would still pair through a projection over options. The pinned card thus
+also pins the asset the grant's balance is kept in.
+
+**Amounts travel as decimal text.** Large integers were accepted above with
+"the overflow guards apply", but the guards bound multiplication, not
+representation: canonical JSON has no number form above 2⁵³ − 1, and both the
+published listing and the usage-evidence body are signed canonically, so a
+card on an 18-decimal asset could be neither published nor metered. The card's
+amounts and the derived charge use the repository's uint256 wire type —
+Python integers in memory, decimal-digit strings on the wire — and the filter
+specification compares the bounds as exact decimal text. Token counts stay
+plain strict integers; the magnitude lives in the charge.
+### The rate card is carried to issuance and pinned on the grant
 
 A grant carries the rate card in force when it was issued. A seller who
 republishes a listing with a new card changes the price of *new* purchases only;
@@ -212,9 +221,15 @@ credits already bought consume at the rate the buyer saw when paying. Without
 this, a seller could reprice sold credits after the escrow settled, and the
 buyer would have no recourse because the settlement mechanism already closed.
 
-This is stated normatively in the spec delta. The mechanism — where the pinned
-card is stored and how the authority reads it on the consumption path — is
-`meter-inference-usage`'s to implement; the invariant is this change's to state.
+This change holds what a vocabulary can: the materialization handed to
+issuance carries the accepted listing and the card, and the codec refuses a card
+other than the listing's; the listing is required, unlike in the family's
+handoff, because without it any card could be pinned (implementation review
+03, F5). The stateful halves are stated where they are built
+(implementation review 02, F3 and F11): recording the accepted listing's card on
+the grant is `compose-inference-domain-stack`'s requirement, and pricing
+consumption by it, so republication reprices only later grants, is
+`meter-inference-usage`'s.
 
 ### Comparability without a derived price field
 
@@ -227,17 +242,16 @@ unnecessary — the rate card *is* the price — so the rejection stands and the
 problem it guarded against no longer exists.
 
 What the registry filters on is therefore authoritative: `prompt_credits_max`
-and `completion_credits_max` are upper bounds on the rate card's integers, and
+and `completion_credits_max` are upper bounds on the rate card's amounts, and
 `rate_card_asset` selects the asset the card denominates them in. A rate bound
 is meaningful only alongside an asset, so both bounds declare
 `requires: [rate_card_asset]` — the declarative co-requirement
-`publish-indicative-listing-rates` added to the generic registry
-(`FilterDecl.requires`) — and the registry itself refuses an unpaired bound.
-`settlement_asset` remains the projection over options a buyer uses to find
-how a listing can be paid. The buyer compiler resolves the rule from the served
-specification, as `registry-discovery` requires; nothing encodes it in code.
-Cross-asset comparison needs an exchange rate the registry must not be an
-authority on, and stays client-side, consistent with Goal 7.
+`publish-indicative-listing-rates` added to the generic registry — and the
+registry itself refuses an unpaired bound. `settlement_asset` remains the
+projection over options a buyer uses to find how a listing can be paid. The buyer compiler resolves the rule
+from the served specification, as `registry-discovery` requires; nothing
+encodes it in code. Cross-asset comparison needs an exchange rate the registry
+must not be an authority on, and stays client-side, consistent with Goal 7.
 ### Quota-backed publication in version 1
 
 An inference seller's supply is, in truth, not finite in the way a GPU is: a
@@ -271,12 +285,24 @@ payload shape. It is the right shape because the purchase layer *is* the same:
 a buyer is buying N credits onto a new or existing key. What differs between the
 domains is the listing and the consumption, not the purchase.
 
-It is bound, not copied: `domains/inference/negotiation/terms.py` binds the
-`api` family vocabulary's purchase shape under `inference.v1`, as API credits
-binds it under `api_credits.v1`, and `schema.py` binds the family's negotiation
-carriers the same way. `ARCHITECTURE.md`'s dependency layers forbid a domain
-importing a sibling, so the shared shape lives in the family, which every
-domain selling prepaid bearer access binds.
+Inference binds it from the `api` family vocabulary,
+`provision_terms_model("inference.v1")` in
+`domains/inference/src/arkhai_inference/negotiation/terms.py`, as API credits
+binds it under `api_credits.v1`. The family specification requires every domain
+selling prepaid bearer access to bind the shape rather than define or copy it,
+and the domain's registry row declares `family = "api"`, so the architecture
+check admits the edge.
+
+The shape validates exactly two key dispositions: a new key naming no
+identifier, and an existing key naming a non-blank one. `quantity` is a strict
+integer, and the purchase maker passes it through rather than converting it, so
+a fractional quantity is refused instead of truncated. The vocabulary carried a
+looser form when the family kit landed — lax integer coercion, a `key_id`
+admitted beside a new key, and a maker that truncated through `int()` — and this
+change tightens it there, for both domains. A valid purchase produces the same
+payload as before; API credits now refuses the malformed forms it used to
+coerce, which no buyer in this repository sends, because both buying paths pass
+an `int`.
 
 ### Usage record and charge derivation are domain-owned deterministic semantics
 
@@ -307,13 +333,25 @@ and the grant and fulfillment identities. It never carries the bearer secret,
 the prompt, the completion, or the response. This is the same rule the
 API-credits issuance evidence enforces with a canary test, applied to usage.
 
-### Attestation is reserved as an opaque, unverified envelope
+Verification binds a body to the grant *and the request* the consumer expects
+(implementation review, 2026-10-22): a body is self-consistent for any grant
+and any request, so the consumer must say which it is settling. Grant and
+request together name one usage record. Debiting each pair at most once is
+`meter-inference-usage`'s requirement, because only the hold-and-settle path
+that enforces it can prove it (implementation review 02, F11).
 
-The model card and the usage evidence each carry an optional `attestation`
-field shaped as the repository's standard versioned envelope — `kind`,
-`schema_version`, and an opaque `payload`. In version 1 it is empty, nothing
-verifies it, and the registry does not expose it as a filter. Its purpose is to
-fix *where* a proof attaches — to the listing (what the seller claims to run)
+### Attestation is reserved and unverified
+
+The model card carries an optional `attestation` field shaped as the
+repository's standard versioned envelope — `kind`, `schema_version`, and an
+opaque `payload`, which must be canonical JSON because the card is signed
+canonically. The usage evidence carries a reference instead — `kind`,
+`schema_version`, and a `sha256` digest of a proof held elsewhere — because an
+opaque field in signed, durable evidence could carry a prompt or a secret, and
+the format, not every producer, has to keep it secret-free (implementation
+review 02, F1 and F12). A new proof format is still a new `kind` on either.
+In version 1 both are empty, nothing verifies either, and the registry does not
+expose either as a filter. Their purpose is to fix *where* a proof attaches — to the listing (what the seller claims to run)
 and to each usage record (what served this request) — while the two shapes are
 being designed together, and to give a future trusted-execution proof a place
 to land as a new `kind` rather than a schema change.
@@ -326,6 +364,16 @@ platform, measurement, and verifier on the listing; a check at purchase; a check
 per request — read before the field's shape is fixed.
 
 ### Three identities, restated for this domain
+
+The normative statement of this decision, and of the two that follow, lives in
+the spec delta of the change that builds the behaviour —
+`compose-inference-domain-stack` for the bearer credential, quota-backed
+publication, and the buyer plugin's discovery; `meter-inference-usage` for the
+admission authority — because archival merges a change's whole delta, and a
+permanent requirement nothing on `dev` satisfies misleads its reader. The
+rationale stays here. The three requirements moved verbatim; the buyer plugin's
+sentences, which had no requirement of their own, were restated in the stack's
+delta as one, with the scenario that named the plugin.
 
 The API-credits architecture companion already separates a marketplace principal
 (who may negotiate and buy), a bearer credential (what admits a request), and
@@ -398,8 +446,8 @@ Filters: `model_id`, `model_family`, `quantization`, `modality`,
 where the field is required. `context_length_min` is a lower-bound range.
 `prompt_credits_max` and `completion_credits_max` are upper-bound ranges over the
 rate card's base-unit integers, each co-requiring `rate_card_asset` as
-described above. The token, mechanism, asset, and funding projections follow
-the API-credits specification's. `offering_mode` is required and
+described above. The token, mechanism, and asset projections follow the
+API-credits specification's. `offering_mode` is required and
 equals `inference`. The attestation envelope is **not** a filter.
 ### OpenAI-compatible surface, version 1
 
@@ -410,10 +458,10 @@ usage fields under a version bump, not a reinterpretation.
 
 ## Risks / Trade-offs
 
-- **A second consumer of a young family.** Inference is the `api` family's
-  second binder, so a gap the family left for API credits surfaces here.
-  Mitigated by binding rather than copying: a correction lands in the family
-  once, for both domains.
+- **A sibling domain before its family exists.** This change's copies of the
+  provision-intent shape and the terms module predate the `api` family
+  vocabulary. Mitigated by their size and by `compose-api-family-kit`, which
+  decides what moves into the vocabulary before the stack composes anything.
 - **Integer granularity.** On a fiat-cent asset the finest rate is one cent
   per million tokens; on an 18-decimal asset the integers are large. Neither
   prices anyone out; the overflow guards already exist.
@@ -422,8 +470,8 @@ usage fields under a version bump, not a reinterpretation.
   This is API credits' posture today and inherits its limits; the quota is a
   sales cap, and admitting the unbacked backing value later is a
   filter-specification bump, not a migration.
-- **A rate bound without an asset is meaningless.** Each bound co-requires
-  `rate_card_asset`, so the registry refuses an unpaired one.
+- **A rate bound without an asset is meaningless.** Closed by the declared
+  co-requirement: the registry refuses an unpaired bound.
 - **Cross-asset comparison is client-side.** Accepted for the reasons
   `publish-indicative-listing-rates` records.
 - **Identifier convergence is a SHOULD.** Two sellers may still name the same
@@ -448,7 +496,11 @@ where a task touches one it is an explicit decision gate.
 
 ## Migration Plan
 
-Additive. No existing wire shape, database, deployment, or distribution
+Additive for inference. One existing wire shape tightens: the `api` family's
+purchase shape now refuses a non-integer or boolean quantity and a `key_id`
+beside a new key, for API credits as for inference; a valid purchase produces
+the same payload, and both buyers already send an integer. `arkhai-api` keeps
+its version, because it has never been published. No database or deployment
 changes. Rollback is deleting the new wheel and the registry image's two `COPY`
 lines; no deployed registry selects the new specification until an operator sets
 `REGISTRY_FILTER_SPEC_PATH` to it.

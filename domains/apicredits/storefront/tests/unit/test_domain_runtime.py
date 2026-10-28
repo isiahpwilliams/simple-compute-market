@@ -30,7 +30,7 @@ def test_domain_runtime_normalizes_api_credits_schema_slots() -> None:
     message = runtime.codecs.message(
         {
             "kind": "api_credits.v1",
-            "payload": {"quantity": "5", "key": {"mode": "new"}},
+            "payload": {"quantity": 5, "key": {"mode": "new"}},
         }
     )
     terms = runtime.codecs.terms(

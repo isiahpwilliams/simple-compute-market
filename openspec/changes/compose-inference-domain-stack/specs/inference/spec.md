@@ -48,7 +48,14 @@ Inference issuance requests, results, evidence, and portable fulfillment
 references MUST carry `inference` labels distinct from every other domain's, and
 the storefront's issuance client and the authority MUST derive the same request
 digest for the same request. Issued key identifiers MUST be distinguishable from
-another domain's.
+another domain's. A key issued for a purchase MUST hold a balance equal to the
+purchased quantity, in base units of the settlement asset.
+
+#### Scenario: A purchased balance is issued
+
+- **WHEN** a buyer's purchase of 2,000,000 credits on a listing settling in an
+  asset with six decimals settles and the key is issued
+- **THEN** the authority holds a balance of 2,000,000 base units on the key
 
 #### Scenario: The same request is digested on both sides
 

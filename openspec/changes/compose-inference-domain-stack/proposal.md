@@ -126,9 +126,18 @@ only request-priced rate cards are publishable until then.
   `domains/inference/compose.yml`, the per-domain Compose files, development
   identities, the `e2e-inference-dev-env` target, the e2e lane targets, the
   e2e scenario and marker.
-- Touched: root `docker-compose.yml`, `domains/Makefile`, root `Makefile`,
-  `e2e-tests/Makefile`, `.github/workflows/e2e.yml`,
-  `e2e-tests/pyproject.toml` markers.
+- Touched in the family: `domains/api/src/arkhai_api/{issuance,evidence}.py`
+  (the subject's optional accepted terms, digest, and charge, omitted when
+  unset), `domains/api/contracts/src/arkhai_api_contracts/models.py` (verify
+  and consume scope fields; verify's pinned terms), the authority's
+  `keys_service.py`, `models.py`, and `migrations.py` (`grant_terms`, key
+  scope, the scope refusal), `domains/api/gate/src/arkhai_api_gate/{gate,client}.py`
+  (the separable verify step, the scope and charge in `verify`), the gate's
+  conformance fixtures, and `domains/apicredits/tests/fixtures/pins/` (an
+  inference case beside the unchanged API-credits pins).
+- Touched elsewhere: root `docker-compose.yml`, `domains/Makefile`, root
+  `Makefile`, `e2e-tests/Makefile`, `.github/workflows/e2e.yml`,
+  `e2e-tests/pyproject.toml` markers, `dev-env/identities/README.md`.
 - Wire: the family issuance subject gains optional accepted terms, their
   digest, and a request charge, of which the digest and charge enter the
   request digest and the signed evidence; `verify` returns them and, with
@@ -178,5 +187,6 @@ only request-priced rate cards are publishable until then.
 Returned to design on 2026-10-19; the copy-based `design.md` and `tasks.md`
 were withdrawn with the copied implementation. Redesigned on 2026-10-28
 against the `api` family kit, archived on 2026-10-26, and the contract as
-implemented; design reviews 01–04 were triaged on 2026-10-28 and 2026-10-29
-and their gaps are decided in `design.md`, which awaits a fifth design review.
+implemented; design reviews 01–05 were triaged on 2026-10-28 and 2026-10-29,
+their gaps are decided in `design.md`, and review 05's triage advanced the
+change to planning.

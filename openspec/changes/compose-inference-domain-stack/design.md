@@ -103,10 +103,14 @@ repository-wide vocabulary change this change does not need.
 that listing's rate card, with the issuance's `fulfillment_id`, `mechanism`,
 and `obligation_ref`. The contract's model refuses a card other than the
 listing's, so the public record cannot show a buyer a rate they did not
-accept. This is for the buyer and for audit; the authority's pinned card for
-metering is the accepted-listing artifact the kit records at acceptance,
-which `meter-inference-usage` reads, so there is one source of truth and no
-acceptance hook or extra table.
+accept. The accepted terms then exist in three places, each with one role
+and all bound by the same digest: the storefront's accepted-listing artifact,
+recorded by the kit at acceptance, is the issuance input and the seller's
+audit record; the authority's `grant_terms` row (review 03 F3, review 04) is
+the copy consumption charges against and `meter-inference-usage` prices
+against; and this public materialization is the buyer's and an auditor's
+copy. No acceptance hook is needed, since the kit records the artifact
+itself.
 
 Rejected: nothing public, which leaves the buyer unable to see the rate bought
 at. Rejected: a card-only extension, which saves little since the listing is

@@ -11,7 +11,8 @@ composing domain's executable projects from its own validated listing; the libra
 read a listing itself. It reads the request's `model` and refuses one the
 offering does not serve before any charge; it verifies the key against the
 offering's scope, calls a per-request verification hook with the offering's
-current canonical terms and the key's accepted terms digest, which admits everything until a proof format is
+current canonical terms and the key's accepted terms payload and digest as
+verification returned them, which admits everything until a proof format is
 configured, and only then charges the key's verified charge, or the
 offering's default when verification returns none, and forwards; it replaces
 the buyer's credential with the deployment's own upstream credential,

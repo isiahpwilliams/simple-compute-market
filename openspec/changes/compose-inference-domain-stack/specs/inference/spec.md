@@ -151,9 +151,10 @@ buyer accepted.
 The inference storefront MUST extend the delivery's public result with the
 contract's materialization built from the accepted listing the kit recorded
 at acceptance and that listing's rate card, under one key, so a buyer and an
-auditor read the rate the purchase was made at. The authority's pinned card is
-the accepted-listing artifact; the public result repeats it and is not a
-second source.
+auditor read the rate the purchase was made at. It is the buyer's copy of the
+accepted terms: the storefront's accepted-listing artifact is the issuance
+input, the authority's grant terms are what consumption and metering price
+against, and one digest binds the three.
 
 #### Scenario: The seller reprices between acceptance and fulfillment
 

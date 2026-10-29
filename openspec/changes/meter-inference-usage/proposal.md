@@ -77,10 +77,11 @@ reserve-then-settle, and the place to do it is the authority, not the gate.
 - **Inherits two things from `compose-inference-domain-stack`.** That stack
   publishes only request-priced rate cards, because its gate charges a fixed
   amount on admission; this change removes that publication guard once
-  per-token charging exists. And that stack pins the rate card in the
-  storefront's materialization without extending the authority's grant; this
-  change carries the card to the authority, where the consumption path reads
-  it. Grants issued before then are request-priced by construction.
+  per-token charging exists. And that stack pins the accepted terms, the full
+  rate card among them, beside each grant in the authority's `grant_terms`
+  table; this change prices the consumption path against that row, with no
+  further carrying. Grants issued before then are request-priced by
+  construction.
 
 ## Impact
 

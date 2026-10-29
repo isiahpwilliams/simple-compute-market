@@ -239,10 +239,10 @@ per-request verification hook in the family gateway library and a
 purchase-time verification hook in the buyer plugin, called before settlement
 is proposed; both take the listing's attestation envelope and return a refusal
 or nothing. The gateway's hook receives the offering's complete current
-canonical terms (the rate card and the attestation) and the key's accepted
-terms digest returned by verification (review 02 F2, review 03 F2), so it
-recomputes the current digest and can tell whether the seller changed the
-price or the attestation since the buyer accepted them; it runs after the key is verified and before it is charged
+canonical terms (the rate card and the attestation), the key's accepted terms
+as `verify` returns them, and their digest (reviews 02–04), so it can both
+detect a change since acceptance and verify against the accepted envelope
+itself; it runs after the key is verified and before it is charged
 (F3), so a refused proof costs the buyer nothing. The inference
 gateway image is built reproducibly from a digest-pinned base and compose, so
 it can later be measured. No proof `kind` is defined. The first `kind`'s
@@ -309,10 +309,11 @@ charge, and its storefront and registry are the purchase pointer. Readiness
 refuses a card that is not request-priced or a listing that cannot be read.
 But the charge a request pays is the one the buyer accepted, not the one the
 listing shows today: the issuance projection fills the family subject's
-optional **terms digest** (the canonical digest of the accepted card's
-`rate_card` and `attestation`) and **request charge** (`request_credits`), the
-authority stores both on the grant and pins them on the key at its first
-grant, `verify` returns them, and the gateway charges the verified charge,
+optional **accepted terms** (the canonical JSON of the accepted card's
+`rate_card` and `attestation`), their **terms digest**, and the **request
+charge** (`request_credits`); the authority stores all three beside the grant
+(review 04, F1 and F2) and pins them on the key at its first grant, `verify`
+returns them, and the gateway charges the verified charge,
 falling back to the offering's default only when verification returns none.
 A republished price therefore reaches new keys only; an existing key's top-up
 under different terms is refused (F4), so one balance never mixes two prices.
@@ -339,11 +340,11 @@ of the listing the gateway loaded under F1.
 The accepted terms digest pinned under F1 covers the card's rate card and
 attestation envelope, so the gateway's verification hook receives the
 offering's complete current canonical terms together with the key's accepted
-digest from `verify`, recomputes the current digest, and compares (review 03,
-F2). A first proof format can therefore refuse a credential whose seller
-changed the attestation or the price since the buyer accepted them; one that
-needs the accepted envelope itself reads it from the storefront's
-accepted-listing artifact. In this version the hook admits everything.
+digest and the accepted terms payload from `verify` (review 03 F2, review 04
+F3). A first proof format can therefore refuse a credential whose seller
+changed the attestation or the price since the buyer accepted them, or verify
+against the accepted envelope the authority holds; nothing reaches into the
+storefront's records. In this version the hook admits everything.
 
 ### F3 (design review 02). The family gateway consumes a domain-neutral offering
 
@@ -375,24 +376,30 @@ Rejected: `verify` returning the key's scope for the gateway to compare,
 which adds fields to the pinned verify response for every key and trusts the
 gateway to compare.
 
-### F3 (design review 03). Accepted terms persist and travel compatibly
+### F3 (design review 03, amended by review 04 F1 and F2). Accepted terms persist and travel compatibly
 
-- **Grant columns.** A migration step adds nullable `terms_digest` and
-  `request_charge` to `credit_grants`. No key column: a key's pinned values
-  are its first grant's. A grant without them is unpinned, so a key whose
-  first grant is unpinned accepts only unpinned top-ups and is charged the
+- **A separate table.** A migration step creates `grant_terms`: the grant's
+  id, the accepted terms as canonical JSON, their digest, and the request
+  charge. `credit_grants` is unchanged, so the previous image's exact column
+  check still passes and rollback is the previous image against the same
+  file, with no down-migration. No key column: a key's pinned values are its
+  first grant's row. A grant with no row is unpinned, so a key whose first
+  grant is unpinned accepts only unpinned top-ups and is charged the
   offering's default, which is today's API-credits behaviour; inference has
   no such keys.
-- **Validation ordering.** The authority's grant-schema drift check runs
-  after the migration chain, so an additive step can land on a live database;
-  it still rejects a schema the chain does not reach.
-- **Wire bytes.** The subject's terms digest and request charge, where they
+- **The payload, not only the digest.** The authority keeps the full accepted
+  terms because `meter-inference-usage` prices usage server-side against the
+  grant's accepted card, which a digest cannot recover; the digest is the
+  integrity check the authority verifies on write and returns with the
+  payload.
+- **Validation ordering.** The drift check on `credit_grants` is untouched;
+  the migration that creates `grant_terms` runs in the chain as any step does.
+- **Wire bytes.** The subject's terms, digest, and request charge, where they
   appear in the issuance request digest, the signed evidence, and the verify
-  and consume requests, are omitted when unset, never serialised as `null`;
+  and consume exchanges, are omitted when unset, never serialised as `null`;
   the API-credits pins prove byte identity, and the pin fixture gains an
-  inference case with the fields present.
-- **Rollback.** Nullable columns the previous image ignores; the previous
-  image reads a database the new one wrote.
+  inference case with the fields present. The request digest and the evidence
+  carry the digest, not the payload, so neither grows with the card.
 
 ### F2 (design review 01). A top-up is admitted after the gate's verification TTL
 

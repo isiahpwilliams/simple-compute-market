@@ -53,15 +53,15 @@ charge without charging a request it then refuses.
 
 ### Requirement: The issuance subject may carry accepted terms
 
-The family issuance subject MAY carry a terms digest and a per-request charge
-that the domain's projection reads from the accepted listing. When present,
-both MUST enter the issuance request digest and the signed evidence, the
-authority MUST record them on the grant in nullable columns a migration adds,
-and `verify` MUST return the key's pinned values; when absent, they MUST be
+The family issuance subject MAY carry the accepted terms as canonical JSON,
+their digest, and a per-request charge, which the domain's projection reads
+from the accepted listing. When present, the digest and charge MUST enter the
+issuance request digest and the signed evidence, the authority MUST verify the
+digest against the payload and record all three in a table of its own beside
+the grant, leaving the grant table's columns unchanged, and `verify` MUST
+return the key's pinned terms, digest, and charge; when absent, they MUST be
 omitted rather than serialised as null, so digests, evidence, and `verify`
-are byte-identical to their form before the fields existed. The authority's
-grant-schema check MUST run after its migration chain, so the added columns
-reach a live database before the schema is asserted.
+are byte-identical to their form before the fields existed.
 
 #### Scenario: API credits issues without terms
 
@@ -70,13 +70,20 @@ reach a live database before the schema is asserted.
 - **THEN** the digest, the evidence, and the verify response match the
   recorded pins byte for byte
 
-#### Scenario: An authority starts on a database without the columns
+#### Scenario: The authority is upgraded and rolled back
 
 - **WHEN** the new authority image starts against a database its previous
-  image wrote
-- **THEN** the migration adds the nullable columns before the schema is
-  checked, existing grants read as unpinned, and the previous image still
-  reads the database afterwards
+  image wrote, and the previous image is later started against the result
+- **THEN** the migration creates the terms table, existing grants read as
+  unpinned, and the previous image starts and serves, since the grant table
+  it checks is unchanged
+
+#### Scenario: Metering reads the accepted card
+
+- **WHEN** a later consumer prices a request against a grant issued with
+  accepted terms
+- **THEN** the authority supplies the grant's full accepted terms, verified
+  against their digest, without consulting the storefront
 
 ### Requirement: A key is scoped to its first grant
 

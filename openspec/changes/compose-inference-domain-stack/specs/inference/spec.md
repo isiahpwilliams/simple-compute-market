@@ -132,9 +132,9 @@ version change.
 
 The inference storefront's issuance projection MUST digest the accepted
 listing's `served_model_name` as the service identity and its `resource_id`
-as the resource, MUST fill the subject's terms digest with the canonical
-digest of the accepted card's `rate_card` and `attestation` and its request
-charge with the card's `request_credits`, and MUST deliver the listing's
+as the resource, MUST fill the subject's accepted terms with the canonical
+JSON of the accepted card's `rate_card` and `attestation`, their digest, and
+its request charge with the card's `request_credits`, and MUST deliver the listing's
 `endpoint.base_url` as the connection payload's base URL, so a grant is bound
 to the model name the gateway admits and to the price and attestation the
 buyer accepted.
@@ -238,8 +238,9 @@ list MUST contain only that model.
 The gateway MUST call a verification hook after the key is verified and
 before it is charged, and the buyer plugin MUST call one before it proposes
 settlement; the gateway's receives the offering's complete current canonical
-terms and the key's accepted terms digest, so it can recompute and compare,
-the plugin's the envelope of the listing being bought, and either may refuse.
+terms and the key's accepted terms and digest as verification returned them,
+so it can compare or verify against the accepted envelope, the plugin's the
+envelope of the listing being bought, and either may refuse.
 In this version both hooks admit everything, and the gateway image MUST be
 built from digest-pinned inputs so a later proof format can measure it.
 

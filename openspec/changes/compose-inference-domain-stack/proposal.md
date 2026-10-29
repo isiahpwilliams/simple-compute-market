@@ -129,9 +129,15 @@ only request-priced rate cards are publishable until then.
 - Touched: root `docker-compose.yml`, `domains/Makefile`, root `Makefile`,
   `e2e-tests/Makefile`, `.github/workflows/e2e.yml`,
   `e2e-tests/pyproject.toml` markers.
-- Wire: none beyond the new domain. Database: one new service database, not
-  shared. Deployment: new images and one more registry instance in the
-  development stack.
+- Wire: the family issuance subject, request digest, and signed evidence gain
+  optional accepted-terms fields, and `verify` and `consume` gain optional
+  scope fields, each omitted when unset so API credits' bytes are unchanged
+  and the pins prove it. Database: one new inference service database, and a
+  migration adding two nullable columns to every API-family authority's
+  `credit_grants`, with the grant-schema check moved after the chain.
+  Deployment: new images and one more registry instance in the development
+  stack; an API-family authority upgrades by image, and the previous image
+  still reads the migrated database.
 
 ## Permanent documentation impact
 
@@ -159,7 +165,9 @@ only request-priced rate cards are publishable until then.
 | A key is scoped to its first grant's service, resource, and accepted terms (F4, review 02 F1) | the `api-family` capability's `spec.md` |
 | The issuance subject carries the accepted terms digest and request charge; the gateway charges the key's verified charge (F1) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` and `architecture.md` contribution table |
 | The family gateway consumes a domain-neutral offering the domain executable projects (review 02 F3) | the `api-family` capability's `spec.md` and `architecture.md` |
-| The proof hook binds to the accepted attestation through the terms digest (review 02 F2) | the `inference` capability's `architecture.md` |
+| The proof hook binds to the accepted attestation through the terms digest (review 02 F2, review 03 F2) | the `inference` capability's `architecture.md` |
+| A key is enforced against the gateway's offering scope at verify and consume (review 03 F1) | the `api-family` capability's `spec.md` |
+| Accepted terms persist in nullable grant columns, omitted from the wire when unset; the schema check follows the migration chain (review 03 F3) | the `api-family` capability's `spec.md` and `architecture.md` — "Current limits"; `docs/development/DEPLOYMENT_AND_CONFIG.md` |
 | Verification precedes the charge; the gate's separable verify step (F3) | the `api-family` capability's `spec.md` and `architecture.md` |
 | A top-up is admitted after the gate's verification TTL (F2) | the `inference` capability's `spec.md`; `architecture.md` — "Current limits" |
 
@@ -168,5 +176,5 @@ only request-priced rate cards are publishable until then.
 Returned to design on 2026-10-19; the copy-based `design.md` and `tasks.md`
 were withdrawn with the copied implementation. Redesigned on 2026-10-28
 against the `api` family kit, archived on 2026-10-26, and the contract as
-implemented; design reviews 01 and 02 were triaged on 2026-10-28 and their
-gaps are decided in `design.md`, which awaits a third design review.
+implemented; design reviews 01, 02, and 03 were triaged on 2026-10-28 and
+their gaps are decided in `design.md`, which awaits a fourth design review.

@@ -238,10 +238,11 @@ seams a first proof format would need, each a no-op in version 1: a
 per-request verification hook in the family gateway library and a
 purchase-time verification hook in the buyer plugin, called before settlement
 is proposed; both take the listing's attestation envelope and return a refusal
-or nothing. The gateway's hook receives the offering's current verification
-input and the key's accepted terms digest returned by verification (review 02,
-F2), so it can tell whether the seller changed the attestation since the
-buyer accepted it; it runs after the key is verified and before it is charged
+or nothing. The gateway's hook receives the offering's complete current
+canonical terms (the rate card and the attestation) and the key's accepted
+terms digest returned by verification (review 02 F2, review 03 F2), so it
+recomputes the current digest and can tell whether the seller changed the
+price or the attestation since the buyer accepted them; it runs after the key is verified and before it is charged
 (F3), so a refused proof costs the buyer nothing. The inference
 gateway image is built reproducibly from a digest-pinned base and compose, so
 it can later be measured. No proof `kind` is defined. The first `kind`'s
@@ -335,19 +336,22 @@ of the listing the gateway loaded under F1.
 
 ### F2 (design review 02). The proof hook binds to the accepted attestation
 
-The accepted terms digest pinned under F1 covers the card's attestation
-envelope, so the gateway's verification hook receives the offering's current
-verification input together with the key's accepted digest from `verify`. A
-first proof format can therefore refuse a credential whose seller replaced the
-attestation since the buyer accepted it, or verify against the accepted one;
-in this version the hook admits everything.
+The accepted terms digest pinned under F1 covers the card's rate card and
+attestation envelope, so the gateway's verification hook receives the
+offering's complete current canonical terms together with the key's accepted
+digest from `verify`, recomputes the current digest, and compares (review 03,
+F2). A first proof format can therefore refuse a credential whose seller
+changed the attestation or the price since the buyer accepted them; one that
+needs the accepted envelope itself reads it from the storefront's
+accepted-listing artifact. In this version the hook admits everything.
 
 ### F3 (design review 02). The family gateway consumes a domain-neutral offering
 
 The family gateway library understands one value, `GatewayOffering`: the
-service name it admits in a request, the default per-request charge, the
-purchase pointer, the upstream base URL and credential reference, and an
-opaque verification input. Each domain's executable validates its own listing
+service name it admits in a request, the key scope it enforces (service and
+resource), the default per-request charge, the purchase pointer, the upstream
+base URL and credential reference, and the current canonical terms as
+verification input. Each domain's executable validates its own listing
 and projects it: inference from `InferenceListing` (`served_model_name`,
 `request_credits`, the storefront and registry, the attestation envelope), API
 credits from its resource (`service_name`, its configured charge, no
@@ -356,6 +360,39 @@ scenario holds through the projection.
 
 Rejected: the library reading a listing itself, which made it interpret
 inference's fields and contradicted the family's import rule.
+
+### F1 (design review 03). A key is enforced against the gateway it is used at
+
+The gateway sends its offering's service and resource with every `verify` and
+`consume`, and the authority refuses a key whose first grant's scope differs,
+uncharged, with a named status the gateway answers as `403 key_out_of_scope`.
+The fields are optional on both requests, so API credits' requests, the
+authority's responses, and the TypeScript and Rust gates are unchanged.
+Enforcement is authoritative: a gateway cannot forget the check, and no scope
+leaves the authority.
+
+Rejected: `verify` returning the key's scope for the gateway to compare,
+which adds fields to the pinned verify response for every key and trusts the
+gateway to compare.
+
+### F3 (design review 03). Accepted terms persist and travel compatibly
+
+- **Grant columns.** A migration step adds nullable `terms_digest` and
+  `request_charge` to `credit_grants`. No key column: a key's pinned values
+  are its first grant's. A grant without them is unpinned, so a key whose
+  first grant is unpinned accepts only unpinned top-ups and is charged the
+  offering's default, which is today's API-credits behaviour; inference has
+  no such keys.
+- **Validation ordering.** The authority's grant-schema drift check runs
+  after the migration chain, so an additive step can land on a live database;
+  it still rejects a schema the chain does not reach.
+- **Wire bytes.** The subject's terms digest and request charge, where they
+  appear in the issuance request digest, the signed evidence, and the verify
+  and consume requests, are omitted when unset, never serialised as `null`;
+  the API-credits pins prove byte identity, and the pin fixture gains an
+  inference case with the fields present.
+- **Rollback.** Nullable columns the previous image ignores; the previous
+  image reads a database the new one wrote.
 
 ### F2 (design review 01). A top-up is admitted after the gate's verification TTL
 

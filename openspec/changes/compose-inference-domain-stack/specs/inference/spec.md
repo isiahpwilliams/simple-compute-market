@@ -200,6 +200,13 @@ answer `401` for a missing or unknown credential, `403` for a revoked one, and
 gateway MUST serve exactly one model at one configured charge, and its model
 list MUST contain only that model.
 
+#### Scenario: A key bought for another model is presented
+
+- **WHEN** a buyer presents a funded key issued for model B to model A's
+  gateway and requests model A
+- **THEN** the gateway answers `403`, the model server receives nothing, and
+  the key's balance is unchanged
+
 #### Scenario: A request names an unlisted model
 
 - **WHEN** a request with a valid, funded key names a model the gateway does not
@@ -230,9 +237,9 @@ list MUST contain only that model.
 
 The gateway MUST call a verification hook after the key is verified and
 before it is charged, and the buyer plugin MUST call one before it proposes
-settlement; the gateway's receives the offering's current attestation envelope
-and the key's accepted terms digest, the plugin's the envelope of the listing
-being bought, and either may refuse.
+settlement; the gateway's receives the offering's complete current canonical
+terms and the key's accepted terms digest, so it can recompute and compare,
+the plugin's the envelope of the listing being bought, and either may refuse.
 In this version both hooks admit everything, and the gateway image MUST be
 built from digest-pinned inputs so a later proof format can measure it.
 

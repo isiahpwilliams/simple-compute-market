@@ -4,14 +4,14 @@
 
 The family MUST provide one gateway library that fronts an OpenAI-style model
 server behind the bearer gate. It consumes one family-owned offering value
-— the service name it admits, a default per-request charge, the purchase
-pointer, the upstream and its credential reference, and an opaque
-verification input — which the composing domain's executable projects from
-its own validated listing; the library MUST import no domain and MUST NOT
+— the service name it admits, the key scope it enforces, a default
+per-request charge, the purchase pointer, the upstream and its credential
+reference, and the current canonical terms as verification input — which the
+composing domain's executable projects from its own validated listing; the library MUST import no domain and MUST NOT
 read a listing itself. It reads the request's `model` and refuses one the
-offering does not serve before any charge; it verifies the key, calls a
-per-request verification hook with the offering's verification input and the
-key's accepted terms digest, which admits everything until a proof format is
+offering does not serve before any charge; it verifies the key against the
+offering's scope, calls a per-request verification hook with the offering's
+current canonical terms and the key's accepted terms digest, which admits everything until a proof format is
 configured, and only then charges the key's verified charge, or the
 offering's default when verification returns none, and forwards; it replaces
 the buyer's credential with the deployment's own upstream credential,
@@ -56,9 +56,12 @@ charge without charging a request it then refuses.
 The family issuance subject MAY carry a terms digest and a per-request charge
 that the domain's projection reads from the accepted listing. When present,
 both MUST enter the issuance request digest and the signed evidence, the
-authority MUST record them on the grant, and `verify` MUST return the key's
-pinned values; when absent, digests, evidence, and `verify` MUST be
-byte-identical to their form before the fields existed.
+authority MUST record them on the grant in nullable columns a migration adds,
+and `verify` MUST return the key's pinned values; when absent, they MUST be
+omitted rather than serialised as null, so digests, evidence, and `verify`
+are byte-identical to their form before the fields existed. The authority's
+grant-schema check MUST run after its migration chain, so the added columns
+reach a live database before the schema is asserted.
 
 #### Scenario: API credits issues without terms
 
@@ -67,13 +70,24 @@ byte-identical to their form before the fields existed.
 - **THEN** the digest, the evidence, and the verify response match the
   recorded pins byte for byte
 
+#### Scenario: An authority starts on a database without the columns
+
+- **WHEN** the new authority image starts against a database its previous
+  image wrote
+- **THEN** the migration adds the nullable columns before the schema is
+  checked, existing grants read as unpinned, and the previous image still
+  reads the database afterwards
+
 ### Requirement: A key is scoped to its first grant
 
 The authority MUST bind a key to the service, resource, and accepted terms
 digest of the grant that created it and MUST refuse an existing-key issuance
 whose service, resource, or terms differ, naming the refusal, so a key's one
 balance is only ever spent on what every one of its grants bought, at the
-charge each was bought at.
+charge each was bought at. `verify` and `consume` MAY carry the caller's
+expected service and resource; when present, the authority MUST refuse a key
+whose first grant's scope differs, uncharged, with a named status, and when
+absent it MUST behave as before the fields existed.
 
 #### Scenario: A key is topped up from another listing
 
@@ -81,3 +95,11 @@ charge each was bought at.
   key from a listing with a different service or resource
 - **THEN** issuance is refused naming the key's scope, no grant is recorded,
   and the key's balance is unchanged
+
+#### Scenario: A key is presented at another offering's gateway
+
+- **WHEN** a funded key issued for one service and resource is presented to a
+  gateway whose offering names another, under the same authority
+- **THEN** the authority refuses the verification by scope, the gateway
+  answers `403`, the model server receives nothing, and the key's balance is
+  unchanged

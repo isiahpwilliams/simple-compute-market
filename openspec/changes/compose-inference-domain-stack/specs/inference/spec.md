@@ -150,8 +150,10 @@ buyer accepted.
 
 The inference storefront MUST extend the delivery's public result with the
 contract's materialization built from the accepted listing the kit recorded
-at acceptance and that listing's rate card, under one key, so a buyer and an
-auditor read the rate the purchase was made at. It is the buyer's copy of the
+at acceptance, that listing's rate card, and the delivery context the kit
+hands the extension (the mechanism and the escrow uid, with the issuance's
+fulfillment id), under one key, so a buyer and an auditor read the rate the
+purchase was made at. It is the buyer's copy of the
 accepted terms: the storefront's accepted-listing artifact is the issuance
 input, the authority's grant terms are what consumption and metering price
 against, and one digest binds the three.

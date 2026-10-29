@@ -82,7 +82,10 @@ inference adds `domains/inference/gateway-service` (`arkhai-inference-gateway-se
 a composition root the architecture check reads as an executable through the
 hyphen rule, which reads the listing the gateway fronts (its registry or
 storefront URL and `listing_id`), validates it as an `InferenceListing`, and
-projects it to the family's `GatewayOffering` (review 02, F3); it also
+projects it to the family's `GatewayOffering` (review 02, F3); the default
+source is the storefront that published the listing, its origin, since a
+registry's copy can lag a republication and the storefront and gateway are
+deployed together; it also
 supplies the upstream base URL and credential reference and the gate's
 signing credential. The library understands only the offering.
 
@@ -98,12 +101,29 @@ repository-wide vocabulary change this change does not need.
 
 ### D3. The delivery's public result carries the contract's materialization
 
-`public_result_extension(listing_resource, result)` returns, under one key,
-`InferenceMaterialization` built from the accepted listing the kit hands it and
-that listing's rate card, with the issuance's `fulfillment_id`, `mechanism`,
-and `obligation_ref`. The contract's model refuses a card other than the
-listing's, so the public record cannot show a buyer a rate they did not
-accept. The accepted terms then exist in three places, each with one role
+`public_result_extension(listing_resource, result, delivery)` returns, under
+one key, `InferenceMaterialization` built from the accepted listing the kit
+hands it and that listing's rate card, with the issuance's `fulfillment_id`
+and the delivery's settlement mechanism and reference. The contract's model
+refuses a card other than the listing's, so the public record cannot show a
+buyer a rate they did not accept.
+
+The third input is new to the kit (planning found the gap): the issuance
+result carries neither the mechanism nor the settlement reference, and the
+materialization requires a reference with its mechanism and fulfillment id.
+The kit's `fulfill` already holds both on the settlement evidence it issues
+from, so the selling library passes a frozen `DeliveryContext(mechanism,
+settlement_ref)` as the extension's third argument. The context names what
+the kit knows — the agreed mechanism and the stage's reference, which for the
+Alkahest stage is the escrow uid — and the domain maps it onto its own shape;
+inference places the reference as the materialization's `escrow_uid`. API
+credits supplies no extension, so its delivery and wire bytes are unchanged.
+
+Rejected: a slimmer public record without the settlement reference, which is
+not the contract's materialization and so not what the buyer plugin and
+metering read. Rejected: building the materialization in the Alkahest selling
+stage, which knows the reference but would put a domain shape into mechanism
+code the family keeps domain-neutral. The accepted terms then exist in three places, each with one role
 and all bound by the same digest: the storefront's accepted-listing artifact,
 recorded by the kit at acceptance, is the issuance input and the seller's
 audit record; the authority's `grant_terms` row (review 03 F3, review 04) is
@@ -165,7 +185,11 @@ another resource than the one its quota backs.
 cached-prompt, completion, or image rate is non-zero, naming the field, while
 the gate charges `request_credits` per request. `meter-inference-usage` deletes
 that one entry. The guard is the withdrawn branch's `rate_card_guard.py`,
-adapted to the kit's signature.
+adapted to the kit's signature. The predicate itself — is this card
+request-priced — lives in the contract package, `arkhai_inference.listings`,
+because the gateway executable applies the same rule to the listing it fronts
+and two composition roots cannot import each other; the guard and the
+gateway's projection both call it.
 
 ### D9. Alkahest only, refused at startup
 
@@ -280,11 +304,14 @@ library with its unit tests, and the storefront, service root, and buyer
 plugin, which are configuration over precedent. Round 2: the inference gateway
 executable, the model stub, the Compose stack and identities, and the
 end-to-end lane. The gateway and the stack are where the risk is, and they get
-their own review. Before planning closes, the campaign answers who the first
-seller is, who the first paying buyer is, and which settlement option they
-use (review 01, F6), because those decide whether an Alkahest-only
-development-chain scenario is the proof that matters or only the cheapest
-one, and planning's sections depend on the answer.
+their own review. The campaign's first seller, first paying buyer, and settlement
+option (review 01, F6) are, for this change, the team's own development
+stack: the inference storefront the stack composes is the seller, the
+end-to-end buyer is the paying buyer, and Alkahest on the development chain
+is the settlement option. The Alkahest-only development-chain scenario is
+therefore this change's proof, not only its cheapest one, and the plan's
+sections assume it; a third-party seller or buyer, when one appears, is
+`package-inference-seller`'s and `qualify-inference-market`'s to answer.
 
 ### F4 (design review 01). A key is scoped to its first grant
 
@@ -439,5 +466,3 @@ path metering retires.
   share). Trigger: a model owner who is not a seller. D17 keeps the door open.
 - **Charge idempotency on retries.** Trigger: `meter-inference-usage`, whose
   hold-and-settle path replaces the per-request charge.
-- **First seller, first paying buyer, settlement option.** Answered before
-  planning closes (D18).

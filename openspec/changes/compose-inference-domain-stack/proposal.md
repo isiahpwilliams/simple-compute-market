@@ -128,7 +128,8 @@ only request-priced rate cards are publishable until then.
   e2e scenario and marker.
 - Touched in the family: `domains/api/src/arkhai_api/{issuance,evidence}.py`
   (the subject's optional accepted terms, digest, and charge, omitted when
-  unset), `domains/api/contracts/src/arkhai_api_contracts/models.py` (verify
+  unset), `domains/api/selling/src/arkhai_api_selling/{contributions,issuance}.py`
+  (the public-result extension's delivery context), `domains/api/contracts/src/arkhai_api_contracts/models.py` (verify
   and consume scope fields; verify's pinned terms), the authority's
   `keys_service.py`, `models.py`, and `migrations.py` (`grant_terms`, key
   scope, the scope refusal), `domains/api/gate/src/arkhai_api_gate/{gate,client}.py`
@@ -166,7 +167,7 @@ only request-priced rate cards are publishable until then.
 |---|---|
 | The issuance projection names the served model and delivers the gateway URL (D1) | the `inference` capability's `spec.md`; the `api-family` capability's `architecture.md` contribution table, inference column |
 | The gateway is a family library composed by a domain executable (D2) | the `api-family` capability's `spec.md` and `architecture.md`; `docs/development/ARCHITECTURE.md` runtime service map |
-| The public result carries the contract's materialization; the kit's accepted-listing artifact is the pinned card (D3) | the `inference` capability's `spec.md` and `architecture.md` |
+| The public result carries the contract's materialization, built from the extension's inputs, which include the delivery's settlement context (D3) | the `inference` capability's `spec.md` and `architecture.md`; the `api-family` capability's `spec.md` |
 | Retry charges and the metering seam (D4) | the `inference` capability's `architecture.md` — "Current limits" |
 | The stub model server is a test image; the `vllm` profile (D5) | `docs/development/DEPLOYMENT_AND_CONFIG.md`; the `deployment-state` capability's `spec.md` |
 | Contribution values, publish request, guard, Alkahest-only refusal (D6–D9, D12) | the `inference` capability's `spec.md` |

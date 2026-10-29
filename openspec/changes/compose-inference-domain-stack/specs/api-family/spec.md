@@ -52,6 +52,29 @@ charge without charging a request it then refuses.
 - **THEN** the key's balance is unchanged and the authority saw only the
   verification
 
+### Requirement: The public-result extension receives the delivery's settlement context
+
+The selling library MUST call a domain's public-result extension with the
+accepted listing resource, the secret-free issuance result, and a delivery
+context naming the agreed settlement mechanism and the settlement stage's
+reference, so a domain whose public record is the family's materialization can
+build it from the extension's inputs alone. A domain that supplies no
+extension MUST see no change to its delivery.
+
+#### Scenario: A domain builds its materialization in the extension
+
+- **WHEN** a storefront's bundle supplies a public-result extension and a
+  delivery completes from verified Alkahest evidence
+- **THEN** the extension receives the mechanism and the escrow uid beside the
+  listing and the result, and the public result carries what it returns
+
+#### Scenario: API credits delivers without an extension
+
+- **WHEN** the API-credits storefront, which supplies no extension, completes
+  a delivery
+- **THEN** its public result is byte-identical to the result before the
+  context existed
+
 ### Requirement: The issuance subject may carry accepted terms
 
 The family issuance subject MAY carry the accepted terms as canonical JSON,

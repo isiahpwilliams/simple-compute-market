@@ -1,10 +1,7 @@
 """The storefront's dependency container.
 
-The selling bundle and the parts composed over it — the capacity runtime,
-publication, the seller stage table, the loops, authentication, and the route
-services — are fixed for the process; the ``resolved_*`` services are set once
-by the lifespan in ``server.py``, and each composed part reads them when a
-request or cycle runs.
+Composed parts are fixed for the process and read the ``resolved_*`` services,
+which the lifespan in ``server.py`` sets, when a request or cycle runs.
 """
 
 from __future__ import annotations
@@ -145,9 +142,8 @@ QUOTA_PUBLICATION = QuotaPublication(
 def alkahest_stage(**collaborators: Any) -> AlkahestSellerStage:
     """This storefront's Alkahest entry, with any of ``collaborators`` in place of its own."""
     defaults: dict[str, Any] = {
-        # A credit grant releases to the seller once issued; nothing here
-        # judges an oracle's verdict or splits a refund, so only the recipient
-        # model is delivered.
+        # A credit grant releases to the seller once issued; no oracle verdict
+        # or refund split applies, so only the recipient model is delivered.
         "fulfils_through_capacity": True,
         "release_models": frozenset({RECIPIENT_RELEASE}),
         "chains": lambda: config.CHAINS,
@@ -167,19 +163,16 @@ SELLER_STAGES = SettlementStageTable({ALKAHEST_STAGE.mechanism: ALKAHEST_STAGE})
 
 
 def mechanism_loops(stages: SettlementStageTable) -> tuple[ContributedLoop, ...]:
-    """The loops the composed mechanisms contribute."""
     return tuple(loop for stage in stages.values() for loop in stage.contributed_loops())
 
 
 def mechanism_startup_steps(
     stages: SettlementStageTable,
 ) -> tuple[Callable[[], Awaitable[None]], ...]:
-    """The startup steps the composed mechanisms contribute."""
     return tuple(step for stage in stages.values() for step in stage.startup_steps())
 
 
 def mechanism_health(stages: SettlementStageTable) -> dict[str, str]:
-    """The health checks the composed mechanisms contribute."""
     checks: dict[str, str] = {}
     for stage in stages.values():
         checks.update(stage.health_checks())

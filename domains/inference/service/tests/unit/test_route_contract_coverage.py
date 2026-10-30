@@ -1,14 +1,4 @@
-"""Every mounted route is either excluded or has a signed contract.
-
-Checked against the routes FastAPI actually registered, not against a reading
-of the controller. Transcribing a route table by hand is exactly the kind of
-work that goes wrong quietly: a missed route keeps working while nobody signs
-it, and an invented one is dead config that looks like coverage. Asking the app
-makes both failures loud.
-
-This is the coverage guard. `kit/site`'s own parity test covers agreement
-between the capacity table and the client that signs against it.
-"""
+"""Every route FastAPI actually registered is either excluded or has a signed contract."""
 
 from __future__ import annotations
 
@@ -25,14 +15,11 @@ from inference_service.main import INFERENCE_ROUTE_CONTRACTS
 
 ALL_CONTRACTS = INFERENCE_ROUTE_CONTRACTS + CAPACITY_ROUTE_CONTRACTS
 
-#: A concrete stand-in for each templated path segment, so a registered path
-#: can be resolved against the patterns the middleware will actually match.
+#: Substituted for each templated path segment.
 _SAMPLE_SEGMENT = "sample-id"
 
-#: Paths this service serves without a signature. `kit/site`'s defaults plus
-#: the two this service adds: FastAPI's OAuth2 redirect helper, which
-#: the docs page loads, and the versioned health/version pair, which exists so
-#: an orchestrator can probe liveness without holding a credential.
+#: `kit/site`'s defaults plus the docs' OAuth2 redirect and the health/version
+#: pair an orchestrator probes without a credential.
 _UNSIGNED_PATHS = EXCLUDED_PATHS | {
     "/docs/oauth2-redirect",
     "/api/v1/system/health",
@@ -41,12 +28,9 @@ _UNSIGNED_PATHS = EXCLUDED_PATHS | {
 
 
 def _iter_api_routes(routes, prefix: str = "") -> "list[tuple[str, object]]":
-    """Flatten however this FastAPI version represents included routers.
+    """Flatten included routers, whether spliced into `app.routes` or kept in a wrapper.
 
-    Older versions splice each included router's `APIRoute`s directly into
-    `app.routes`; newer ones keep a wrapper holding the original router. Both
-    shapes are walked, because a test that silently enumerates only the four
-    auto-generated docs routes would pass while checking nothing.
+    Both shapes are walked so the test cannot pass enumerating only the docs routes.
     """
     flattened: list[tuple[str, object]] = []
     for route in routes:
@@ -56,10 +40,7 @@ def _iter_api_routes(routes, prefix: str = "") -> "list[tuple[str, object]]":
         original = getattr(route, "original_router", None)
         if original is None or not getattr(original, "routes", None):
             continue
-        # The wrapper, not the child route, carries the mount prefix in this
-        # shape. Missing it yields paths like `/keys/{id}` for routes actually
-        # served at `/api/v1/keys/{id}`, which no contract matches -- so the
-        # test fails loudly rather than checking the wrong paths.
+        # In this shape the wrapper, not the child route, carries the mount prefix.
         context = getattr(route, "include_context", None)
         child_prefix = prefix + (getattr(context, "prefix", "") or "")
         flattened.extend(_iter_api_routes(original.routes, child_prefix))
@@ -105,12 +86,7 @@ def test_every_mounted_route_resolves_to_a_contract(mounted):
 
 
 def test_every_authority_contract_matches_a_mounted_route(mounted):
-    """The other direction: no contract for a route that does not exist.
-
-    A contract nobody can reach is not harmless -- it reads as coverage of a
-    route while the real one, if it is ever added under a slightly different
-    path, goes unsigned.
-    """
+    """An unreachable contract reads as coverage while a real route at another path goes unsigned."""
     reachable = set()
     for method, path in mounted:
         for contract in INFERENCE_ROUTE_CONTRACTS:
@@ -118,8 +94,7 @@ def test_every_authority_contract_matches_a_mounted_route(mounted):
                 if contract.match(method, path, {}) is not None:
                     reachable.add(contract.operation)
             except ValueError:
-                # A body-resource contract matched the route but this probe
-                # sent no body. The route exists, which is what is asserted.
+                # A body-resource contract matched, but the probe sent no body.
                 reachable.add(contract.operation)
     declared = {contract.operation for contract in INFERENCE_ROUTE_CONTRACTS}
     assert declared == reachable, (
@@ -128,11 +103,7 @@ def test_every_authority_contract_matches_a_mounted_route(mounted):
 
 
 def test_operations_are_unique_across_both_tables():
-    """One operation name per route, across the tables composed together.
-
-    The operation is what a caller signs, so two routes sharing a name would
-    let a signature for one verify against the other.
-    """
+    """A caller signs the operation, so a shared name would let one route's signature verify for another."""
     operations = [contract.operation for contract in ALL_CONTRACTS]
     duplicates = {name for name in operations if operations.count(name) > 1}
     assert not duplicates, f"duplicate signed operation names: {duplicates}"

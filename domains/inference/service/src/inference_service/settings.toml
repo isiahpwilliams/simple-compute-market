@@ -1,7 +1,5 @@
 # ---------------------------------------------------------------------------
-# Inference service base defaults.
-# This file documents all supported configuration keys and their defaults.
-# Do NOT put environment-specific values here.
+# Inference service defaults for every supported key; no environment-specific values.
 #
 # Override via (highest priority first):
 #   1. INFERENCE_* environment variables
@@ -16,43 +14,31 @@ port = 8086
 log_level = "info"
 
 # Database
-# This service's own database, shared with no other service. Defaults to
-# SQLite so a fresh checkout works without any setup.
+# This service's own database, shared with no other service.
 database_url = "sqlite:///inference.db"
 
 # ---------------------------------------------------------------------------
 # Marketplace identity
 #
-# This service is a site authority: it verifies its callers' signed requests
-# and signs its own responses, refusals included. Both a signing credential
-# and at least one trusted role are required; the service refuses to start
-# without them, since it has no other gate.
+# The service verifies signed requests and signs its responses, refusals
+# included. Signing is its only gate, so it refuses to start without a signing
+# credential and at least one trusted role.
 # ---------------------------------------------------------------------------
 site_signing_key_file = ""
 
-# The principal this credential must own. Pinning it here makes a wrong
-# credential a startup failure rather than a service that signs every response
-# as someone no counterparty pinned.
+# The principal the credential must own; a wrong credential fails at startup.
 site_principal = ""
 
 # Seconds a request timestamp may differ from this service's clock.
 max_timestamp_skew = 300
 
-# Who may call, by role. Each entry is a scheme/identifier pair.
-#
-# A role with no entries is not "trust anybody" -- a request in that role is
-# refused, naming the missing configuration. `seller` is the inference
-# storefront, `service` is the inference gateway that spends request credits,
-# and `admin` is for manual operation and is held by an operator, not by
-# either component.
+# Who may call, by role, as scheme/identifier pairs. A role with no entries
+# refuses its requests. `seller` is the storefront (eip191), `service` the
+# gateway spending request credits (ed25519), `admin` an operator. At most two
+# per role (`TrustedIdentitySet`), enough for a rotation.
 [trusted_principals]
-# Empty here on purpose. Dynaconf merges rather than replaces, so a principal
-# listed here would be added to whatever a deployment configures and could not
-# be removed by overriding it. Real principals are supplied per deployment.
-#
-# The scheme matters: the storefront signs eip191 while the gateway signs
-# ed25519. At most two principals per role, which is what `TrustedIdentitySet`
-# admits -- enough for a rotation and no more.
+# Empty on purpose: dynaconf merges, so a principal listed here could not be
+# removed by a deployment's override.
 seller = []
 service = []
 admin = []

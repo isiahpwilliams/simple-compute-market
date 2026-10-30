@@ -1,10 +1,7 @@
-"""Keys API bindings: issuance (market-facing), consume/verify (gateway-facing),
-and the admin/guard surface.
+"""Keys API bindings: issuance, consume/verify, and the admin/guard surface.
 
-Router-factory style (like ``market_site.router``): endpoints resolve the
-route service per request through ``get_service`` so the composition root
-owns construction order. Each binding maps its route to the authority's route
-service and a refusal to its response, and holds no decision of its own.
+Each binding maps its route to the authority's route service and a refusal to
+its response, and makes no decision of its own.
 """
 
 from __future__ import annotations

@@ -7,9 +7,7 @@ DIST_DIR ?= ../../../.dist
 
 init: reinit
 
-# Refresh every internal wheel this project's lock installs; the set is derived
-# from the lock. Run `make dist` from the repository root first so .dist/ holds
-# fresh wheels.
+# Refresh the internal wheels the lock installs; run `make dist` at the repository root first.
 reinit:
 	python3 ../../../scripts/uv_project.py reinit
 

@@ -1,7 +1,6 @@
-"""The inference storefront imports no sibling domain and no other settlement mechanism.
+"""The storefront imports no sibling domain or other settlement mechanism.
 
-Every import counts, including one under ``TYPE_CHECKING`` or inside a function,
-so the modules are read rather than imported.
+Modules are parsed rather than imported so ``TYPE_CHECKING`` and local imports count.
 """
 
 from __future__ import annotations

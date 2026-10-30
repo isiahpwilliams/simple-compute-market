@@ -1,8 +1,4 @@
-"""The api family's gateway in front of an OpenAI-style model server.
-
-A domain's executable projects its listing to a `GatewayOffering` and serves
-`create_gateway_app(offering, gate)`; the library imports no domain.
-"""
+"""The api family's gateway in front of an OpenAI-style model server; it imports no domain."""
 
 from .app import INVALID_REQUEST, MODEL_NOT_FOUND, create_gateway_app
 from .offering import GatewayOffering, read_upstream_credential

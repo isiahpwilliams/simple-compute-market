@@ -1,4 +1,4 @@
-"""The inference settle request: the family's, under the component name this storefront serves."""
+"""The inference settle request, under the component name this storefront serves."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Only a request-priced rate card is publishable, while the gate charges a fixed amount per request."""
+"""Only a request-priced rate card is publishable: the gate charges a fixed amount per request."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from arkhai_inference.listings import InferenceRateCard, non_request_priced_rate
 
 
 def request_priced_guard(listing_resource: Mapping[str, Any]) -> str | None:
-    """Why the card's rate card may not be published, naming the field, or ``None``."""
+    """Why the rate card may not be published, or ``None``."""
     field = non_request_priced_rate(InferenceRateCard.model_validate(listing_resource["rate_card"]))
     if field is None:
         return None

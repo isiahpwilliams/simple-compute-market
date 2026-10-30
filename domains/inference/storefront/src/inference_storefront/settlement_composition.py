@@ -36,10 +36,7 @@ def build_storefront_settlement_registry() -> SettlementConfigurationRegistry:
 
 
 def validate_mechanism_configuration(settlement_config: Any = None) -> None:
-    """Refuse a configuration a composed mechanism cannot honour.
-
-    With no ``settlement_config``, the storefront's own configuration is resolved.
-    """
+    """Refuse a configuration a composed mechanism cannot honour."""
     if settlement_config is None:
         settlement_config = build_storefront_settlement_registry().resolve(
             storefront_config.settlement_config_mapping(), role="seller"
@@ -78,8 +75,7 @@ def build_inference_settlement_composition(
     )
 
     runtime = SettlementRuntime(repository, mechanism_clients)
-    # The process-wide client carries the storefront's signed authority
-    # configuration; every issuance and rollback goes through it.
+    # Every issuance and rollback goes through the signed process-wide client.
     credits_client = get_credits_service_client()
     evidence_service = IssuanceEvidenceService(
         IssuanceEvidenceRepository(sqlite_client.db_path, SELLING_CONTRIBUTIONS),

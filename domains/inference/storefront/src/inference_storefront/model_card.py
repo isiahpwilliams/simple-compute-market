@@ -20,9 +20,7 @@ def publication_mapping(request: Mapping[str, Any], quota: QuotaSource) -> dict[
     """The operator's card with its resource, site, and mode taken from ``quota``.
 
     The three are overwritten rather than compared, so a card cannot name
-    another resource than the one its quota backs. ``model_id`` is taken as
-    given, or derived from ``owner`` and ``name`` by the contract's rule when
-    the card names those instead.
+    another resource than the one its quota backs.
     """
     fields = dict(request["model_card"])
     owner = fields.pop("owner", None)

@@ -27,8 +27,7 @@ class SystemController:
 
     @router.get("/api/v1/system/status", response_model=HealthResponse, summary="Full diagnostic status")
     async def system_status(self, request: Request) -> HealthResponse:
-        # The administrator's read, signed as the other storefronts' is, so the
-        # canonical client reads it.
+        # Signed as on the other storefronts, so the canonical client reads it.
         await _container.AUTH.authenticate_admin(
             request, operation="admin_system_status", resource="system/status"
         )

@@ -1,15 +1,7 @@
-"""
-Centralised dynaconf configuration loader.
+"""Dynaconf configuration and the inference deployment of the family authority.
 
-Resolution order (highest priority wins):
-  1. INFERENCE_* environment variables
-  2. config-<profile>.yml files (in CONFIG_DIRECTORY, one per ACTIVE_PROFILES entry)
-  3. config.yml  (in CONFIG_DIRECTORY)
-  4. settings.toml  (committed defaults / schema documentation)
-
-Set CONFIG_DIRECTORY to the directory containing config YAML files and
-ACTIVE_PROFILES to a comma-separated list of profile names. All includes are
-optional — a fresh checkout with neither set loads only settings.toml.
+Precedence: INFERENCE_* env vars, then CONFIG_DIRECTORY's config-<profile>.yml
+(per ACTIVE_PROFILES), then config.yml, then settings.toml.
 """
 
 from __future__ import annotations
@@ -31,7 +23,6 @@ _CONFIG_DIR = Path(os.environ.get("CONFIG_DIRECTORY", str(_SRC_DIR / "config")))
 _raw_profiles: str = os.environ.get("ACTIVE_PROFILES", "")
 _active_profiles: List[str] = [p.strip() for p in _raw_profiles.split(",") if p.strip()]
 
-# Only include files that exist on disk — every include is optional.
 _includes: List[str] = []
 for _candidate in [_CONFIG_DIR / "config.yml"] + [
     _CONFIG_DIR / f"config-{p}.yml" for p in _active_profiles
@@ -68,9 +59,8 @@ class Settings:
 settings = Settings(_dynaconf)
 
 
-# The inference deployment of the family authority: the label its storefront
-# also composes, the one capacity profile its pool and reservations carry, and
-# its key namespace.
+# The label is shared with the inference storefront; the profile is the only one
+# this service's pool and reservations carry.
 ISSUANCE_LABEL = INFERENCE_LABEL
 
 CAPACITY_PROFILE = CapacityProfile(

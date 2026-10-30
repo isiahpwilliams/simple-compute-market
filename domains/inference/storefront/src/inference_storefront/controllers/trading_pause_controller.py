@@ -1,8 +1,6 @@
 """Trading pause: whether this storefront opens new negotiations.
 
-Bound through the storefront kit's route service, so the paths, signed
-operations, and responses are the canonical storefront client's, the same on
-every storefront. Separate from the lifecycle pause, which holds the timer loops.
+Separate from the lifecycle pause, which holds the timer loops.
 """
 
 from __future__ import annotations

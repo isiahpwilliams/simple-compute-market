@@ -1,9 +1,7 @@
 """The gateway application: an OpenAI version-1 style front for one model.
 
-Each gated request is ordered model check, key verification, the verification
-hook, charge, forward. The model is checked first because the bearer gate's
-middleware would charge on the header alone, before a request naming a model
-this deployment does not serve could be refused; the hook runs before the
+A gated request runs model check, key verification, hook, charge, forward: the
+model is checked before anything is charged, and the hook runs before the
 charge so a refusal costs the buyer nothing.
 """
 
@@ -39,12 +37,9 @@ def create_gateway_app(
     verification: VerificationHook = admit_all,
     http: httpx.AsyncClient | None = None,
 ) -> FastAPI:
-    """The gateway for ``offering``, admitting requests through ``gate``.
+    """The gateway for ``offering``; ``gate`` should come from ``offering.gate_config(...)``.
 
-    ``gate`` should be configured from ``offering.gate_config(...)``. ``http``
-    is the client the model server is reached through; one is created, and
-    closed with the app, when none is given. The upstream credential is read
-    here, so a deployment whose secret is missing fails at startup.
+    The upstream credential is read here, so a missing secret fails at startup.
     """
     credential = (
         read_upstream_credential(offering.upstream_credential_file)
@@ -97,8 +92,7 @@ def create_gateway_app(
 
     @app.get("/v1/models")
     async def models() -> dict[str, Any]:
-        # Ungated and uncharged: it names what is for sale, which the listing
-        # already publishes.
+        # Ungated: the listing already publishes what is for sale.
         return {"object": "list", "data": [{"id": offering.service, "object": "model"}]}
 
     @app.get("/health")

@@ -1,8 +1,6 @@
 """Inference storefront FastAPI application.
 
-The lifespan resolves the container's singletons and starts the background
-tasks; the controllers, bindings of the selling library's route services,
-mount after the module-level app exists.
+The lifespan resolves the container's singletons and starts the background tasks.
 """
 
 from __future__ import annotations
@@ -250,9 +248,7 @@ def _build_alkahest_clients() -> dict[str, Any]:
 def _build_inference_services(
     domain: MarketDomainContract,
 ) -> InferenceStorefrontServices:
-    # Before anything is constructed: a capacity configuration that cannot be
-    # read, or a mechanism configuration no composed stage can honour, stops
-    # startup.
+    # Refuse a bad configuration before anything is constructed.
     require_startable_storefront()
     validate_mechanism_configuration()
     marketplace_signer = resolve_identity_signer()

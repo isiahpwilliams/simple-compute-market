@@ -1,24 +1,19 @@
 ARG PYTHON_VERSION=3.13
 
-# Stage 1: install deps into a venv. Built from the repo root (see the
-# root Makefile build-inference-service target) so the internal wheels in .dist/ resolve.
+# Stage 1: install deps into a venv. Built from the repo root so the internal wheels in .dist/ resolve.
 FROM --platform=linux/amd64 ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-bookworm-slim AS builder
 
 ENV UV_LINK_MODE=copy
-# Internal package names resolve from /.dist; PyPI intermittently 5xxs on
-# the index lookups that should 404, so back off through the flap. The
-# timeout caps a wedged connection (podman's gvproxy can leave a socket
-# open with no data) so the retries fire instead of hanging at 0% CPU.
+# PyPI intermittently 5xxs on internal-name lookups that should 404, so retry;
+# the timeout makes a wedged connection (podman's gvproxy) retry instead of hang.
 ENV UV_HTTP_TIMEOUT=120
 ENV UV_HTTP_RETRIES=10
 
 WORKDIR /app
 
-# The lock is used as committed: the project's pyproject and lock sit at the
-# same depth below /repo as below the repository root, so the lock's relative
-# wheelhouse path resolves to /repo/.dist. uv_project.py derives the internal
-# packages from the lock and reinstalls them, so a cached build of a
-# same-version wheel is never reused.
+# The project sits at the same depth below /repo as in the repository, so the
+# committed lock's relative wheelhouse resolves to /repo/.dist. uv_project.py
+# reinstalls the internal packages so a cached same-version wheel is never reused.
 COPY .dist/ /repo/.dist/
 COPY scripts/uv_project.py /repo/scripts/uv_project.py
 COPY domains/inference/service/pyproject.toml domains/inference/service/uv.lock /repo/domains/inference/service/

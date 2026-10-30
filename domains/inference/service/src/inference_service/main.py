@@ -40,12 +40,7 @@ class MissingSiteIdentity(RuntimeError):
 
 
 def require_signed_authentication() -> None:
-    """Refuse to serve without both halves of the site identity.
-
-    Signed authentication is this service's only gate: there is no shared
-    secret behind it, so a deployment missing either half would otherwise
-    answer every caller unsigned or trust nobody.
-    """
+    """Refuse to serve without both halves of the site identity; signed authentication is the only gate."""
     if not signed_authentication_enabled():
         raise MissingSiteIdentity(
             "the inference service requires site_signing_key_file and at least "
@@ -104,9 +99,7 @@ _UNSIGNED_PATHS = EXCLUDED_PATHS | {
     "/api/v1/system/version",
 }
 
-# `kit/site` owns the capacity contracts because it defines those paths; the
-# family authority owns its own. A route mounted without a contract is refused
-# rather than waved through.
+# A route mounted without a contract is refused rather than waved through.
 app.add_middleware(
     SiteAuthMiddleware,
     signer_provider=require_signer,

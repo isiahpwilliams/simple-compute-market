@@ -182,6 +182,11 @@
       "dist": "arkhai-api-gate"
     },
     {
+      "key": "api-gateway",
+      "path": "domains/api/gateway",
+      "dist": "arkhai-api-gateway"
+    },
+    {
       "key": "compute",
       "path": "domains/compute",
       "dist": "arkhai-compute"

@@ -67,6 +67,7 @@ jobs:
           - { name: api-buying-alkahest,    dir: domains/api/buying-alkahest, predist: true }
           - { name: api-buying-arkhai-payments, dir: domains/api/buying-arkhai-payments, predist: true }
           - { name: api-gate,               dir: domains/api/gate, predist: true }
+          - { name: api-gateway,            dir: domains/api/gateway, predist: true }
           - { name: vms-domain,             dir: domains/vms/domain, predist: true }
           - { name: bare-metal,            dir: domains/bare_metal, predist: true }
           - { name: bare-metal-storefront, dir: domains/bare_metal/storefront, predist: true }

@@ -91,7 +91,9 @@ and "API credits delivers without an extension" scenarios).
       `test_evidence.py`): a request without terms digests and signs to the
       same bytes as before the fields existed; a request with terms digests
       the digest and charge and not the payload; a digest that does not match
-      the payload is refused; evidence verification binds the digest and
+      the payload is refused; a `request_charge` of `2**53 - 1` is accepted
+      and `2**53` refused by the request model before any digest is computed
+      (plan review 07 F4); evidence verification binds the digest and
       charge. Unit tests, selling (`domains/api/selling/tests/unit/test_issuance.py`):
       the subject's three values reach the request and evidence, and a subject
       without them produces today's request; an extension receives the
@@ -514,8 +516,10 @@ cards are publishable without metered consumption").
       values the card's rate card and attestation, so two cards sharing a
       `model_id` under different served names project different services
       (`test_issuance_projection.py`; inference delta scenario "Two listings of
-      one model are purchased"); the guard names the non-zero field
-      (`test_rate_card_guard.py`); the public extension's materialization
+      one model are purchased"); the guard names the non-zero field, accepts
+      a `request_credits` of `2**53 - 1`, and refuses `2**53` naming the
+      field, so publication refuses it before canonicalization (plan review
+      07 F4; `test_rate_card_guard.py`); the public extension's materialization
       validates against the listing it carries and refuses a card other than
       the listing's (`test_materialization.py`); `SELLER_STAGES` holds Alkahest
       alone and the wheel's requirements name no fiat payments distribution
@@ -797,8 +801,10 @@ proof").
       list — one match selected, none and two refused with the count, the
       sole match and a second duplicate each on a later page (plan review 07
       F3), the configured id taking precedence; readiness refusals for an
-      unreadable
-      listing and a per-token card; the gate configuration's scope and charge
+      unreadable listing, a per-token card, and a card whose `request_credits`
+      is `2**53`, refused before the terms payload is canonicalized, with
+      `2**53 - 1` accepted (plan review 07 F4); the gate configuration's scope
+      and charge
       (`test_config.py`); every `FROM` in the Dockerfile carries `@sha256:`
       (`test_dockerfile.py`).
 - [ ] 8.7 Integration tests (`tests/integration/test_gateway_against_authority.py`,

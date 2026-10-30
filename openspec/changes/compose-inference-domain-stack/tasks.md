@@ -569,7 +569,7 @@ D16; api-family delta "A gateway in front of a model server is one family
 library"; inference delta "The buyer's credential stops at the gateway" and
 "Streaming responses are forwarded unbuffered").
 
-- [ ] 4.1 Create `domains/api/gateway/` with `pyproject.toml`
+- [x] 4.1 Create `domains/api/gateway/` with `pyproject.toml`
       (`arkhai-api-gateway`, hatchling, `packages = ["src/arkhai_api_gateway"]`),
       depending on `arkhai-api-gate[signed]` and `httpx` and on the ASGI
       framework the API-credits sample app already uses (`fastapi`,
@@ -581,7 +581,15 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       the library declares and imports no domain distribution (api-family delta
       scenario "A domain is imported by the library", which `make
       check-architecture` fails on).
-- [ ] 4.2 `domains/api/gateway/src/arkhai_api_gateway/offering.py`:
+      *Note:* `arkhai-api-gateway` 0.1.0, depending on `arkhai-api-gate[signed]>=0.2.0`
+      (the separable verify and charge), `fastapi`, and `httpx`. `uvicorn` is a
+      dev dependency only, against the plan: the library serves nothing, and the
+      streaming test is its one user; the executable that runs the app (8.1)
+      declares the server. The first lock was created with `uv lock --find-links
+      .dist` in the project, since `make lock` relocks only an existing lock; `make
+      lock PROJECTS=domains/api/gateway` then normalised it. `make
+      check-architecture` reads the project as an api-family library and passes.
+- [x] 4.2 `domains/api/gateway/src/arkhai_api_gateway/offering.py`:
       `GatewayOffering`, a frozen value of the service name the gateway admits
       in a request's `model`, the key scope it enforces (`service`,
       `resource_id`), the default per-request charge, the gate's
@@ -589,13 +597,25 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       file, and the current canonical terms as verification input (a JSON
       object or `None`); it validates that the service is non-empty and the
       charge non-negative and understands nothing else (review 02 F3).
-- [ ] 4.3 `domains/api/gateway/src/arkhai_api_gateway/verification.py`: the
+      *Note:* the key scope is `scope_service` and `scope_resource_id`, each
+      optional, as the gate's are. Two additions beside the value:
+      `GatewayOffering.gate_config(base)` returns the gate's configuration with the
+      offering's scope, default charge, and purchase pointer, so the gate a root
+      builds cannot disagree with what the gateway admits (the app does not check
+      that the gate it is handed was built this way; its docstring says it should
+      be); and `read_upstream_credential(path)` reads the mounted secret, stripped,
+      refusing a missing, non-regular, or empty file. `current_terms` is left out
+      of the frozen value's hash, being a mapping.
+- [x] 4.3 `domains/api/gateway/src/arkhai_api_gateway/verification.py`: the
       `VerificationHook` protocol — called with the offering's current
       canonical terms, the key's accepted terms payload, and their digest as
       `verify` returned them, returning a refusal (status and error code) or
       `None` — and `admit_all`, the default (D16; review 02 F2; review 03 F2;
       review 04 F3). No proof `kind` is defined here.
-- [ ] 4.4 `domains/api/gateway/src/arkhai_api_gateway/app.py` and `proxy.py`:
+      *Note:* the hook is asynchronous, since a proof format may need to fetch
+      what it verifies against; a refusal is a `VerificationRefusal(status,
+      error)`, answered as `{"error": error}`.
+- [x] 4.4 `domains/api/gateway/src/arkhai_api_gateway/app.py` and `proxy.py`:
       `create_gateway_app(offering, gate, *, verification=admit_all, http=None)`
       serving `POST /v1/chat/completions` and `POST /v1/completions`,
       `GET /v1/models` listing only the offering's service, and `/health`
@@ -613,7 +633,25 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       inference delta "The gateway admits only paid requests for listed
       models", "The buyer's credential stops at the gateway", "Streaming
       responses are forwarded unbuffered").
-- [ ] 4.5 Unit tests (`domains/api/gateway/tests/unit/`): with a fake gate
+      *Note:* the route calls `gate.verify` and `gate.charge` (section 3), not
+      `authorize`. A body that is not a JSON object with a string `model` is `400
+      invalid_request`; another model is `404 model_not_found`; both before the
+      gate. `GET /v1/models` is ungated and uncharged, like `/health`: it names what
+      the listing already publishes. The upstream base URL is the model server's
+      OpenAI base URL (ending `/v1`), under which `/chat/completions` and
+      `/completions` are forwarded. Only `content-type` and `accept` cross to the
+      upstream, with the deployment's credential as `Authorization: Bearer` when
+      the offering names a credential file and no `Authorization` otherwise. The
+      credential is read once, at app construction, so a missing secret fails at
+      startup and a rotated one needs a restart. The response is relayed through
+      `aiter_bytes`, decoded, with hop-by-hop, encoding, length, `date`, and
+      `server` headers dropped and repeated headers (`set-cookie`) kept as sent;
+      the upstream response is closed by the relay's `finally` and by a
+      background task, which together cover a caller leaving before and after
+      the first chunk. An unreachable upstream is `502 upstream_unavailable`. The
+      charge precedes the forward, so a request the upstream then fails is still
+      charged, as a retried request is (D4).
+- [x] 4.5 Unit tests (`domains/api/gateway/tests/unit/`): with a fake gate
       and a fake upstream, an unlisted model is `404` and the gate is not
       called; a verify denial is returned uncharged; a refusing hook is
       answered uncharged with the gate's charge never called; the hook
@@ -625,7 +663,21 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       configured charge, no terms) and one the way inference's root does —
       behave identically save their values (api-family delta scenario "Two
       domains front model servers", the in-process half).
-- [ ] 4.6 Integration tests (`domains/api/gateway/tests/integration/`): the
+      *Note:* `tests/unit/test_gateway.py` and `test_offering.py`. The first
+      drives the app over `httpx.ASGITransport` with a `MagicMock(spec=TokenGate)`
+      and a `MockTransport` upstream: it asserts the request ordering, which is
+      orchestration that `TESTING.md` places at integration, so it is an in-process
+      app test with mocked collaborators that the plan placed under `unit/`. It
+      covers the unlisted model and a body naming none (gate never called), the
+      three verify denials uncharged, the hook's three inputs and an uncharged
+      refusal, the verified key being what `charge` receives, the `402` relayed,
+      the deployment's credential replacing the buyer's (and none sent when the
+      offering names no file), a `502` on an unreachable upstream, the model list,
+      a missing credential failing construction, and the two offerings. "The
+      default is used when none" cannot be shown against a fake gate: the gate's
+      fallback is proven at integration (4.6) and the configured default by
+      `test_offering.py`'s `gate_config` case.
+- [x] 4.6 Integration tests (`domains/api/gateway/tests/integration/`): the
       real gateway app over `httpx.ASGITransport` with a scripted authority
       (the gate's `TokensClient` against a recorded verify and consume
       service, as the gate's conformance runner scripts one) and a controlled
@@ -641,7 +693,20 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       OpenAI version-1 wire shape is its contract, so these tests speak it
       directly and are commented as such (`docs/development/TESTING.md`,
       "Typed client contract verification").
-- [ ] 4.7 Build and release: `domains/Makefile` gains `dist-api-gateway`
+      *Note:* library integration, `tests/integration/test_gateway_app.py`: the
+      real app, `TokenGate`, and `TokensClient`, mocked only at the authority's and
+      the model server's HTTP boundary. The authority is a hand-scripted
+      `MockTransport` that debits a balance and records bodies, rather than a
+      replayed fixture as the conformance runner's is; the replay itself is the
+      gate's own suite. An admitted request is relayed with its status, body, and
+      headers and charged once, at the pinned charge when verification returns
+      one and the default otherwise, with the offering's scope on verify and
+      consume; an unlisted model reaches neither the authority nor the model; an
+      exhausted key is `402` with the purchase pointer. The streaming case serves
+      the app with uvicorn in a thread on a socket bound to port 0 and listening
+      before the server starts, so no readiness poll is needed, and asserts the
+      first event arrives while the upstream still holds the last.
+- [x] 4.7 Build and release: `domains/Makefile` gains `dist-api-gateway`
       (after `dist-api-gate`) and `test-api-gateway`, both in its `dist` and
       `test-api` aggregates; the root `Makefile` gains `dist-api-gateway` and
       `test-api-gateway` (building the wheels the project installs, then
@@ -652,13 +717,33 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       matrix entries; `docs/development/RELEASING.md`'s "Published packages"
       table gains its row (`scripts/tests/test_publish_matrix.py` holds the
       three in agreement).
-- [ ] 4.8 **Verification.** `make test-api-gateway` (unit and the library's
+      *Note:* all seven entries; the root `dist-api-gateway` depends on
+      `dist-api-gate` as its sibling targets depend on theirs.
+- [x] 4.8 **Verification.** `make test-api-gateway` (unit and the library's
       integration level); `make test-release-tooling` for the publish-matrix
       tests; `make check-architecture` for the domain-import rule. `make
       test`. New project: `make lock PROJECTS=domains/api/gateway` and `make
       check-packaging`. Once deployed, `e2e_inference_deal` exercises the
       library through the inference gateway image (sections 8 and 11); no
       API-credits deployment composes it, and none is owed by this change.
+      *Note:* `make test-api-gateway` passed (28: unit 21, integration 7);
+      `make test-release-tooling` passed (1141, 11 skipped); `make
+      check-architecture` passed; `make lock PROJECTS=domains/api/gateway` and `make
+      check-packaging` passed; `make check-change` passed. `make -k test` passed
+      every target but the provisioning unit test that fails only in its suite
+      (section 1's note), the gateway's suite among them.
+      The compliance check found no layering, comment, or packaging failure; its
+      findings were fixed (a root help text, a pointer to a spec section that does
+      not yet exist, the test packages' `__init__.py`, the unhashable terms, the
+      relayed headers, the upstream close before the first chunk) or recorded
+      above (the `uvicorn` placement, the hand-scripted authority, the unit test's
+      level, the charge before a failed forward, the unchecked gate).
+      *Handoff:* the inference gateway executable (section 8) builds its gate as
+      `TokenGate(offering.gate_config(GateConfig.from_env(...)), TokensClient(...,
+      signing=config.build_signing()))` and serves `create_gateway_app(offering,
+      gate)` under uvicorn, which it declares. `offering.upstream_base_url` is the
+      model server's base ending `/v1`. `/v1/models` answers `{"object": "list",
+      "data": [{"id": service, "object": "model"}]}`.
 
 ## 5. Inference storefront `arkhai-inference-storefront`
 

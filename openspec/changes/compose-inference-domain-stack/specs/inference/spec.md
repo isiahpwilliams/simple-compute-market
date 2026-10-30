@@ -170,9 +170,10 @@ against, and one digest binds the three.
 While the gateway charges a fixed amount on admission, the storefront MUST
 refuse to publish a listing whose rate card has a non-zero prompt, cached-prompt,
 completion, or image rate, or a `request_credits` of zero or above the
-authority ledger's maximum charge, and the gateway's charge per admitted
-request MUST equal the published `request_credits`. A published price MUST be
-one the seller charges and the ledger can take.
+canonical JSON integer domain (`2^53 - 1`), and the gateway's charge per
+admitted request MUST equal the published `request_credits`. A published
+price MUST be one the seller charges and the issuance digest and ledger can
+take.
 
 #### Scenario: A per-token rate card is configured
 
@@ -201,9 +202,9 @@ verified the bearer credential and charged it. A request naming a model the
 gateway does not serve MUST be refused before any charge, so the gateway reads
 the request body and checks the model before it verifies the key. The
 gateway's executable MUST select the listing it fronts as the storefront's
-one open listing for its configured resource and served model, retrying until
-the storefront has published and refusing readiness on none or several, unless
-a listing id is configured; it MUST project that listing into the family's
+one open listing for its configured resource and served model, read across
+every page the storefront returns, retrying until the storefront has published
+and refusing readiness on none or several, unless a listing id is configured; it MUST project that listing into the family's
 offering, and the charge a request pays MUST be the `request_credits` the key
 was issued under, returned by verification, so a republished price reaches
 only keys issued after it. A retried request is a second charge, and a

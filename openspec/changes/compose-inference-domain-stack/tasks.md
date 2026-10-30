@@ -50,7 +50,8 @@ and "API credits delivers without an extension" scenarios).
 - [ ] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
       optional `accepted_terms` (a JSON object, canonical on the wire),
       `terms_digest` (`DIGEST_PATTERN`), and `request_charge` (`ge=1`,
-      `le=2**63 - 1`, the ledger's range; plan review 06 F3), each
+      `le=2**53 - 1`, the canonical JSON integer domain; plan review 06 F3 as
+      amended by 07 F1), each
       `None` by default and excluded from serialisation when unset; a validator
       requires the three together and the digest to equal `sha256:` of the
       canonical JSON of `accepted_terms`. `_request_digest` and
@@ -153,7 +154,9 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       `issue` takes `accepted_terms`, `terms_digest`, `request_charge`,
       verifies the digest against the canonical payload before writing (a
       mismatch is an `IssuanceError`), records a `GrantTerms` row with the
-      grant in the same transaction, and returns the three on the result. A
+      grant in the same transaction, and returns today's result unchanged:
+      the three are persisted, never returned from `issue`, and read back
+      only through `verify` (plan review 07 F2). A
       new-key grant pins the key; an existing-key issuance compares the
       request's `(service, resource_id, terms_digest)` against the key's first
       grant and its row (an unpinned first grant admits only unpinned top-ups)
@@ -175,7 +178,8 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       `list_grants`, for the later consumer the delta's "Metering reads the
       accepted card" scenario names.
 - [ ] 2.6 `domains/api/authority/src/arkhai_api_authority/route_services.py`:
-      `AuthorityRouteService.issue`, `verify`, and `consume` carry the new
+      `AuthorityRouteService.issue` accepts the three request fields and
+      returns the unchanged response, `verify` and `consume` carry the new
       fields; `_ISSUANCE_STATUS` and `_CONSUME_STATUS` map `key_out_of_scope`
       to a refusal status. `domains/apicredits/service/src/apicredits_service/controllers/keys_controller.py`
       forwards the request models' optional fields to the route service, so
@@ -185,7 +189,8 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       requirement holds, proven in section 1).
 - [ ] 2.7 Library-integration tests
       (`domains/api/authority/tests/integration/test_keys_service.py`): a
-      pinned issuance stores and returns the three values; a digest mismatch is
+      pinned issuance stores the three values and its result carries none of
+      them, so the strict issuance response still parses; a digest mismatch is
       refused; an existing-key top-up under another `(service, resource_id)` or
       another digest is refused with `key_out_of_scope`, no grant recorded,
       balance unchanged; an unpinned key accepts only unpinned top-ups; `verify`
@@ -445,8 +450,9 @@ cards are publishable without metered consumption").
       `publication_guards`, which `meter-inference-usage` deletes. The
       predicate it applies, `non_request_priced_rate(card) -> str | None`
       naming the offending field — a non-zero per-token or image rate, or a
-      `request_credits` of zero or above `2**63 - 1` (plan review 06 F3;
-      inference delta scenario "A free request rate is configured") — is
+      `request_credits` of zero or above `2**53 - 1` (plan review 06 F3 as
+      amended by 07 F1; inference delta scenario "A free request rate is
+      configured") — is
       added to
       `domains/inference/src/arkhai_inference/listings/pricing.py` with a unit
       test in `domains/inference/tests/`, because the gateway executable (8.3)
@@ -747,10 +753,11 @@ proof").
       default source; a registry read is admitted but not built here).
 - [ ] 8.3 `src/inference_gateway_service/offering.py`: `load_offering(settings)`
       selects the listing — the configured id when set, otherwise the
-      storefront's open listings filtered to the one whose card names the
+      storefront's open listings, every page at the route's largest size
+      until a short page, filtered to the one whose card names the
       configured `resource_id` and served model, none or several refusing
-      readiness with the count (plan review 06 F1; inference delta scenario
-      "The gateway starts before the storefront has published") — and
+      readiness with the count (plan review 06 F1; 07 F3; inference delta
+      scenario "The gateway starts before the storefront has published") — and
       `main.py` retries the load on a short interval until it succeeds,
       `/health` reporting not ready until then; it validates the listing as
       `InferenceListing`, requires the
@@ -788,7 +795,9 @@ proof").
       and the canonical terms payload equal to the storefront projection's
       digest input for the same card; the selection over a scripted listing
       list — one match selected, none and two refused with the count, the
-      configured id taking precedence; readiness refusals for an unreadable
+      sole match and a second duplicate each on a later page (plan review 07
+      F3), the configured id taking precedence; readiness refusals for an
+      unreadable
       listing and a per-token card; the gate configuration's scope and charge
       (`test_config.py`); every `FROM` in the Dockerfile carries `@sha256:`
       (`test_dockerfile.py`).

@@ -438,7 +438,9 @@ gateway to compare.
 The gateway executable selects its listing by what identifies its offering:
 it is configured with the storefront URL, the quota `resource_id`, and the
 served model name, lists the storefront's open listings through the kit's
-listing route, and takes the one whose card names both. Zero or several
+listing route — every page of them, at the route's largest page size, until
+a short page, since a match or a duplicate may sit past the first (plan
+review 07 F3) — and takes the one whose card names both. Zero or several
 matches refuse readiness, naming the count, and the executable retries the
 read at startup until the storefront has published, because the development
 seed publishes after the storefront starts and mints the listing's id at
@@ -455,10 +457,12 @@ filesystem contract between two services for one value.
 
 The contract's `request_credits` is uint256-domain and admits zero; the
 authority's ledger charges integers from one to the signed 64-bit maximum,
-and `consume` refuses an amount below one. The request-priced predicate (D8)
-therefore also refuses a card whose `request_credits` is zero or above
-`2^63 - 1`, naming the field, so a listing that publishes is one every
-request against it can be charged; the family's `request_charge` is declared
+`consume` refuses an amount below one, and the charge enters the issuance
+digest through canonical JSON, whose integer domain (RFC 8785) ends at
+`2^53 - 1` (plan review 07 F1). The request-priced predicate (D8) therefore
+also refuses a card whose `request_credits` is zero or above `2^53 - 1`,
+naming the field, so a listing that publishes is one every request against
+it can be digested and charged; the family's `request_charge` is declared
 with the same bounds. The uint256 domain stays for the per-token rates that
 metered consumption will price.
 

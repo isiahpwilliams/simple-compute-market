@@ -80,8 +80,8 @@ library therefore lives in the family as `domains/api/gateway`
 (`arkhai-api-gateway`), depending on `arkhai-api-gate` and `httpx`, and
 inference adds `domains/inference/gateway-service` (`arkhai-inference-gateway-service`),
 a composition root the architecture check reads as an executable through the
-hyphen rule, which reads the listing the gateway fronts (its registry or
-storefront URL and `listing_id`), validates it as an `InferenceListing`, and
+hyphen rule, which reads the listing the gateway fronts (selected as plan
+review 06 F1 records), validates it as an `InferenceListing`, and
 projects it to the family's `GatewayOffering` (review 02, F3); the default
 source is the storefront that published the listing, its origin, since a
 registry's copy can lag a republication and the storefront and gateway are
@@ -189,7 +189,8 @@ adapted to the kit's signature. The predicate itself — is this card
 request-priced — lives in the contract package, `arkhai_inference.listings`,
 because the gateway executable applies the same rule to the listing it fronts
 and two composition roots cannot import each other; the guard and the
-gateway's projection both call it.
+gateway's projection both call it. The same predicate bounds the request
+charge (plan review 06 F3).
 
 ### D9. Alkahest only, refused at startup
 
@@ -431,6 +432,40 @@ gateway to compare.
   the API-credits pins prove byte identity, and the pin fixture gains an
   inference case with the fields present. The request digest and the evidence
   carry the digest, not the payload, so neither grows with the card.
+
+### F1 (plan review 06). The gateway discovers the listing it fronts
+
+The gateway executable selects its listing by what identifies its offering:
+it is configured with the storefront URL, the quota `resource_id`, and the
+served model name, lists the storefront's open listings through the kit's
+listing route, and takes the one whose card names both. Zero or several
+matches refuse readiness, naming the count, and the executable retries the
+read at startup until the storefront has published, because the development
+seed publishes after the storefront starts and mints the listing's id at
+that moment. A configured `listing_id` remains an optional override that
+replaces the search for a deployment that has one.
+
+Rejected: a deterministic listing id in the seed table handed to both
+services, which changes the kit's publish request for a development
+convenience and stops matching after the seller republishes. Rejected: an
+id written to a shared volume or by an initialization job, which adds a
+filesystem contract between two services for one value.
+
+### F3 (plan review 06). The request charge is positive and ledger-bounded
+
+The contract's `request_credits` is uint256-domain and admits zero; the
+authority's ledger charges integers from one to the signed 64-bit maximum,
+and `consume` refuses an amount below one. The request-priced predicate (D8)
+therefore also refuses a card whose `request_credits` is zero or above
+`2^63 - 1`, naming the field, so a listing that publishes is one every
+request against it can be charged; the family's `request_charge` is declared
+with the same bounds. The uint256 domain stays for the per-token rates that
+metered consumption will price.
+
+Rejected: carrying charges as decimal strings through the issuance subject,
+the authority, the gate, and its cross-language conformance trace, with a
+zero-cost admission that calls no `consume`: it reaches every family package
+for a charge path metering replaces.
 
 ### F2 (design review 01). A top-up is admitted after the gate's verification TTL
 

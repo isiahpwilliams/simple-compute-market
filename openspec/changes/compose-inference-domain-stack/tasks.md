@@ -49,7 +49,8 @@ and "API credits delivers without an extension" scenarios).
       working around it (`AGENTS.md`, "Discuss").
 - [ ] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
       optional `accepted_terms` (a JSON object, canonical on the wire),
-      `terms_digest` (`DIGEST_PATTERN`), and `request_charge` (`ge=0`), each
+      `terms_digest` (`DIGEST_PATTERN`), and `request_charge` (`ge=1`,
+      `le=2**63 - 1`, the ledger's range; plan review 06 F3), each
       `None` by default and excluded from serialisation when unset; a validator
       requires the three together and the digest to equal `sha256:` of the
       canonical JSON of `accepted_terms`. `_request_digest` and
@@ -129,11 +130,13 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       `resource_id`; `VerifyResponse` gains optional `accepted_terms`,
       `terms_digest`, and `request_charge`, serialised only when set (the
       model's `extra="forbid"` stays, so an authority that sets none answers
-      today's three keys). `IssuanceResponse` gains the same three optional
-      fields as the request, echoed when the grant recorded them. The route
-      declarations in `declarations.py` are unchanged: no new route (api-family
-      delta "when absent ... byte-identical"; review 03 F1 "The fields are
-      optional on both requests").
+      today's three keys). `IssuanceResponse` is unchanged: the storefront
+      holds the three values it sent, and `verify` is where they are read
+      back, so the strict `IssuanceResult` the canonical client parses stays
+      as it is (plan review 06 F2). The route declarations in
+      `declarations.py` are unchanged: no new route (api-family delta "when
+      absent ... byte-identical"; review 03 F1 "The fields are optional on
+      both requests").
 - [ ] 2.2 `domains/api/authority/src/arkhai_api_authority/models.py`: a
       `GrantTerms` model on table `grant_terms` — `grant_id` (foreign key to
       `credit_grants.id`, primary key), `accepted_terms` (canonical JSON text),
@@ -344,7 +347,11 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       service, as the gate's conformance runner scripts one) and a controlled
       upstream that releases its streamed events on a trigger, asserting the
       first event reaches the client before the upstream sends the last
-      (inference delta scenario "A completion is streamed"), a non-streamed
+      (inference delta scenario "A completion is streamed") — this one case
+      against the app served by uvicorn in a thread on an ephemeral port,
+      because `httpx.ASGITransport` joins the body parts after the app
+      returns and cannot observe an early event (plan review 06 F4) — a
+      non-streamed
       response is relayed with its status and body, and an admitted request is
       charged exactly once. The gateway has no typed client of its own: the
       OpenAI version-1 wire shape is its contract, so these tests speak it
@@ -437,7 +444,10 @@ cards are publishable without metered consumption").
       published, naming the field, or `None`; the one entry of
       `publication_guards`, which `meter-inference-usage` deletes. The
       predicate it applies, `non_request_priced_rate(card) -> str | None`
-      naming the offending field, is added to
+      naming the offending field — a non-zero per-token or image rate, or a
+      `request_credits` of zero or above `2**63 - 1` (plan review 06 F3;
+      inference delta scenario "A free request rate is configured") — is
+      added to
       `domains/inference/src/arkhai_inference/listings/pricing.py` with a unit
       test in `domains/inference/tests/`, because the gateway executable (8.3)
       applies the same rule and two composition roots cannot import each other
@@ -729,13 +739,21 @@ proof").
       `INFERENCE_GATEWAY_` — the gate's `GateConfig.from_env(prefix,
       authority_label="inference-service")` set (authority URL, the
       `service`-role identity credential file, authority principals, verify
-      TTL, timeouts), plus the listing source URL and `LISTING_ID`, the
-      `UPSTREAM_BASE_URL`, and the `UPSTREAM_CREDENTIAL_FILE`. The listing is
-      read from the inference storefront's listing route, the listing's
+      TTL, timeouts), plus the `STOREFRONT_URL`, the `RESOURCE_ID` and
+      `SERVED_MODEL_NAME` that select the listing, an optional `LISTING_ID`
+      override, the `UPSTREAM_BASE_URL`, and the `UPSTREAM_CREDENTIAL_FILE`.
+      The listing is read from the inference storefront, the listing's
       origin, through the core storefront client (D2: the storefront is the
       default source; a registry read is admitted but not built here).
 - [ ] 8.3 `src/inference_gateway_service/offering.py`: `load_offering(settings)`
-      reads the listing, validates it as `InferenceListing`, requires the
+      selects the listing — the configured id when set, otherwise the
+      storefront's open listings filtered to the one whose card names the
+      configured `resource_id` and served model, none or several refusing
+      readiness with the count (plan review 06 F1; inference delta scenario
+      "The gateway starts before the storefront has published") — and
+      `main.py` retries the load on a short interval until it succeeds,
+      `/health` reporting not ready until then; it validates the listing as
+      `InferenceListing`, requires the
       card to be request-priced through the contract's
       `non_request_priced_rate` (5.5; D8), the storefront guard's own
       predicate, and returns
@@ -768,7 +786,9 @@ proof").
 - [ ] 8.6 Unit tests (`tests/unit/`): the projection of a fixture listing
       (`test_offering.py`) — service, scope, default charge, purchase pointer,
       and the canonical terms payload equal to the storefront projection's
-      digest input for the same card; readiness refusals for an unreadable
+      digest input for the same card; the selection over a scripted listing
+      list — one match selected, none and two refused with the count, the
+      configured id taking precedence; readiness refusals for an unreadable
       listing and a per-token card; the gate configuration's scope and charge
       (`test_config.py`); every `FROM` in the Dockerfile carries `@sha256:`
       (`test_dockerfile.py`).
@@ -785,7 +805,8 @@ proof").
       and registry; a republished default charge does not change what an
       existing key pays (api-family delta scenario "The seller reprices after a
       sale", in process); a streamed response reaches the client before the
-      upstream finishes.
+      upstream finishes, this case against the app on a socket as 4.6 runs it
+      (plan review 06 F4).
 - [ ] 8.8 Build and release: `domains/Makefile` and the root `Makefile` gain
       `dist-inference-gateway` (after `dist-api-gateway`) and
       `test-inference-gateway-service` in the aggregates;
@@ -859,8 +880,10 @@ stack's shape).
       its signing credential and admin key from `/run/secrets/arkhai/`),
       `model-stub` and the `vllm` profile's `model-server` (section 9),
       `inference-gateway` (`arkhai:inference-gateway`, `INFERENCE_GATEWAY_VERIFY_TTL_SECONDS=3`
-      as the API-credits sample app sets, per review 01 F2; its listing source,
-      upstream, and credential files), and `inference-storefront`
+      as the API-credits sample app sets, per review 01 F2; the storefront
+      URL, the seed's `resource_id` and served model name selecting its
+      listing, no listing id; the upstream and credential files), and
+      `inference-storefront`
       (`arkhai:inference-storefront` with `storefront.inference.toml` mounted at
       `/etc/arkhai/storefront.toml`); named volumes `inference-service-data`
       and `inference-storefront-data`; every credential a `${VAR:?...}`-guarded
@@ -1116,5 +1139,7 @@ part that would need a code edit returns the change to implementation.
 | review 02 F3 — the family gateway consumes a domain-neutral offering the domain executable projects | the `api-family` capability's `spec.md` — "A gateway in front of a model server is one family library"; its `architecture.md` — "The gateway" |
 | review 03 F1 — a key is enforced against the gateway's offering scope at verify and consume | the `api-family` capability's `spec.md` — "A key is scoped to its first grant" |
 | review 03 F3 (amended by review 04 F1 and F2) — accepted terms persist as payload, digest, and charge in `grant_terms`, omitted from the wire when unset, rollback-safe | the `api-family` capability's `spec.md` — "The issuance subject may carry accepted terms"; its `architecture.md` — "Current limits"; `docs/development/DEPLOYMENT_AND_CONFIG.md` — "Migrations at startup" |
+| plan review 06 F1 — the gateway discovers the listing it fronts by resource and served model, retrying until published | the `inference` capability's `spec.md` — "The gateway admits only paid requests for listed models"; its `architecture.md` — "Role composition over the family kit" |
+| plan review 06 F3 — the request charge is positive and ledger-bounded | the `inference` capability's `spec.md` — "Only request-priced rate cards are publishable without metered consumption"; the `api-family` capability's `spec.md` — "The issuance subject may carry accepted terms" |
 | review 01 F2 — a top-up is admitted after the gate's verification TTL | the `inference` capability's `spec.md` — "The gateway admits only paid requests for listed models"; its `architecture.md` — "Current limits" |
 | Roadmap and index currency (closeout parts 5 and 6) | `docs/development/ROADMAP.md` — Goal 8 current state and gap table; `openspec/changes/README.md` — this change's row and the Goal 8 campaign graph |

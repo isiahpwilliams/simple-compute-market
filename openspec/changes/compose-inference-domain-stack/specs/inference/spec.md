@@ -169,15 +169,23 @@ against, and one digest binds the three.
 
 While the gateway charges a fixed amount on admission, the storefront MUST
 refuse to publish a listing whose rate card has a non-zero prompt, cached-prompt,
-completion, or image rate, and the gateway's charge per admitted request MUST
-equal the published `request_credits`. A published price MUST be one the seller
-charges.
+completion, or image rate, or a `request_credits` of zero or above the
+authority ledger's maximum charge, and the gateway's charge per admitted
+request MUST equal the published `request_credits`. A published price MUST be
+one the seller charges and the ledger can take.
 
 #### Scenario: A per-token rate card is configured
 
 - **WHEN** a seller configures a listing whose rate card has a non-zero
   completion rate
 - **THEN** publication is refused naming that field and nothing is published
+
+#### Scenario: A free request rate is configured
+
+- **WHEN** a seller configures a listing whose rate card has a
+  `request_credits` of zero
+- **THEN** publication is refused naming `request_credits`, since the ledger
+  cannot charge it
 
 #### Scenario: A request-priced listing is consumed
 
@@ -192,7 +200,10 @@ version-1 style and MUST forward a request only after the authority has
 verified the bearer credential and charged it. A request naming a model the
 gateway does not serve MUST be refused before any charge, so the gateway reads
 the request body and checks the model before it verifies the key. The
-gateway's executable MUST project the listing it fronts into the family's
+gateway's executable MUST select the listing it fronts as the storefront's
+one open listing for its configured resource and served model, retrying until
+the storefront has published and refusing readiness on none or several, unless
+a listing id is configured; it MUST project that listing into the family's
 offering, and the charge a request pays MUST be the `request_credits` the key
 was issued under, returned by verification, so a republished price reaches
 only keys issued after it. A retried request is a second charge, and a
@@ -209,6 +220,13 @@ list MUST contain only that model.
   gateway and requests model A
 - **THEN** the gateway answers `403`, the model server receives nothing, and
   the key's balance is unchanged
+
+#### Scenario: The gateway starts before the storefront has published
+
+- **WHEN** the gateway starts with a resource and served model configured and
+  the storefront has not yet published that listing
+- **THEN** the gateway is not ready, retries the read, and becomes ready
+  serving that listing once it is published
 
 #### Scenario: A request names an unlisted model
 

@@ -79,7 +79,8 @@ extension MUST see no change to its delivery.
 
 The family issuance subject MAY carry the accepted terms as canonical JSON,
 their digest, and a per-request charge, which the domain's projection reads
-from the accepted listing. When present, the digest and charge MUST enter the
+from the accepted listing; the charge is an integer from one to the ledger's
+signed 64-bit maximum, the range the authority can consume. When present, the digest and charge MUST enter the
 issuance request digest and the signed evidence, the authority MUST verify the
 digest against the payload and record all three in a table of its own beside
 the grant, leaving the grant table's columns unchanged, and `verify` MUST

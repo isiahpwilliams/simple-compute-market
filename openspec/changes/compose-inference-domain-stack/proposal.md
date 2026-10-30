@@ -181,6 +181,8 @@ only request-priced rate cards are publishable until then.
 | A key is enforced against the gateway's offering scope at verify and consume (review 03 F1) | the `api-family` capability's `spec.md` |
 | Accepted terms persist as a payload, digest, and charge in a `grant_terms` table beside the grant, omitted from the wire when unset, rollback-safe (review 03 F3, review 04 F1–F2) | the `api-family` capability's `spec.md` and `architecture.md` — "Current limits"; `docs/development/DEPLOYMENT_AND_CONFIG.md` |
 | Verification precedes the charge; the gate's separable verify step (F3) | the `api-family` capability's `spec.md` and `architecture.md` |
+| The gateway discovers the listing it fronts by resource and served model, retrying until published (plan review 06 F1) | the `inference` capability's `spec.md` and `architecture.md` |
+| The request charge is positive and ledger-bounded; the guard refuses zero (plan review 06 F3) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` |
 | A top-up is admitted after the gate's verification TTL (F2) | the `inference` capability's `spec.md`; `architecture.md` — "Current limits" |
 
 ## Status

@@ -31,33 +31,40 @@ only request-priced rate cards are publishable until then.
   shell, registered under `market.storefront_domains`, composing the family
   kit's issuance fulfillment, reconciler, and settlement composition with
   Alkahest as its only settlement mechanism, and contributing publication of
-  model-card listings from the quota authority, the seller round hook over
-  per-credit pricing, the request-priced guard, and the rate-card
-  materialization, which it delivers in the delivery's public result.
+  model-card listings from the quota authority, the kit's seller round hook,
+  the request-priced guard, and the delivery's public result, which carries the
+  contract's `InferenceMaterialization` built from the accepted listing the kit
+  pins at acceptance.
 - **Authority.** An `arkhai:inference-service` image composing the kit's key
   authority and credits ledger under the issuance digest label `inference`,
-  with its own database and key namespace. Whether this is the kit's service
-  deployed with inference configuration or a composition root of its own is
-  `compose-api-family-kit`'s decision, and this change follows it.
-- **Gateway.** An `arkhai:inference-gateway` image: an OpenAI-compatible reverse
-  proxy in front of a model server, gated by the kit's bearer gate signing as
-  the `service` role, charging the listing's per-request credits on admission,
-  serving one model at one price with `/v1/models` listing only it. A request
-  naming an unlisted model is refused before any charge, and the buyer's
-  credential is never forwarded. Streaming responses pass through unbuffered
-  even though nothing yet reads their usage.
+  with its own database and key namespace, as a service root of its own over
+  the kit's `authority` library: the family keeps each domain's root separate,
+  since two domains never share a process (the `api-family` capability's
+  `architecture.md`, "Service roots and the capacity profile").
+- **Gateway.** A family library, `arkhai-api-gateway` under `domains/api`: an
+  OpenAI-compatible reverse proxy in front of a model server that checks the
+  requested model before charging, authorizes and charges through the kit's
+  bearer gate inside the route, never forwards the buyer's credential, streams
+  upstream responses unbuffered, serves `/v1/models` listing the one configured
+  model, and carries a per-request verification seam for a later attestation
+  proof. Inference composes it as the `arkhai:inference-gateway` image from a
+  `gateway-service` root that reads and validates the listing the gateway
+  fronts, projects it to the family's offering, and supplies the upstream and
+  the gate's `service`-role signing credential; a request is charged the
+  `request_credits` its key was issued under, which issuance pins on the key
+  and verification returns.
 - **Buyer.** An `arkhai-inference-buyer` plugin under `market.buyer_domains`
   composing the kit's purchase flow and contributing `market inference listing
   list|show`, `buy`, `negotiate`, `settle`, and `settlement status`, the
   `inference` schema identity, model-card discovery filters, and model-card
   rendering, with Alkahest settlement only.
-- **Stack.** `domains/inference/compose.yml` (inference registry with the
-  filter specification mounted, authority, gateway, storefront, and a model
-  server) with the per-domain `compose.inference.yml`,
+- **Stack.** `domains/inference/compose.yml` (inference registry selecting the
+  packaged filter specification by path, authority, gateway, storefront, and a
+  model server) with the per-domain `compose.inference.yml`,
   `compose.inference-local.yml`, and `compose.inference-lane.yml` files;
   development identities under `dev-env/identities/` and the
   `e2e-inference-dev-env` variables. The model server is a deterministic
-  OpenAI-compatible stub built from this repository, so the scenario runs
+  OpenAI-compatible stub built under `e2e-tests/`, so the scenario runs
   without a GPU or an external model download and asserts exact responses; a
   Compose profile swaps in the CPU vLLM image with a small instruct model.
 - **Scenario.** `e2e_inference_deal`: discover by model, negotiate a new key,
@@ -76,7 +83,11 @@ only request-priced rate cards are publishable until then.
 - `inference`: the storefront, authority, gateway, and buyer roles exist and
   complete one deal; flat per-request consumption is the version-1 posture
   until metering lands.
-- `api-family`: the kit's contribution surface gains its second consumer.
+- `api-family`: the kit's contribution surface gains its second consumer; the
+  family gains a gateway library in front of OpenAI-style model servers; the
+  issuance subject may carry accepted terms, which the authority pins on the
+  key and `verify` returns; the authority scopes a key to its first grant; the
+  gate gains a separable verify step.
 - `market-composition`: the "shipped domains are loaded" scenario gains the
   inference plugin.
 - `deployment-state`: a third registry schema is deployable locally; the
@@ -96,26 +107,49 @@ only request-priced rate cards are publishable until then.
 
 ## Dependencies and Related Changes
 
-- **Depends on** `add-inference-domain-contract` and `compose-api-family-kit`
-  accepted.
+- **Depends on** `add-inference-domain-contract` and
+  `repair-storefront-alkahest-configuration` accepted. `compose-api-family-kit`
+  is closed out and archived; its index row advances at archive cleanup, and
+  its kit is what this change composes.
 - **Consumes** `sign-multi-language-credits-middleware`'s Python signing path
   as it stands; does not wait on its TypeScript and Rust work.
 - **Enables** `meter-inference-usage` by supplying the stack it changes.
 - `repair-storefront-alkahest-configuration` owns the development stack's
-  Alkahest readiness; this change's scenario needs it green.
+  Alkahest readiness; this change's scenario needs it green, so it gates
+  implementation.
 
 ## Impact
 
-- New: `domains/inference/{storefront,buyer,service,gateway,model-stub}/`,
+- New: `domains/api/gateway/`,
+  `domains/inference/{storefront,buyer,service,gateway-service}/`, the model
+  stub under `e2e-tests/`,
   `domains/inference/compose.yml`, the per-domain Compose files, development
   identities, the `e2e-inference-dev-env` target, the e2e lane targets, the
   e2e scenario and marker.
-- Touched: root `docker-compose.yml`, `domains/Makefile`, root `Makefile`,
-  `e2e-tests/Makefile`, `.github/workflows/e2e.yml`,
-  `e2e-tests/pyproject.toml` markers.
-- Wire: none beyond the new domain. Database: one new service database, not
-  shared. Deployment: new images and one more registry instance in the
-  development stack.
+- Touched in the family: `domains/api/src/arkhai_api/{issuance,evidence}.py`
+  (the subject's optional accepted terms, digest, and charge, omitted when
+  unset), `domains/api/selling/src/arkhai_api_selling/{contributions,issuance}.py`
+  (the public-result extension's delivery context), `domains/api/contracts/src/arkhai_api_contracts/models.py` (verify
+  and consume scope fields; verify's pinned terms), the authority's
+  `keys_service.py`, `models.py`, and `migrations.py` (`grant_terms`, key
+  scope, the scope refusal), `domains/api/gate/src/arkhai_api_gate/{gate,client}.py`
+  (the separable verify step, the scope and charge in `verify`), the gate's
+  conformance fixtures, and `domains/apicredits/tests/fixtures/pins/` (an
+  inference case beside the unchanged API-credits pins).
+- Touched elsewhere: root `docker-compose.yml`, `domains/Makefile`, root
+  `Makefile`, `e2e-tests/Makefile`, `.github/workflows/e2e.yml`,
+  `e2e-tests/pyproject.toml` markers, `dev-env/identities/README.md`.
+- Wire: the family issuance subject gains optional accepted terms, their
+  digest, and a request charge, of which the digest and charge enter the
+  request digest and the signed evidence; `verify` returns them and, with
+  `consume`, accepts optional scope fields; each is omitted when unset so API
+  credits' bytes are unchanged and the pins prove it. Database: one new
+  inference service database, and a migration creating a `grant_terms` table
+  in every API-family authority's database, with `credit_grants` unchanged.
+  Deployment: new images and one more registry instance in the development
+  stack; an API-family authority upgrades by image, and because the grant
+  table it checks is unchanged, the previous image starts against the
+  migrated database without a down-migration.
 
 ## Permanent documentation impact
 
@@ -123,12 +157,39 @@ only request-priced rate cards are publishable until then.
       deployment topology gain the inference roles and third registry schema.
 - [x] Existing subsystem specification — `market-composition`,
       `deployment-state`, `test-compatibility` scenarios; `api-family`'s
-      second consumer.
+      second consumer and its gateway library.
 - [x] New subsystem specification — `inference` gains the role-composition and
       end-to-end requirements.
 
+### Knowledge to promote
+
+| Decision | Permanent destination |
+|---|---|
+| The issuance projection names the served model and delivers the gateway URL (D1) | the `inference` capability's `spec.md`; the `api-family` capability's `architecture.md` contribution table, inference column |
+| The gateway is a family library composed by a domain executable (D2) | the `api-family` capability's `spec.md` and `architecture.md`; `docs/development/ARCHITECTURE.md` runtime service map |
+| The public result carries the contract's materialization, built from the extension's inputs, which include the delivery's settlement context (D3) | the `inference` capability's `spec.md` and `architecture.md`; the `api-family` capability's `spec.md` |
+| Retry charges and the metering seam (D4) | the `inference` capability's `architecture.md` — "Current limits" |
+| The stub model server is a test image; the `vllm` profile (D5) | `docs/development/DEPLOYMENT_AND_CONFIG.md`; the `deployment-state` capability's `spec.md` |
+| Contribution values, publish request, guard, Alkahest-only refusal (D6–D9, D12) | the `inference` capability's `spec.md` |
+| Compose files, identities, lane (D10, D11) | the `deployment-state` and `test-compatibility` capabilities' `spec.md`; `dev-env/identities/README.md` |
+| Verification seams and the measurable image (D16) | the `inference` capability's `architecture.md`; the `api-family` capability's `architecture.md` |
+| The three-party constraint on settlement composition (D17) | the `inference` capability's `architecture.md` |
+| A key is scoped to its first grant's service, resource, and accepted terms (F4, review 02 F1) | the `api-family` capability's `spec.md` |
+| The issuance subject carries the accepted terms digest and request charge; the gateway charges the key's verified charge (F1) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` and `architecture.md` contribution table |
+| The family gateway consumes a domain-neutral offering the domain executable projects (review 02 F3) | the `api-family` capability's `spec.md` and `architecture.md` |
+| The proof hook binds to the accepted attestation through the terms digest (review 02 F2, review 03 F2) | the `inference` capability's `architecture.md` |
+| A key is enforced against the gateway's offering scope at verify and consume (review 03 F1) | the `api-family` capability's `spec.md` |
+| Accepted terms persist as a payload, digest, and charge in a `grant_terms` table beside the grant, omitted from the wire when unset, rollback-safe (review 03 F3, review 04 F1–F2) | the `api-family` capability's `spec.md` and `architecture.md` — "Current limits"; `docs/development/DEPLOYMENT_AND_CONFIG.md` |
+| Verification precedes the charge; the gate's separable verify step (F3) | the `api-family` capability's `spec.md` and `architecture.md` |
+| The gateway discovers the listing it fronts by resource and served model, retrying until published (plan review 06 F1) | the `inference` capability's `spec.md` and `architecture.md` |
+| The request charge is positive and ledger-bounded; the guard refuses zero (plan review 06 F3) | the `inference` capability's `spec.md`; the `api-family` capability's `spec.md` |
+| A top-up is admitted after the gate's verification TTL (F2) | the `inference` capability's `spec.md`; `architecture.md` — "Current limits" |
+
 ## Status
 
-Returned to design on 2026-10-19. The copy-based `design.md` and `tasks.md`
-were withdrawn with the copied implementation; the design is authored against
-`compose-api-family-kit`'s kit once its design passes review.
+Returned to design on 2026-10-19; the copy-based `design.md` and `tasks.md`
+were withdrawn with the copied implementation. Redesigned on 2026-10-28
+against the `api` family kit, archived on 2026-10-26, and the contract as
+implemented; design reviews 01–05 were triaged on 2026-10-28 and 2026-10-29,
+their gaps are decided in `design.md`, and review 05's triage advanced the
+change to planning.

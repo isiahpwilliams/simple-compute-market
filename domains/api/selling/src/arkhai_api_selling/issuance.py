@@ -24,7 +24,7 @@ from market_core.schemas import Agreement
 from market_identity import Identity
 from pydantic import BaseModel, ConfigDict, Field
 
-from arkhai_api_selling.contributions import IssuanceSubject, SellingContributions
+from arkhai_api_selling.contributions import DeliveryContext, IssuanceSubject, SellingContributions
 from arkhai_api_selling.evidence_store import PrivateResultRepository
 
 logger = logging.getLogger(__name__)
@@ -196,7 +196,21 @@ def prepare_issuance_request(
         quantity=accepted.quantity,
         key=KeyDisposition.model_validate({"mode": accepted.key_mode, "key_id": accepted.key_id}),
         capacity_reservation_id=capacity_reservation_id,
+        accepted_terms=None if subject.accepted_terms is None else dict(subject.accepted_terms),
+        terms_digest=subject.terms_digest,
+        request_charge=subject.request_charge,
     )
+
+
+def evidence_terms(request: IssuanceRequest) -> dict[str, Any]:
+    """The terms digest and request charge the issued request pinned, for its signed evidence.
+
+    They are read from the request the authority answered, so the evidence's
+    terms are the ones its request digest covers.
+    """
+    if request.terms_digest is None:
+        return {}
+    return {"terms_digest": request.terms_digest, "request_charge": request.request_charge}
 
 
 def connection_payload(
@@ -377,7 +391,9 @@ async def fulfill(
         try:
             extension = public_extension(
                 contributions.public_result_extension(
-                    listing_resource, issuance.model_copy(update={"secret": None})
+                    listing_resource,
+                    issuance.model_copy(update={"secret": None}),
+                    DeliveryContext(evidence.mechanism, evidence.settlement_ref),
                 ),
                 public={"key_id", "base_url", "balance", "connection_details"},
                 secret=issuance.secret,
@@ -414,6 +430,7 @@ async def fulfill(
         "connection_details": payload,
         "tenant_credentials": credentials,
         "issuance": issuance,
+        "issuance_request": request,
     }
     if extension is not None:
         result["public_extension"] = extension

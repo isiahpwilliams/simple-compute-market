@@ -36,7 +36,7 @@ may carry accepted terms" and "The public-result extension receives the
 delivery's settlement context"; the deltas' "API credits issues without terms"
 and "API credits delivers without an extension" scenarios).
 
-- [ ] 1.1 Confirm by inspection, before writing anything, that the design's
+- [x] 1.1 Confirm by inspection, before writing anything, that the design's
       "What exists" still holds on the target branch: `IssuanceSubject`
       (`domains/api/selling/src/arkhai_api_selling/contributions.py`) has
       `service`, `resource_id`, `endpoint` only; `_request_digest` in
@@ -47,7 +47,11 @@ and "API credits delivers without an extension" scenarios).
       `status`, `balance`; and `domains/apicredits/tests/fixtures/pins/issuance_pins.json`
       holds only API-credits cases. Record drift in `design.md` rather than
       working around it (`AGENTS.md`, "Discuss").
-- [ ] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
+      *Note:* confirmed on the branch at 9f21a6c9e: the subject, the eight-key
+      digest, the evidence body, `VerifyResponse`, and the API-credits-only pins were
+      as described. Drift found later: `IssuanceRequest` is also a component of the
+      API-credits service's recorded OpenAPI baseline (re-recorded in 1.8).
+- [x] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
       optional `accepted_terms` (a JSON object, canonical on the wire),
       `terms_digest` (`DIGEST_PATTERN`), and `request_charge` (`ge=1`,
       `le=2**53 - 1`, the canonical JSON integer domain; plan review 06 F3 as
@@ -60,14 +64,27 @@ and "API credits delivers without an extension" scenarios).
       same eight keys as today (review 03 F3 "Wire bytes": the digest carries
       the digest, not the payload). `issuance_request(...)` takes the three as
       keyword arguments.
-- [ ] 1.3 `domains/api/src/arkhai_api/evidence.py`: `IssuanceEvidenceBodyV1`
+      *Note:* `accepted_terms_digest`, `MAX_REQUEST_CHARGE`, and the
+      `RequestCharge` type are exported beside the request. Omission is a wrap
+      `model_serializer` (`omit_unset`) rather than pydantic's `exclude_if`, which
+      needs pydantic 2.11 while the package declares `pydantic>=2`; the serializer
+      carries no return annotation, which would replace the model's published
+      serialisation schema. `issuance_request` validates the charge against the
+      same `RequestCharge` bound before computing a digest, so `2**53` is refused
+      as a validation error rather than by canonical JSON; a wire request with `0`
+      or `2**53` is refused by the label-bound model.
+- [x] 1.3 `domains/api/src/arkhai_api/evidence.py`: `IssuanceEvidenceBodyV1`
       and `ExpectedIssuanceEvidenceV1` gain optional `terms_digest` and
       `request_charge`, omitted when unset, so `_signing_bytes` and
       `issuance_evidence_digest` are unchanged for a body without them;
       `verify_issuance_evidence` binds them to the expected values when the
       expectation carries them (review 03 F3; api-family delta "the digest and
       charge MUST enter ... the signed evidence").
-- [ ] 1.4 `domains/api/selling/src/arkhai_api_selling/contributions.py`:
+      *Note:* the body requires `terms_digest` and `request_charge` together;
+      verification binds each only when the expectation carries it, and the
+      request digest already binds both. `IssuanceEvidenceService`'s self-consistency
+      check now carries them into its expectation.
+- [x] 1.4 `domains/api/selling/src/arkhai_api_selling/contributions.py`:
       `IssuanceSubject` gains optional `accepted_terms`, `terms_digest`, and
       `request_charge`, documented as what the domain's projection reads from
       the accepted listing. `domains/api/selling/src/arkhai_api_selling/issuance.py`:
@@ -76,7 +93,12 @@ and "API credits delivers without an extension" scenarios).
       and charge when the subject has them (review 02 F1, as amended by review
       04 F1 and F2). `connection_payload` is unchanged: the terms are not
       delivery metadata.
-- [ ] 1.5 `domains/api/selling/src/arkhai_api_selling/contributions.py`: a
+      *Note:* the body the storefront signs is built in the Alkahest selling
+      stage (`selling-alkahest/.../stage.py`), not in `issuance.py`. `fulfill` now
+      returns the issued request beside the result (`issuance_request`), and the
+      stage spreads `evidence_terms(request)` into the body, so the signed terms are
+      the ones the answered request digest covers. No other stage signs evidence.
+- [x] 1.5 `domains/api/selling/src/arkhai_api_selling/contributions.py`: a
       frozen `DeliveryContext(mechanism: str, settlement_ref: str | None)`,
       and `PublicResultExtension` becomes
       `Callable[[Mapping[str, Any], IssuanceResult, DeliveryContext], Mapping[str, Any]]`.
@@ -87,7 +109,10 @@ and "API credits delivers without an extension" scenarios).
       public-result extension receives the delivery's settlement context").
       The selling library's `bundles.py` `with_extension` helper and the
       existing extension test take the third parameter.
-- [ ] 1.6 Unit tests, vocabulary (`domains/api/tests/unit/test_issuance_pins.py`,
+      *Note:* `bundles.py`'s `with_extension` only replaces the bundle's
+      extension, so the change there is its docstring; the existing extension tests'
+      lambdas take the third parameter. `with_terms` was added beside it.
+- [x] 1.6 Unit tests, vocabulary (`domains/api/tests/unit/test_issuance_pins.py`,
       `test_evidence.py`): a request without terms digests and signs to the
       same bytes as before the fields existed; a request with terms digests
       the digest and charge and not the payload; a digest that does not match
@@ -101,7 +126,22 @@ and "API credits delivers without an extension" scenarios).
       bundle without an extension saves the same public-result keys as before
       (api-family delta scenarios "A domain builds its materialization in the
       extension", "API credits delivers without an extension").
-- [ ] 1.7 `domains/apicredits/tests/fixtures/pins/issuance_pins.json` and
+      *Note:* vocabulary unit level — `test_issuance_pins.py` (unset terms
+      serialise nothing; the digest covers the terms digest and charge, not the
+      payload; mismatch and partial sets refused; `2**53 - 1` accepted, `0` and
+      `2**53` refused through `issuance_request` and on the wire) and
+      `test_evidence.py` (an unpinned body carries no terms keys — byte equality
+      with the recorded pins is `test_every_pin_matches_byte_for_byte_under_api_credits`;
+      set terms are signed and paired; verification binds them). Selling unit
+      level — `test_issuance.py` (subject terms reach the request and its
+      `evidence_terms`; an unpinned subject produces an unpinned request; an
+      extension receives the mechanism and a `settlement_ref` distinct from the
+      negotiation id). Selling-Alkahest library integration —
+      `test_delivery.py` (a delivery under a pinning bundle publishes evidence
+      whose body carries the terms digest and charge beside the answered request
+      digest, and an unpinned one publishes none) against real storefront
+      persistence and the settlement journal.
+- [x] 1.7 `domains/apicredits/tests/fixtures/pins/issuance_pins.json` and
       `domains/apicredits/tests/test_issuance_pins.py`: the recorded API-credits
       cases are unchanged byte for byte, and the fixture gains one inference
       case under `IssuanceLabel("inference")` with the three fields present,
@@ -111,7 +151,13 @@ and "API credits delivers without an extension" scenarios).
       sides", whose two-label difference the case records against the
       equivalent API-credits case). The fixture's generator (`main`) writes the
       new case; the test refuses an input set the fixture does not record.
-- [ ] 1.8 **Verification.** `make test-api` (the vocabulary's unit level and its
+      *Note:* the API-credits cases stay under `cases`, byte for byte; the
+      inference case is under a separate `inference_cases` key and pins the fulfillment
+      identity, request digest, canonical issuance request, evidence digest, signed
+      evidence, portable reference, and the API-credits request digest of the same
+      inputs. The generator now adds an absent case set and still never rewrites a
+      recorded one; the fixture diff is additions only.
+- [x] 1.8 **Verification.** `make test-api` (the vocabulary's unit level and its
       `tests/integration/test_distribution.py`, and the selling library's unit
       and library-integration levels); `make test-apicredits` (the domain's
       unit-level pins and distribution tests). `make test`. No dependency or
@@ -119,6 +165,46 @@ and "API credits delivers without an extension" scenarios).
       `e2e_credits_deal` exercises the unchanged API-credits path and
       `e2e_inference_deal` (section 11) the fields present; none is owed
       beyond those.
+      *Note:* `make test-api` passed (the vocabulary 78, contracts 43, client 25,
+      authority 69, selling 214, selling-Alkahest 34, and the other family
+      suites); `make test-apicredits` passed (domain pins and distribution, the
+      service with its compatibility baselines, storefront, buyer, sample app,
+      and the TypeScript and Rust middleware conformance). `make -k test`: every
+      target passed but two. `test-storefront` failed only in
+      `tests/integration/test_alkahest.py`, which needs `anvil` on `PATH`, and
+      passed in full (1103 and 448) once `$HOME/.foundry/bin` was on it.
+      `test-provisioning` fails one unit test,
+      `test_provisioning_bootstrap_dotenv_uses_environment_layer_without_dotenv_local`,
+      only when run in the suite (it passes alone and with its module); the
+      provisioning service installs no api-family distribution, so this section
+      cannot reach it, and it is left as found. `make check-change` passed.
+      **Baseline re-record:** the three optional `IssuanceRequest` properties
+      (`accepted_terms`, `terms_digest`, `request_charge`, each nullable) are
+      new in the API-credits service's served OpenAPI, so
+      `domains/apicredits/service/tests/fixtures/baseline/openapi.json` was
+      re-recorded once, in place, from the running service; its diff is those
+      three properties alone, and every other baseline record is unchanged (the
+      owner's decision, `interventions.jsonl`). The compliance check's findings
+      were fixed — the serializers carry no return annotation, the evidence's
+      terms come from the issued request rather than a second projection, the
+      context test distinguishes `settlement_ref` from the negotiation id, the
+      signed body's terms are tested through a delivery, history-worded
+      comments and test names were restated — except one declined: `omit_unset`
+      stays a public helper of `arkhai_api.issuance`, since `evidence` in the
+      same package imports it.
+      **Versions, against the plan:** the plan owed no version change, but the
+      Alkahest stage now reads `fulfill`'s new `issuance_request` key and the
+      vocabulary's new fields cross distributions, so `arkhai-api` 0.2.0,
+      `arkhai-api-selling` 0.5.0 (requiring `arkhai-api>=0.2.0`), and
+      `arkhai-api-selling-alkahest` 0.2.0 (requiring the new selling), with the
+      API-credits storefront's floors raised; `make lock` relocked the 17
+      projects that record them (version lines only) and `make check-packaging`
+      passed; the focused suites of every relocked project passed after it.
+      *Handoff:* section 2 re-records the same baseline for its verify and
+      consume fields. A wrap `model_serializer` with a return annotation silently
+      replaces the model's serialisation schema; keep new ones unannotated.
+      `sed -i ''` fails in this shell (GNU sed); the Alkahest library tests need
+      `$HOME/.foundry/bin` on `PATH`.
 
 ## 2. Family contracts and authority: pinned terms and key scope
 

@@ -15,13 +15,23 @@ from market_identity import (
     canonical_json,
     get_identity_verifier,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
+from arkhai_api.issuance import RequestCharge, omit_unset
 from arkhai_api.labels import IssuanceLabel
 
 _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$")
 _MAX_EVIDENCE_BYTES = 32_768
 DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+# Omitted when unset, so an unpinned body signs and digests only its base fields.
+_TERMS_FIELDS = ("terms_digest", "request_charge")
 
 
 class IssuanceEvidenceError(ValueError):
@@ -55,6 +65,14 @@ class IssuanceEvidenceBodyV1(_EvidenceContract):
     status: Literal["committed"] = "committed"
     committed_at_unix: int = Field(ge=0)
     request_digest: str = Field(pattern=DIGEST_PATTERN)
+    terms_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
+    request_charge: RequestCharge | None = None
+
+    # Unannotated: a return annotation would replace the model's published
+    # serialisation schema with that annotation's.
+    @model_serializer(mode="wrap")
+    def _omit_unset_terms(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), _TERMS_FIELDS)
 
     @model_validator(mode="before")
     @classmethod
@@ -79,6 +97,8 @@ class IssuanceEvidenceBodyV1(_EvidenceContract):
             raise ValueError("grant_id must equal fulfillment_id")
         if self.owner != self.buyer:
             raise ValueError("key owner must equal the accepted canonical buyer")
+        if (self.terms_digest is None) != (self.request_charge is None):
+            raise ValueError("terms_digest and request_charge are set together")
         return self
 
 
@@ -113,6 +133,8 @@ class ExpectedIssuanceEvidenceV1(_EvidenceContract):
     issuer: Identity
     request_digest: str = Field(pattern=DIGEST_PATTERN)
     funding_expiration_unix: int = Field(ge=0)
+    terms_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
+    request_charge: RequestCharge | None = None
 
 
 class PortableFulfillmentRefV1(_EvidenceContract):
@@ -224,6 +246,12 @@ def verify_issuance_evidence(
         "request_digest",
     ):
         if getattr(body, field_name) != getattr(expected, field_name):
+            raise IssuanceEvidenceError(
+                f"issuance evidence {field_name} does not match accepted obligation"
+            )
+    for field_name in _TERMS_FIELDS:
+        pinned = getattr(expected, field_name)
+        if pinned is not None and getattr(body, field_name) != pinned:
             raise IssuanceEvidenceError(
                 f"issuance evidence {field_name} does not match accepted obligation"
             )

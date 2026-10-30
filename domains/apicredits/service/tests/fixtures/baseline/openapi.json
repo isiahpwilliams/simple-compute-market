@@ -291,6 +291,18 @@
         "additionalProperties": false,
         "description": "Complete immutable command for one credits grant.",
         "properties": {
+          "accepted_terms": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Terms"
+          },
           "capacity_reservation_id": {
             "anyOf": [
               {
@@ -327,6 +339,19 @@
             "title": "Quantity",
             "type": "integer"
           },
+          "request_charge": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Charge"
+          },
           "request_digest": {
             "pattern": "^sha256:[0-9a-f]{64}$",
             "title": "Request Digest",
@@ -349,6 +374,18 @@
             "minLength": 1,
             "title": "Service",
             "type": "string"
+          },
+          "terms_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terms Digest"
           }
         },
         "required": [

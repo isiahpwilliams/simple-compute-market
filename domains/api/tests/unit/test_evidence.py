@@ -170,3 +170,39 @@ def test_the_portable_reference_round_trips_under_its_label_only():
         encode_portable_fulfillment_ref(
             LABEL, resolver_id="bad resolver", attestation_uid="attestation:1", evidence_digest=digest
         )
+
+
+# Accepted terms
+
+TERMS_DIGEST = "sha256:" + "d" * 64
+
+
+def test_an_unpinned_body_signs_no_terms_fields():
+    encoded = json.loads(canonical_signed_issuance_evidence(sign_issuance_evidence(LABEL, _body(), ISSUER)))
+    assert not {"terms_digest", "request_charge"} & set(encoded["body"])
+
+
+def test_a_body_with_terms_signs_them_and_requires_both():
+    body = _body(terms_digest=TERMS_DIGEST, request_charge=3)
+    encoded = canonical_signed_issuance_evidence(sign_issuance_evidence(LABEL, body, ISSUER))
+    assert json.loads(encoded)["body"]["terms_digest"] == TERMS_DIGEST
+    assert decode_signed_issuance_evidence(LABEL, encoded).body == body
+    with pytest.raises(ValidationError):
+        _body(terms_digest=TERMS_DIGEST)
+    with pytest.raises(ValidationError):
+        _body(request_charge=3)
+
+
+@pytest.mark.parametrize(
+    "expected_terms",
+    [{"terms_digest": "sha256:" + "e" * 64, "request_charge": 3}, {"terms_digest": TERMS_DIGEST, "request_charge": 4}],
+)
+def test_verification_binds_the_expected_terms(expected_terms):
+    body = _body(terms_digest=TERMS_DIGEST, request_charge=3)
+    evidence = sign_issuance_evidence(LABEL, body, ISSUER)
+    verify = lambda expected: verify_issuance_evidence(  # noqa: E731
+        LABEL, evidence, expected=expected, trusted_issuers=TRUSTED, now_unix=2_000_000_000
+    )
+    assert verify(_expected(body)) == body
+    with pytest.raises(IssuanceEvidenceError, match="does not match"):
+        verify(_expected(body, **expected_terms))

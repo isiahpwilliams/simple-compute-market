@@ -262,6 +262,12 @@ The gateway holds its own development credential and signs toward the
 authority as the `service` role, which the authority trusts by role, as the
 API-credits sample application does.
 
+The inference service has no shared-secret gate behind its signed
+authentication: it refuses to start without a signing credential and a trusted
+role. The API-credits service's `X-Admin-Key` fallback serves deployments
+provisioned before identities and admits every caller when no key is set,
+which the bearer-credential requirement cannot admit (implementation, section 6).
+
 ### D15. The authority's database starts on the family chain
 
 The inference database runs the family's migration chain from its first,

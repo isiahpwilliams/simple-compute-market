@@ -100,6 +100,13 @@ outside its grant.
 - **THEN** the operation is refused as unauthenticated rather than treated as
   the key owner's marketplace signature
 
+#### Scenario: The authority has no site identity
+
+- **WHEN** the inference authority is started without a site signing credential
+  or without any trusted caller role
+- **THEN** it refuses to start before opening its database, and serves no route
+  behind a shared secret instead
+
 ### Requirement: Quota-backed publication
 
 An inference listing MUST identify an authoritative quota resource at a

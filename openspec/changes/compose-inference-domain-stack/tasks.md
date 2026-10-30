@@ -1094,7 +1094,7 @@ composes the authority kit in its own service root"; inference delta
 "Inference state is isolated", "Bearer credential is delivery, not identity or
 payment authority").
 
-- [ ] 6.1 Create `domains/inference/service/` with `pyproject.toml`
+- [x] 6.1 Create `domains/inference/service/` with `pyproject.toml`
       (`arkhai-inference-service`, hatchling, `packages =
       ["src/inference_service"]`) declaring what
       `domains/apicredits/service/pyproject.toml` declares, with the same
@@ -1102,7 +1102,16 @@ payment authority").
       identity kit; a `Makefile` with `reinit` and `test`; `src/inference_service/settings.toml`
       under the environment prefix `INFERENCE_`; `tests/unit/` and
       `tests/integration/`.
-- [ ] 6.2 `src/inference_service/config.py`: `ISSUANCE_LABEL =
+      *Note:* `arkhai-inference-service` 0.1.0, declaring the API-credits
+      service's runtime dependencies plus `arkhai-inference-domain>=0.2.0`
+      (the label and offering mode, 6.2) and less `arkhai-api`, which no source
+      module imports once the label comes from the domain package; the tests
+      import it, so it is in the dev group. The identity kit keeps the
+      precedent's runtime reason. Locked with `uv lock --find-links .dist`, then
+      `scripts/uv_project.py lock`. The API-credits root's `middleware/` (the
+      `X-Admin-Key` gate) and its storefront-TOML admin-key fallback are not
+      copied (6.3).
+- [x] 6.2 `src/inference_service/config.py`: `ISSUANCE_LABEL =
       IssuanceLabel("inference")` (fulfilment prefix `inference-fulfillment.v1`
       by default), `CAPACITY_PROFILE = CapacityProfile(offering_mode="inference",
       pool_provider="inference", pool_id="default", pool_label=..., deliverable_modes
@@ -1110,7 +1119,11 @@ payment authority").
       `authority_config = AuthorityConfig(label, profile, database_url=settings.database_url,
       distribution="arkhai-inference-service", key_prefix="ik")` (D6; the
       inference delta's "A key is issued" scenario: the `ik` prefix).
-- [ ] 6.3 `src/inference_service/{container,main,identity}.py` and
+      *Note:* as planned, with the label `arkhai_inference.label.INFERENCE_LABEL`
+      (section 5's handoff) rather than a second `IssuanceLabel("inference")`,
+      the mode `INFERENCE_OFFERING_MODE`, and the pool id the resource-pools
+      kit's `DEFAULT_POOL_ID` (`"default"`), as the precedent spells it.
+- [x] 6.3 `src/inference_service/{container,main,identity}.py` and
       `controllers/{keys_controller,system_controller}.py`: the API-credits
       root's composition — engine, `run_migrations` then `initialize` at
       startup (D15: the family chain from its first step, on the inference
@@ -1119,16 +1132,38 @@ payment authority").
       storefront trusted as `seller` and the gateway as `service` (D14), and
       the routers forwarding the optional scope and terms fields as section
       2.6 does.
-- [ ] 6.4 `domains/inference/service/Dockerfile` on the API-credits service's
+      *Note:* the precedent's `container` and `identity` unchanged but for the
+      package name; the keys and system routers copied, so `consume` and
+      `verify` forward the optional `service` and `resource_id` as section 2
+      made them. Against the precedent, `main` has no shared-secret fallback:
+      `SiteAuthMiddleware` is always installed, and the lifespan refuses to
+      start (`MissingSiteIdentity`, before the engine is built) unless both a
+      signing credential and a trusted role are configured (6.6's startup
+      tests; a scenario in this change's inference delta). The precedent's
+      fallback admits every caller when no admin key is set either, which the
+      inference delta's "Bearer credential is delivery" requirement cannot
+      admit; the fallback exists for API-credits deployments provisioned before
+      identities, which inference has none of. Recorded under D14 in
+      `design.md`. Function-local imports: none.
+- [x] 6.4 `domains/inference/service/Dockerfile` on the API-credits service's
       pattern, with `INFERENCE_DATABASE_URL` defaulting to
       `sqlite:////app/data/inference.db` on its own named volume and a port
       distinct from the API-credits service's (inference delta "Inference state
       is isolated").
-- [ ] 6.5 Unit tests (`tests/unit/test_config.py`): the label, profile, prefix,
+      *Note:* the API-credits service's Dockerfile with the paths renamed,
+      `INFERENCE_DATABASE_URL=sqlite:////app/data/inference.db`, `VOLUME
+      ["/app/data"]`, and port 8086, the port the storefront's development file
+      already names. Not built here; `build-inference-service` is wired (6.7).
+- [x] 6.5 Unit tests (`tests/unit/test_config.py`): the label, profile, prefix,
       and distribution of 6.2; the profile's pool policy tags. The route-contract
       coverage test the API-credits service carries
       (`test_route_contract_coverage.py`), bound to this root's routers.
-- [ ] 6.6 Application-integration tests through the typed client
+      *Note:* unit, `tests/unit/test_config.py` (4 tests: label and fulfilment
+      prefix, profile, the pool tags resolved through
+      `resolve_pool_declarations`, prefix and distribution) and
+      `test_route_contract_coverage.py` (4 tests over the app's mounted
+      routes), passed. Its `starlette` import is declared in the dev group.
+- [x] 6.6 Application-integration tests through the typed client
       (`tests/integration/test_canonical_client.py`, the real app over ASGI
       through `AuthorityClient` for issuance and the gate's `TokensClient` for
       verify and consume, the quota registered through the site client as the
@@ -1147,13 +1182,39 @@ payment authority").
       secret presented where a marketplace signature is required is refused as
       unauthenticated (inference delta "Inference state is isolated", "Bearer
       credential is delivery, not identity or payment authority").
-- [ ] 6.7 Build and release: `domains/Makefile` and the root `Makefile` gain
+      *Note:* application integration, `test_canonical_client.py` (7 tests)
+      and `test_startup_refusal.py` (3), passed. The canonical-client tests run
+      the real app over `httpx.ASGITransport`, which sends no lifespan events:
+      the loader builds the container itself, as the precedent's does. Through
+      them, the storefront's `AuthorityClient`, the gate's `TokensClient`, and
+      the site kit's `SiteCapacityAdminClient` registering the quota
+      (`resource_type="inference"`, the mode the selling library's seed
+      registers). As planned, plus a consume of the verified charge after the
+      2,000,000 issuance; the top-up refusal is parametrised over other terms,
+      another service, and another resource. The digest comparison builds the
+      API-credits label locally, as that domain spells it, since this root may
+      not import it. The schema refusal is sent by hand, correctly signed: an
+      API-credits-labelled request is `422` on `schema`. The bearer case shows
+      only that a request carrying a key's secret as `Authorization` and no
+      marketplace signature is `401` on issuance and key lookup, the balance
+      unchanged: the authority reads no bearer header at all, so this is the
+      unsigned refusal; negotiation and purchase are the storefront's routes
+      and are not exercised here. `test_startup_refusal.py` drives the real
+      lifespan (`lifespan_context`, not over ASGI): with neither half and with
+      a credential but no trusted role it refuses and creates no database
+      file; with both it starts, creates the database, and serves `/health`.
+- [x] 6.7 Build and release: `domains/Makefile` and the root `Makefile` gain
       `dist-inference-service` (after `dist-api-authority`) and
       `test-inference-service` in the aggregates; `build-inference-service`
       (`arkhai:inference-service`) in the root `Makefile` and in `build`;
       `.github/workflows/tests.yml` gains `inference-service`; the manifest,
       publish workflow, and `RELEASING.md` gain `arkhai-inference-service`.
-- [ ] 6.8 **Verification.** `make test-inference-service` (unit and
+      *Note:* all entries. The root `dist-inference-service` builds the
+      identity, CI kits, inference domain, authority, gate, and client wheels
+      (the last two for its dev group); the root `test-inference` now builds and
+      requires the service's wheels too; `build` builds
+      `arkhai:inference-service` after the API-credits images.
+- [x] 6.8 **Verification.** `make test-inference-service` (unit and
       application integration through the typed client). `make test`. New
       project: `make lock PROJECTS=domains/inference/service` and `make
       check-packaging`. Once deployed, `e2e_inference_deal` exercises
@@ -1161,6 +1222,33 @@ payment authority").
       refusal; the digest-difference and bearer-refusal cases are proven in
       process and none is owed in the lane.
 
+      *Note:* `make test-inference-service` passed (18: unit 8, application
+      integration 10); `make lock`-equivalent for the new project
+      (`uv lock --find-links .dist`, then `scripts/uv_project.py lock`), `make
+      check-packaging`, `make check-comment-hygiene`, and `make check-change`
+      passed. `make -k test` passed every target but the provisioning unit test
+      that fails only within its suite (section 1's note); `anvil` was on
+      `PATH`. The image was not built. No end-to-end scenario exercises the
+      service yet: `e2e_inference_deal` is section 11's.
+      The compliance check found no layering or packaging failure. Fixed: the
+      6.6 note claimed the canonical-client tests ran the lifespan (they do not;
+      `ASGITransport` sends no lifespan events), the startup refusal was proven
+      only with both halves missing (now also a credential without trust, and a
+      successful start), the bearer note overstated what an unsigned request
+      shows, the startup refusal was promoted only as rationale (now a scenario
+      in this change's inference delta and its promotion row), a stale Makefile
+      target named in the Dockerfile, test import order, an undeclared
+      test-only `starlette`, and an unexplained local import in the startup
+      test. Declined: nothing.
+      *Handoff:* the service listens on 8086, persists to
+      `/app/data/inference.db`, and trusts callers only by role: section 10
+      supplies `INFERENCE_SITE_SIGNING_KEY_FILE`, `INFERENCE_SITE_PRINCIPAL`,
+      and `INFERENCE_TRUSTED_PRINCIPALS` (`seller` the storefront's eip191
+      identity, `service` the gateway's ed25519 one), or it refuses to start —
+      there is no admin-key fallback to lean on in the compose files. The quota
+      the storefront seeds is registered with `resource_type="inference"`. The
+      signed operation names are the family's (`credits_issue`,
+      `credits_key_consume`, ...), unchanged under the inference label.
 ## 7. Inference buyer plugin `arkhai-inference-buyer`
 
 Delivers the `market inference` command group: the buying contributions,
@@ -1663,6 +1751,7 @@ part that would need a code edit returns the change to implementation.
 | D12 — the buyer plugin's contributions | the `inference` capability's `spec.md` — "The buyer plugin discovers by model card under the inference schema"; the `api-family` capability's `architecture.md` — "Contribution bundles" (inference column) |
 | D13 — the withdrawn modules are recovered, not rewritten | `design.md` only; the resulting behaviour promotes under D3, D7, and D8 |
 | D14 — the gateway signs as the service role | the `inference` capability's `architecture.md` — "Role composition over the family kit" |
+| D14 (implementation) — the inference service has no shared-secret gate and refuses to start without its site identity | the `inference` capability's `spec.md` — "Bearer credential is delivery, not identity or payment authority" (scenario "The authority has no site identity"); its `architecture.md` — "Role composition over the family kit" |
 | D15 — the authority's database starts on the family chain | the `api-family` capability's `architecture.md` — "Current limits" (the existing migration-chain bullet, now true of a second domain) |
 | D16 — verification seams and the measurable image | the `inference` capability's `spec.md` — "The gateway and buyer carry verification seams for a later proof"; its `architecture.md` — "Verification seams"; the `api-family` capability's `architecture.md` — "The gateway" |
 | D17 — the three-party constraint on settlement composition | the `inference` capability's `spec.md` — "Alkahest is the only inference settlement mechanism" (the unmodified obligation list); its `architecture.md` — "Current limits" |

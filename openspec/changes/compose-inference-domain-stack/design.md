@@ -249,6 +249,17 @@ provenance, and the request charge; one `AlkahestBuyerStage`. Discovery
 filters compile from the served specification, which already pairs each rate
 bound with `rate_card_asset`, so the plugin encodes no pairing rule.
 
+The one stage is a plugin-local subclass of `AlkahestBuyerStage` that carries
+the purchase-time hook (D16), with a subclass of its buy session, because the
+buying library proposes from both: `buy` through the session's `propose`,
+`negotiate` through the stage's `prepare_selection`. The subclasses rely on the
+Alkahest stage's constructor and `propose` signature, which that library does
+not declare as an extension contract (implementation, section 7). The kit's
+credential panel shows the key, secret, base URL, and balance; the served model
+name travels only in the delivery's `connection_details`, which no buyer
+command renders, so the delta's "A buyer completes a purchase" is not met by
+the plugin alone and is open for review: showing it is a buying-library change.
+
 ### D13. The withdrawn modules are recovered, not rewritten
 
 `model_card.py`, `rate_card_guard.py`, and `materialization.py` are recovered

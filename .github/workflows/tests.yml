@@ -93,6 +93,7 @@ jobs:
           - { name: inference-domain,        dir: domains/inference, predist: true }
           - { name: inference-service,       dir: domains/inference/service, predist: true }
           - { name: inference-storefront,    dir: domains/inference/storefront, predist: true }
+          - { name: inference-buyer,         dir: domains/inference/buyer, predist: true }
     steps:
       - uses: actions/checkout@v4
       - name: Use the repository's declared Python version

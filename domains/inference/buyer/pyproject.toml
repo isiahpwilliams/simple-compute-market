@@ -1,0 +1,42 @@
+[project]
+name = "arkhai-inference-buyer"
+version = "0.1.0"
+license = "MIT"
+description = "Inference buyer schema plugin for the core `market` CLI: discover model-card listings, buy request credits, top up keys."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "typer>=0.12.0",
+  "arkhai-api-buying>=0.3.0",
+  "arkhai-api-buying-alkahest>=0.2.0",
+  "arkhai-inference-domain>=0.2.0",
+  "arkhai-core-buyer>=0.5.0",
+  "arkhai-core>=0.4.0",
+  "pydantic>=2",
+]
+
+# The `market` console script ships from arkhai-core-buyer; this package
+# contributes the validated inference market-domain contract.
+[project.entry-points."market.buyer_domains"]
+inference = "arkhai_inference_buyer.cli:domain"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0.0",
+  # The identity, registry-query, settlement-error, and requirement types the
+  # tests build, and the reader of the inference registry's filter
+  # specification. Test-only.
+  "arkhai-kit-identity==0.4.0",
+  "arkhai-core-registry-client>=0.12.0",
+  "arkhai-kit-settlement-runtime>=0.4.0",
+  "pyyaml>=6",
+  "packaging",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arkhai_inference_buyer"]
+
+[tool.pytest.ini_options]

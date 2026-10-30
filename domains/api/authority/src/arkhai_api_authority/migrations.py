@@ -275,6 +275,28 @@ def _migrate_reservation_release_requested_at(engine: Engine) -> None:
         )
 
 
+def _create_grant_terms(engine: Engine) -> None:
+    """Create ``grant_terms``; existing grants have no row and read as unpinned.
+
+    ``credit_grants`` is untouched, so an image that predates the table still
+    passes its grant-schema check against the migrated database.
+    """
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+            CREATE TABLE IF NOT EXISTS grant_terms (
+                grant_id INTEGER NOT NULL PRIMARY KEY,
+                accepted_terms TEXT NOT NULL,
+                terms_digest VARCHAR NOT NULL,
+                request_charge INTEGER NOT NULL,
+                FOREIGN KEY(grant_id) REFERENCES credit_grants (id)
+            )
+            """
+            )
+        )
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         "20260731_001_apicredits_schema_baseline",
@@ -295,5 +317,9 @@ _MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         "20261005_005_reservation_release_requested_at",
         _migrate_reservation_release_requested_at,
+    ),
+    Migration(
+        "20261030_006_grant_terms",
+        _create_grant_terms,
     ),
 )

@@ -14,7 +14,10 @@ from arkhai_api_authority.migrations import (
     apply_schema_migrations,
     check_schema_version,
 )
+from arkhai_api_authority import migrations as migrations_module
 from arkhai_api_authority.models import Base
+from market_resource_pools.db import Base as PoolsBase
+from market_site.db import Base as SiteBase
 
 
 def _sqlite_memory_engine():
@@ -67,6 +70,7 @@ class TestRunMigrationsFreshBootstrap:
             ("20260815_003_fulfillment_grants",),
             ("20260922_004_pool_advertisement_and_backing",),
             ("20261005_005_reservation_release_requested_at",),
+            ("20261030_006_grant_terms",),
         ]
 
     def test_a_reservation_table_from_before_release_timing_gains_the_column(self):
@@ -107,7 +111,7 @@ class TestRunMigrationsIsIdempotent:
             count = connection.execute(
                 text("SELECT COUNT(*) FROM schema_migrations")
             ).scalar()
-        assert count == 5
+        assert count == 6
 
 
 class TestAdoptingAPreCreateAllOnlyDatabase:
@@ -327,3 +331,53 @@ def test_failed_migration_is_not_recorded_and_prior_success_is_preserved(monkeyp
     assert calls == ["first", "fail"]
 
 
+class TestGrantTermsUpgrade:
+    """A database at the previous chain head gains ``grant_terms`` and keeps its grants unpinned."""
+
+    def _previous_head(self, monkeypatch):
+        engine = _sqlite_memory_engine()
+        previous = tuple(m for m in migrations_module._MIGRATIONS if m.id != "20261030_006_grant_terms")
+        Base.metadata.create_all(
+            bind=engine, tables=[t for t in Base.metadata.sorted_tables if t.name != "grant_terms"]
+        )
+        PoolsBase.metadata.create_all(bind=engine)
+        SiteBase.metadata.create_all(bind=engine)
+        with monkeypatch.context() as patched:
+            patched.setattr(migrations_module, "_MIGRATIONS", previous)
+            apply_schema_migrations(engine)
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO api_keys (key_id, secret_hash, status, balance, created_at, updated_at) "
+                "VALUES ('ak_old', 'hash', 'active', 5, '2026-10-01', '2026-10-01')"
+            ))
+            connection.execute(text(
+                "INSERT INTO credit_grants (key_id, fulfillment_id, service, resource_id, quantity, reason, granted_at) "
+                "VALUES ('ak_old', 'api-credit-fulfillment.v1:old', 'weather-api', 'weather-quota', 5, 'issuance', '2026-10-01')"
+            ))
+        return engine, previous, migrations_module
+
+    def test_the_migration_creates_the_table_and_existing_grants_read_unpinned(self, monkeypatch):
+        engine, _, _ = self._previous_head(monkeypatch)
+        assert "grant_terms" not in inspect(engine).get_table_names()
+
+        # The chain alone, without create_all, so the step itself creates the table.
+        apply_schema_migrations(engine)
+        assert {c["name"] for c in inspect(engine).get_columns("grant_terms")} == set(
+            Base.metadata.tables["grant_terms"].columns.keys()
+        )
+        run_migrations(engine)
+
+        assert "grant_terms" in inspect(engine).get_table_names()
+        with engine.begin() as connection:
+            assert connection.execute(text("SELECT COUNT(*) FROM grant_terms")).scalar() == 0
+        check_schema_version(engine)
+
+    def test_the_previous_chain_still_validates_the_migrated_schema(self, monkeypatch):
+        engine, previous, migrations_module = self._previous_head(monkeypatch)
+        run_migrations(engine)
+
+        # The previous image checks the grant table's exact columns and its own
+        # chain head, both of which the new step leaves as they were.
+        monkeypatch.setattr(migrations_module, "_MIGRATIONS", previous)
+        check_schema_version(engine)
+        apply_schema_migrations(engine)

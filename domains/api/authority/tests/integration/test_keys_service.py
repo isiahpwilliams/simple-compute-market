@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from arkhai_api.issuance import KeyDisposition, fulfillment_id, issuance_request
+from arkhai_api.issuance import KeyDisposition, accepted_terms_digest, fulfillment_id, issuance_request
 from arkhai_api_authority import IssuanceError, KeysService, derive_key_id, initialize, run_migrations
 from market_identity import Identity, IdentityScheme
 from market_site.ledger import CapacityLedgerService, UndeclaredOfferingModeError
@@ -42,6 +42,8 @@ def _issue(
     capacity_reservation_id: str | None = None,
     issuance_service: str = "test-service",
     resource_id: str = "svc-quota",
+    accepted_terms: dict | None = None,
+    request_charge: int | None = None,
 ) -> dict:
     if buyer_scheme is None or buyer_id is None:
         raise ValueError("canonical owner is required")
@@ -54,6 +56,7 @@ def _issue(
         resource_id=resource_id,
         quantity=quantity,
         key=KeyDisposition(mode=key_mode, key_id=key_id),
+        **_terms(accepted_terms, request_charge),
     )
     return service.issue(
         fulfillment_id=request.fulfillment_id,
@@ -67,7 +70,20 @@ def _issue(
         key_id=key_id,
         request_digest=request.request_digest,
         capacity_reservation_id=capacity_reservation_id,
+        accepted_terms=request.accepted_terms,
+        terms_digest=request.terms_digest,
+        request_charge=request.request_charge,
     )
+
+
+def _terms(accepted_terms: dict | None, request_charge: int | None) -> dict:
+    if accepted_terms is None:
+        return {}
+    return {
+        "accepted_terms": accepted_terms,
+        "terms_digest": accepted_terms_digest(accepted_terms),
+        "request_charge": request_charge,
+    }
 
 
 def _composed(config=CONFIG) -> tuple[CapacityLedgerService, KeysService, object]:
@@ -509,3 +525,132 @@ def test_a_fresh_reservation_claims_the_profiles_mode_and_the_result_carries_its
     assert reservation["offering_mode"] == "inference"
     assert issued["schema"] == config.label.issuance_result_schema
     assert issued["key_id"].startswith(f"{config.key_prefix}_")
+
+
+# Accepted terms and key scope
+
+TERMS = {"attestation": None, "rate_card": {"asset": "USD/6", "request_credits": 1}}
+REPRICED = {"attestation": None, "rate_card": {"asset": "USD/6", "request_credits": 10}}
+
+
+def _pinned_key(service, negotiation_id="0xp1", **overrides):
+    fields = {"accepted_terms": TERMS, "request_charge": 1, **overrides}
+    return _issue(service, negotiation_id=negotiation_id, quantity=10, key_mode="new", **BUYER, **fields)
+
+
+def _secret_of(result) -> str:
+    return result["secret"]
+
+
+def test_a_pinned_issuance_stores_its_terms_and_its_result_carries_none(service):
+    pinned = _pinned_key(service)
+    unpinned = _issue(service, negotiation_id="0xu1", quantity=10, key_mode="new", **BUYER)
+
+    assert set(pinned) == set(unpinned)
+    assert not {"accepted_terms", "terms_digest", "request_charge"} & set(pinned)
+    grant = service.list_grants(pinned["key_id"])[0]
+    assert (grant["accepted_terms"], grant["terms_digest"], grant["request_charge"]) == (
+        TERMS, accepted_terms_digest(TERMS), 1,
+    )
+    assert "accepted_terms" not in service.list_grants(unpinned["key_id"])[0]
+
+
+def test_verify_returns_a_pinned_keys_terms_and_nothing_for_an_unpinned_key(service):
+    pinned = _pinned_key(service)
+    unpinned = _issue(service, negotiation_id="0xu1", quantity=10, key_mode="new", **BUYER)
+
+    verified = service.verify(key_id=pinned["key_id"], secret=_secret_of(pinned))
+    assert verified == {
+        "valid": True, "status": "active", "balance": 10,
+        "accepted_terms": TERMS, "terms_digest": accepted_terms_digest(TERMS), "request_charge": 1,
+    }
+    assert service.verify(key_id=unpinned["key_id"], secret=_secret_of(unpinned)) == {
+        "valid": True, "status": "active", "balance": 10,
+    }
+
+
+def test_a_terms_digest_that_does_not_match_its_payload_is_refused(service, ledger):
+    with pytest.raises(IssuanceError) as exc:
+        service.issue(
+            fulfillment_id=fulfillment_id(LABEL, "0xbad"), negotiation_id="0xbad",
+            owner_scheme=BUYER["buyer_scheme"], owner_id=BUYER["buyer_id"],
+            service="test-service", resource_id="svc-quota", quantity=1, key_mode="new",
+            request_digest="sha256:" + "0" * 64, accepted_terms=TERMS,
+            terms_digest="sha256:" + "1" * 64, request_charge=1,
+        )
+    assert exc.value.reason == "terms_digest_mismatch"
+    assert ledger.snapshot()[0]["available_units"] == 1000
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"issuance_service": "other-service"},
+        {"resource_id": "other-quota"},
+        {"accepted_terms": REPRICED, "request_charge": 10},
+        {"accepted_terms": None, "request_charge": None},
+    ],
+    ids=["service", "resource", "terms", "unpinned"],
+)
+def test_a_top_up_outside_the_first_grants_scope_is_refused_and_changes_nothing(service, ledger, changed):
+    key = _pinned_key(service)
+    fields = {"accepted_terms": TERMS, "request_charge": 1, **changed}
+
+    with pytest.raises(IssuanceError) as exc:
+        _issue(service, negotiation_id="0xp2", quantity=5, key_mode="existing", key_id=key["key_id"], **BUYER, **fields)
+
+    assert exc.value.reason == "key_out_of_scope"
+    assert len(service.list_grants(key["key_id"])) == 1
+    assert service.get_key(key["key_id"])["balance"] == 10
+    assert ledger.snapshot()[0]["available_units"] == 990
+
+
+def test_a_top_up_inside_the_scope_is_granted(service):
+    key = _pinned_key(service)
+    topped = _issue(service, negotiation_id="0xp2", quantity=5, key_mode="existing", key_id=key["key_id"], **BUYER, accepted_terms=TERMS, request_charge=1)
+    assert topped["balance"] == 15
+
+
+def test_an_unpinned_key_admits_only_unpinned_top_ups(service):
+    key = _issue(service, negotiation_id="0xu1", quantity=10, key_mode="new", **BUYER)
+    assert _issue(service, negotiation_id="0xu2", quantity=5, key_mode="existing", key_id=key["key_id"], **BUYER)["balance"] == 15
+    with pytest.raises(IssuanceError) as exc:
+        _issue(service, negotiation_id="0xu3", quantity=5, key_mode="existing", key_id=key["key_id"], **BUYER, accepted_terms=TERMS, request_charge=1)
+    assert exc.value.reason == "key_out_of_scope"
+
+
+def test_a_replay_with_other_terms_conflicts(service):
+    _pinned_key(service)
+    with pytest.raises(IssuanceError) as exc:
+        _pinned_key(service, accepted_terms=REPRICED, request_charge=10)
+    assert exc.value.reason == "fulfillment_conflict"
+    assert _pinned_key(service)["already_issued"] is True
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [{"service": "other-service"}, {"resource_id": "other-quota"}, {"service": "other-service", "resource_id": "svc-quota"}],
+)
+def test_verify_and_consume_outside_the_keys_scope_refuse_uncharged(service, scope):
+    key = _pinned_key(service)
+
+    assert service.verify(key_id=key["key_id"], secret=_secret_of(key), **scope) == {
+        "valid": False, "status": "key_out_of_scope", "balance": 0,
+    }
+    assert service.consume(key_id=key["key_id"], amount=1, **scope) == {
+        "ok": False, "reason": "key_out_of_scope", "balance": 0,
+    }
+    assert service.get_key(key["key_id"])["balance"] == 10
+    assert service.list_usage(key["key_id"]) == []
+
+
+def test_verify_and_consume_inside_or_without_a_scope_admit_and_charge(service):
+    key = _pinned_key(service)
+    scope = {"service": "test-service", "resource_id": "svc-quota"}
+
+    assert service.verify(key_id=key["key_id"], secret=_secret_of(key), **scope)["valid"] is True
+    assert service.consume(key_id=key["key_id"], amount=1, **scope) == {"ok": True, "consumed": 1, "balance": 9}
+    assert service.consume(key_id=key["key_id"], amount=1) == {"ok": True, "consumed": 1, "balance": 8}
+    assert service.verify(key_id=key["key_id"], secret="wrong", **scope) == {
+        "valid": False, "status": "active", "balance": 8,
+    }

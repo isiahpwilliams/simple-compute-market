@@ -93,3 +93,29 @@ def test_the_response_is_bound_to_its_label_and_carries_the_secret():
 def test_a_gate_facing_response_refuses_a_body_it_does_not_declare(model, body):
     with pytest.raises(ValidationError):
         model.model_validate(body)
+
+
+# Optional key scope and pinned terms
+
+
+def test_unset_scope_and_terms_are_omitted_from_the_bodies():
+    assert models.VerifyRequest(secret="s").model_dump(mode="json") == {"secret": "s"}
+    assert models.ConsumeRequest(amount=1).model_dump(mode="json") == {"amount": 1, "idempotency_key": None}
+    assert models.VerifyResponse(valid=True, status="active", balance=3).model_dump(mode="json") == {
+        "valid": True, "status": "active", "balance": 3,
+    }
+
+
+def test_set_scope_and_terms_are_carried():
+    scoped = {"service": "svc", "resource_id": "quota"}
+    assert models.VerifyRequest(secret="s", **scoped).model_dump(mode="json") == {"secret": "s", **scoped}
+    assert models.ConsumeRequest(amount=1, **scoped).model_dump(mode="json")["service"] == "svc"
+    pinned = {"accepted_terms": {"rate_card": {}}, "terms_digest": "sha256:" + "a" * 64, "request_charge": 1}
+    response = models.VerifyResponse.model_validate({"valid": True, "status": "active", "balance": 3, **pinned})
+    assert response.model_dump(mode="json") == {"valid": True, "status": "active", "balance": 3, **pinned}
+
+
+@pytest.mark.parametrize("charge", [0, 2**53])
+def test_a_verified_charge_outside_the_ledger_domain_is_refused(charge):
+    with pytest.raises(ValidationError):
+        models.VerifyResponse.model_validate({"valid": True, "status": "active", "balance": 3, "request_charge": charge})

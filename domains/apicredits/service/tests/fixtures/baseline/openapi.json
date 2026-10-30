@@ -214,6 +214,32 @@
               }
             ],
             "title": "Idempotency Key"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
           }
         },
         "required": [
@@ -1005,10 +1031,36 @@
       },
       "VerifyRequest": {
         "properties": {
+          "resource_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
           "secret": {
             "minLength": 1,
             "title": "Secret",
             "type": "string"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
           }
         },
         "required": [

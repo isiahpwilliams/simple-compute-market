@@ -136,6 +136,7 @@ jobs:
             vms-storefront: ['domains/vms/storefront/**', '.github/workflows/publish-pypi.yml']
             apicredits-domain: ['domains/apicredits/pyproject.toml', 'domains/apicredits/src/**', 'domains/apicredits/tests/**', '.github/workflows/publish-pypi.yml']
             inference-domain: ['domains/inference/pyproject.toml', 'domains/inference/src/**', 'domains/inference/tests/**', '.github/workflows/publish-pypi.yml']
+            inference-storefront: ['domains/inference/storefront/**', '.github/workflows/publish-pypi.yml']
             apicredits-buyer: ['domains/apicredits/buyer/**', '.github/workflows/publish-pypi.yml']
             apicredits-storefront: ['domains/apicredits/storefront/**', '.github/workflows/publish-pypi.yml']
             apicredits-service: ['domains/apicredits/service/**', '.github/workflows/publish-pypi.yml']
@@ -210,6 +211,7 @@ jobs:
             {"key": "vms-storefront",         "path": "domains/vms/storefront",           "dist": "arkhai-vms-storefront", "wheel_only": true},
             {"key": "apicredits-domain",       "path": "domains/apicredits",               "dist": "arkhai-apicredits-domain"},
             {"key": "inference-domain",        "path": "domains/inference",                "dist": "arkhai-inference-domain"},
+            {"key": "inference-storefront",    "path": "domains/inference/storefront",      "dist": "arkhai-inference-storefront"},
             {"key": "apicredits-buyer",        "path": "domains/apicredits/buyer",          "dist": "arkhai-apicredits-buyer", "wheel_only": true},
             {"key": "apicredits-storefront",   "path": "domains/apicredits/storefront",     "dist": "arkhai-apicredits-storefront"},
             {"key": "apicredits-service",      "path": "domains/apicredits/service",        "dist": "arkhai-apicredits-service"}

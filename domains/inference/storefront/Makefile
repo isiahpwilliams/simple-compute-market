@@ -1,0 +1,29 @@
+# Every uv command in this Makefile uses the repository's declared Python version.
+export UV_PYTHON := $(or $(shell cat ../../../.python-version 2>/dev/null),$(error ../../../.python-version not found))
+
+.PHONY: help init reinit test serve build clean
+
+.DEFAULT_GOAL := help
+
+help: ## Show available commands
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+DIST_DIR ?= ../../../.dist
+
+init: reinit ## Install dependencies using uv
+	@command -v uv >/dev/null 2>&1 || { echo "uv is not installed. Install from https://docs.astral.sh/uv/"; exit 1; }
+
+reinit: ## Force-reinstall all internal wheel dependencies. Run make dist-* from the monorepo root first.
+	python3 ../../../scripts/uv_project.py reinit
+
+test: reinit ## Run the test suite
+	uv run --find-links $(DIST_DIR) pytest tests -q
+
+serve: ## Run the storefront locally
+	uv run --find-links $(DIST_DIR) inference-storefront serve
+
+build: ## Build the wheel into the shared .dist/
+	uv build --wheel --out-dir $(DIST_DIR)
+
+clean: ## Remove build artifacts
+	rm -rf build dist *.egg-info

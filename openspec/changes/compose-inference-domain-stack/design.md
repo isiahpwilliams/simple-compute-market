@@ -196,9 +196,18 @@ charge (plan review 06 F3).
 
 The storefront's `SettlementStageTable` and the buyer's hold one stage,
 Alkahest. Startup compares the configured settlement priority against the
-table and refuses any mechanism the table lacks, naming it; the kit itself
-ignores an unknown mechanism, so the refusal is the new piece. Neither
-inference wheel declares the fiat payments distribution.
+table and refuses any mechanism the table lacks, naming it. Resolving the
+seller settlement registry also refuses a mechanism it does not register
+(implementation found this; the plan assumed it was ignored), so the
+storefront's refusal adds the named heading beside its other startup
+problems rather than the only refusal. Neither inference wheel declares the
+fiat payments distribution.
+
+The issuance label and the accepted-terms payload live in the domain package
+(`arkhai_inference.label`, `arkhai_inference.listings.accepted_terms`), not in
+the storefront root: the service root composes the same label and the gateway
+executable hands the same current terms to its verification hook, and two
+composition roots cannot import each other (implementation, section 5).
 
 ### D10. Compose files, identities, and env targets mirror API credits
 

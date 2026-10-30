@@ -11,15 +11,41 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+from arkhai_api.issuance import MAX_REQUEST_CHARGE
 from market_core.schemas import SettlementOption, SettlementSelection
 
 from arkhai_inference.listings.models import (
     MAX_BASE_UNIT_AMOUNT,
+    InferenceRateCard,
     coerce_resource_dict,
     resource_is_inference,
 )
 
 UNIT_RATE = 1
+
+#: The rate-card fields that price metered consumption rather than a request.
+METERED_RATE_FIELDS = (
+    "prompt_credits_per_million",
+    "cached_prompt_credits_per_million",
+    "completion_credits_per_million",
+    "image_credits_per_unit",
+)
+
+
+def non_request_priced_rate(card: InferenceRateCard) -> str | None:
+    """The field that keeps ``card`` from being charged a fixed amount per request, or ``None``.
+
+    A metered rate must be zero, since nothing meters consumption. The request
+    charge must be at least one, because the authority's ``consume`` refuses
+    less, and at most ``MAX_REQUEST_CHARGE``, because it enters the issuance
+    digest through canonical JSON, whose integers end there.
+    """
+    for field in METERED_RATE_FIELDS:
+        if getattr(card, field):
+            return field
+    if not 1 <= card.request_credits <= MAX_REQUEST_CHARGE:
+        return "request_credits"
+    return None
 
 
 def _settlement_options(order: dict[str, Any]) -> list[SettlementOption]:

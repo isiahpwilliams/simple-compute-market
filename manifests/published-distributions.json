@@ -299,6 +299,11 @@
       "dist": "arkhai-inference-domain"
     },
     {
+      "key": "inference-storefront",
+      "path": "domains/inference/storefront",
+      "dist": "arkhai-inference-storefront"
+    },
+    {
       "key": "apicredits-buyer",
       "path": "domains/apicredits/buyer",
       "dist": "arkhai-apicredits-buyer",

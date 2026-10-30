@@ -761,7 +761,7 @@ projection names the served model and pins the accepted terms", "The
 delivery's public result carries the accepted card", "Only request-priced rate
 cards are publishable without metered consumption").
 
-- [ ] 5.1 Create `domains/inference/storefront/` with `pyproject.toml`
+- [x] 5.1 Create `domains/inference/storefront/` with `pyproject.toml`
       (`arkhai-inference-storefront`, hatchling, `packages =
       ["src/inference_storefront"]`, console script `inference-storefront`,
       entry point `market.storefront_domains` → `inference =
@@ -774,7 +774,26 @@ cards are publishable without metered consumption").
       and `tests/unit/` and `tests/integration/` roots. The architecture check
       reads `domains/inference/storefront` as an executable through its role
       word.
-- [ ] 5.2 `src/inference_storefront/container.py`: `SELLING_CONTRIBUTIONS =
+      *Note:* `arkhai-inference-storefront` 0.1.0, declaring the API-credits
+      storefront's runtime dependencies less the payments stage, with
+      `arkhai-inference-domain>=0.2.0` in place of the API-credits domain and
+      `arkhai-api>=0.2.0`, which it imports directly; its dev group adds only the
+      site client. The first lock was made with `uv lock --find-links .dist`,
+      then `scripts/uv_project.py lock` normalised it. `make check-architecture`
+      reads the project as an `inference` executable and passes. The role's
+      modules were copied from `domains/apicredits/storefront/src/` and renamed;
+      function-local imports the copy carried were moved to module level where
+      the move works (`domain_runtime`, `uvicorn` in `server`, the config import
+      in `credits_service_client`, two in `utils/config`); the one left local,
+      `settlement_composition` in `utils/config.settlement_publication_defaults`,
+      is circular (that module imports the container, which imports config) and
+      says so; the `cli` imports of the storefront's own modules stay local
+      because they must follow `--config`, as each says, and the one that does
+      not resolve settings moved to module level. The API-credits root's
+      retired-settings refusal is not copied: this storefront renamed nothing.
+      `rich` and `alkahest-py`, declared by the precedent without an import,
+      are not declared (the Alkahest kit declares `alkahest-py`).
+- [x] 5.2 `src/inference_storefront/container.py`: `SELLING_CONTRIBUTIONS =
       SellingContributions(label=IssuanceLabel("inference"), kind=INFERENCE_KIND,
       offering_mode="inference", contribution_id="inference",
       table_prefix="inference", listing_schema=InferenceListing,
@@ -787,7 +806,14 @@ cards are publishable without metered consumption").
       `SellingSettlementComposition` over that table, its obligation list
       unmodified (D17; inference delta "The storefront's settlement composition
       MUST be the kit's obligation list unmodified").
-- [ ] 5.3 `src/inference_storefront/model_card.py`, recovered from the
+      *Note:* as planned, the kind and mode from `arkhai_inference.listings`.
+      Against the plan, the label is `arkhai_inference.label.INFERENCE_LABEL`, a
+      new module of the domain package beside its vocabulary, because the service
+      root (6.2) composes the same label and two roots cannot import each other
+      (the API-credits label lives in `arkhai_apicredits.label` for the same
+      reason). `SELLER_STAGES` holds `ALKAHEST_STAGE` alone; the settlement
+      composition is the API-credits root's, unchanged in shape, over that table.
+- [x] 5.3 `src/inference_storefront/model_card.py`, recovered from the
       withdrawn branch at f76a06ce3 and adapted to the kit's
       `PublicationMapping` signature (D13, D7): a `PublishFromQuotaRequest`
       subclass of the kit's with a `model_card` object, and
@@ -797,7 +823,18 @@ cards are publishable without metered consumption").
       so a card cannot name another resource than its quota backs; the kit's
       `ListingSeed` passes the seed's `[seed.model_card]` table through as that
       field.
-- [ ] 5.4 `src/inference_storefront/container.py` (or `issuance.py` beside
+      *Note:* `model_card.py`: `PublishFromQuotaRequest` adds `model_card:
+      dict`; `publication_mapping` overwrites the three quota fields rather than
+      comparing them, keeps the withdrawn module's `owner`/`name` derivation of
+      `model_id`, and returns the validated card as JSON without `None` fields.
+      The withdrawn module's call to the guard is dropped: the guard is the
+      bundle's `publication_guards` entry. The seed's `[seed.model_card]` reaches
+      the mapping as `request["model_card"]` once `seed_settings` returns the
+      table as plain data; `tests/unit/test_seed_configuration.py` reads the
+      development file's `[seed]` through the mapping, the guard, the
+      projection, and the Alkahest stage's seed escrow (unit), but no test
+      runs `ListingSeed` itself.
+- [x] 5.4 `src/inference_storefront/container.py` (or `issuance.py` beside
       it): `issuance_projection(listing_resource)` returning
       `IssuanceSubject(service=card.served_model_name,
       resource_id=card.resource_id, endpoint=card.endpoint.base_url,
@@ -806,7 +843,13 @@ cards are publishable without metered consumption").
       payload>, request_charge=card.rate_card.request_credits)` (D1; review 02
       F1; review 04 F1 and F2; inference delta "The issuance projection names
       the served model and pins the accepted terms").
-- [ ] 5.5 `src/inference_storefront/rate_card_guard.py`, recovered from the
+      *Note:* `issuance.py`. Against the plan, the terms payload is built by
+      `arkhai_inference.listings.accepted_terms(card)` — the rate card and the
+      attestation (or `None`) as JSON — in the domain package, because the
+      gateway executable (8.x) hands the same current terms to its verification
+      hook and cannot import this root; the digest is the family's
+      `accepted_terms_digest`.
+- [x] 5.5 `src/inference_storefront/rate_card_guard.py`, recovered from the
       withdrawn branch at f76a06ce3 and adapted to the kit's `PublicationGuard`
       signature (D13, D8): one function returning why a card whose prompt,
       cached-prompt, completion, or image rate is non-zero may not be
@@ -822,7 +865,14 @@ cards are publishable without metered consumption").
       test in `domains/inference/tests/`, because the gateway executable (8.3)
       applies the same rule and two composition roots cannot import each other
       (D8).
-- [ ] 5.6 `src/inference_storefront/materialization.py`, recovered from the
+      *Note:* `non_request_priced_rate` and `METERED_RATE_FIELDS` are in
+      `arkhai_inference.listings.pricing`, bounded by the family's
+      `MAX_REQUEST_CHARGE`; `domains/inference/tests/test_request_priced.py`
+      covers it (unit). `rate_card_guard.request_priced_guard` names the field in
+      its refusal. `arkhai-inference-domain` is 0.2.0 for the new names, requiring
+      `arkhai-api>=0.2.0`; no other project's lock records the domain, so only
+      its own and the storefront's were relocked.
+- [x] 5.6 `src/inference_storefront/materialization.py`, recovered from the
       withdrawn branch at f76a06ce3 and reduced to the kit's
       `PublicResultExtension` (D13, D3): `public_result_extension(listing_resource,
       result, delivery)` returning, under the one key `materialization`, the
@@ -836,13 +886,23 @@ cards are publishable without metered consumption").
       accepted-rate-card repository, migration, and artifact slot are not
       recovered: the kit records the accepted listing itself (D3 "No
       acceptance hook is needed").
-- [ ] 5.7 `src/inference_storefront/startup_refusal.py`: the API-credits
+      *Note:* `materialization.py`, as planned; the withdrawn repository,
+      migration, and artifact slot are not recovered.
+- [x] 5.7 `src/inference_storefront/startup_refusal.py`: the API-credits
       root's refusals (retired settings, capacity configuration) plus one new
       heading refusing any `[settlement].priority` entry `SELLER_STAGES` lacks,
       naming the mechanism, before the signer is resolved or a loop starts
       (D9; inference delta scenario "Another mechanism is configured"). The
       kit ignores an unknown mechanism, so this refusal is the new piece.
-- [ ] 5.8 `src/inference_storefront/{server,domain_runtime,cli,settlement_composition}.py`
+      *Note:* the new heading is `MECHANISM_HEADING`, checked with the others
+      before the signer; `design.md` D9 is amended. The design's premise that the kit ignores an unknown
+      mechanism does not hold here: resolving the seller settlement registry
+      already refuses one (`SettlementConfigurationError: uninstalled settlement
+      mechanism`), at `validate_mechanism_configuration`, which also runs before
+      the signer. The refusal is kept as planned, since it names the mechanism
+      under the storefront's own heading with any other startup problem; its
+      docstring says the registry refuses it too.
+- [x] 5.8 `src/inference_storefront/{server,domain_runtime,cli,settlement_composition}.py`
       and `controllers/`: the composition the API-credits root performs —
       services, the negotiation runtime with the kit's
       `default_seller_round_hook` (the proposal's "the kit's seller round
@@ -855,7 +915,13 @@ cards are publishable without metered consumption").
       `pool_id="default"`, the Alkahest stage's seed escrow settings, and the
       storefront's own SQLite database path (D6; inference delta "Inference
       state is isolated").
-- [ ] 5.9 `domains/inference/storefront/storefront.inference.toml`: the
+      *Note:* copied, with inference values: the registry resolves
+      `INFERENCE_OFFERING_MODE`, the seed passes `pool_id="default"` and the
+      Alkahest stage's seed settings, and the database is the storefront's own
+      `db_path`. `cli publish` takes `--model-card <file.json>` in place of the
+      API-credits service fields. The settle request is `InferenceSettleRequest`
+      over the family's.
+- [x] 5.9 `domains/inference/storefront/storefront.inference.toml`: the
       development configuration on `storefront.credits.toml`'s pattern with
       `[settlement].priority = ["alkahest.v1"]` and no payments section, the
       inference registry and the inference authority as its `[registry]`,
@@ -865,12 +931,23 @@ cards are publishable without metered consumption").
       image rates zero, endpoint the gateway's base URL) (D10's storefront
       file; D13; the "Quota as a sales cap" risk). Identity pins are filled in
       section 10 when the identities exist.
-- [ ] 5.10 `domains/inference/storefront/Dockerfile` on the API-credits
+      *Note:* the withdrawn seed, with three changes: the rate card gains its
+      required `asset` (the seed's token), `total_units` is 100,000,000, and the
+      authority's URL is `http://inference-service:8086` (the port 6.4 gives
+      the service). The identity, wallet, admin, registry-authority, and
+      authority pins are left empty, saying why, for section 10: the withdrawn
+      file's pins named identities this branch does not have. The gateway base
+      URL is the withdrawn file's (`http://inference-gateway:8105/v1`); section
+      8 or 10 may change it.
+- [x] 5.10 `domains/inference/storefront/Dockerfile` on the API-credits
       storefront's pattern: lock-driven install through `uv_project.py image`
       and `install-wheel`, no source copy, `XDG_CONFIG_HOME=/etc`, its own
       `/app/data` volume (inference delta "Inference state is isolated";
       `BUILD_AND_PACKAGING.md`, "Images").
-- [ ] 5.11 Unit tests (`tests/unit/`): the contribution values of 5.2
+      *Note:* the API-credits storefront's Dockerfile with the paths renamed
+      and `VOLUME ["/app/data"]`; not built here (section 10 adds the build
+      target).
+- [x] 5.11 Unit tests (`tests/unit/`): the contribution values of 5.2
       (`test_contributions.py`); the publication mapping fills the three
       quota fields and refuses a card naming another resource
       (`test_model_card.py`); the projection's digested service is the served
@@ -891,7 +968,21 @@ cards are publishable without metered consumption").
       `domains/bare_metal/storefront/tests/test_import_boundaries.py`'s pattern
       (`test_import_boundaries.py`; inference delta scenario "A sibling domain
       is imported").
-- [ ] 5.12 Application-integration tests through the typed client
+      *Note:* unit, 29 tests in `tests/unit/`, as planned, plus
+      `test_contributions.py` checking the hooks are the bundle's and
+      `test_seed_configuration.py` (5.3). `test_settlement_composition.py`
+      reads the installed project's requirements through `importlib.metadata`
+      — an editable install, so the pyproject's declarations rather than a
+      built wheel's; it does not test that the settlement composition's
+      obligation list is the kit's unmodified, which holds because the root
+      passes none of its own. The guard's tests check its return value; that
+      publication refuses before canonicalization rests on the listing
+      service calling the guards first, which no inference test drives. `test_import_boundaries.py`
+      walks every module's AST (so `TYPE_CHECKING` and function-local imports
+      count) for `arkhai_apicredits`, `apicredits_`, and both payments packages.
+      Domain-package unit tests: `test_request_priced.py` and
+      `test_label_and_terms.py`.
+- [x] 5.12 Application-integration tests through the typed client
       (`tests/integration/`, the real storefront app over ASGI with the
       storefront client and a scripted authority at the external boundary):
       a seller publishes a model-card listing from its quota and the registry
@@ -907,7 +998,38 @@ cards are publishable without metered consumption").
       reprices between acceptance and fulfillment"); the issuance request the
       storefront sends carries the accepted terms, digest, and charge and the
       `inference` label (`test_issuance_request.py`).
-- [ ] 5.13 Build and release: `domains/inference/Makefile` becomes the
+      *Note:* seven tests; **partly met.** Application integration through the typed client —
+      the real app and lifespan over `httpx.ASGITransport`, the seller's
+      `ListingClient` and a public `StorefrontClient`, the quota site's runtime
+      and the registries replaced at the container — for
+      `test_publish_reconcile.py` (published listing and its registry payload
+      carry the bound card; a zero quota is `400 no sellable units` with nothing
+      published; a sold-out listing closes and reopens, and the registry is sent
+      the reopening, driven by calling the publication's capacity-change
+      methods directly rather than stepping `capacity-events` through the
+      client), and `test_rate_card_refusal.py` (`400` naming
+      `rate_card.prompt_credits_per_million`, no listing, nothing published).
+      `test_startup_refusal.py` drives the real lifespan with no client: a
+      priority naming `arkhai.payments.v1` refuses naming it, and no database
+      file is created. **Below the plan's level:**
+      `test_issuance_request.py` and `test_materialization_delivery.py` call the
+      storefront's fulfillment hook directly with verified evidence carrying the
+      accepted card, a real SQLite database, and the real `AuthorityClient`
+      against a scripted authority at its HTTP boundary — the composition
+      root's fulfillment hook driven directly, not a negotiated and settled
+      deal through the app, which needs an Alkahest escrow; this is no level
+      `TESTING.md` names. They show the request on the wire carries
+      the label's schema, an `inference-fulfillment.v1` id, the served model,
+      the accepted terms, their digest, the charge, and a request digest equal
+      to `issuance_request_digest` under the inference label; and that the
+      public result's materialization reflects the card the evidence carries.
+      The scenario "The seller reprices between acceptance and fulfillment"
+      is therefore not proven here at any level: that the kit records the
+      accepted listing at acceptance is the selling library's own tested
+      behaviour, and driving negotiate, settle, and result through the
+      storefront client with the Alkahest stage's verification replaced is
+      left as a follow-up for review to weigh.
+- [x] 5.13 Build and release: `domains/inference/Makefile` becomes the
       per-role aggregate on `domains/apicredits/Makefile`'s shape
       (`test: test-domain test-storefront ...`); `domains/Makefile` and the
       root `Makefile` gain `dist-inference-storefront` (depending on the family
@@ -917,7 +1039,11 @@ cards are publishable without metered consumption").
       `.github/workflows/publish-pypi.yml`, and `docs/development/RELEASING.md`
       gain `arkhai-inference-storefront` after the family distributions it
       depends on.
-- [ ] 5.14 **Verification.** `make test-inference-storefront` (unit and
+      *Note:* all seven entries. The root `dist-inference-storefront` builds
+      `dist-inference-domain`, which the root `Makefile` lacked and now has; the
+      root `test-inference` builds the storefront's wheels and requires both
+      projects' wheels, since the inference aggregate now runs the storefront.
+- [x] 5.14 **Verification.** `make test-inference-storefront` (unit and
       application integration through the typed client); `make test-inference`
       (the domain package's unit level, unchanged); `make test-release-tooling`.
       `make test`. New project: `make lock PROJECTS=domains/inference/storefront`
@@ -926,6 +1052,37 @@ cards are publishable without metered consumption").
       deployed, `e2e_inference_deal` exercises publication, the pinned terms,
       and the public result; the startup refusal and the guard are proven in
       process and none is owed in the lane.
+      *Note:* `make test-inference` passed (domain 186, storefront 36: unit 29,
+      integration 7); `make test-release-tooling` passed but for the known
+      0.2-second credential-helper timeout test, which passed alone with the
+      publish-matrix tests (363); `make check-architecture`, `make
+      check-comment-hygiene`, `make check-change`, and `make check-packaging`
+      passed. `make -k test` passed every target but two: the provisioning unit
+      test that fails only within its suite (section 1's note), and the core
+      storefront's Alkahest integration tests, which need `anvil` on `PATH`
+      and passed on rerun with it (`make test-storefront`, 448). No end-to-end
+      scenario exercises the storefront yet: `e2e_inference_deal` is section
+      11's.
+      The compliance check found no layering failure. Fixed: the copied
+      retired-settings refusal and history-worded comments, credits-service
+      wording, an unexplained local CLI import, an undeclared-but-unimported
+      `rich` and `alkahest-py`, a dev dependency no test imports, test-only
+      imports of `packaging` and `pydantic` now declared, the fiat mechanism's
+      real id in the startup test, a republication assertion, a seed test, the
+      design's D9 premise and a promotion row, and the notes above where they
+      overstated their tests. Declined: replacing the container monkeypatches
+      with injected seams (the precedent's shape; no seam exists), and stepping
+      `capacity-events` through the client (it would need the site's event
+      feed scripted as well).
+      *Handoff:* the service root (section 6) composes
+      `arkhai_inference.label.INFERENCE_LABEL`, not a label of its own, and
+      the storefront's development file expects it at
+      `http://inference-service:8086`. The gateway executable (section 8)
+      builds its offering's current terms with
+      `arkhai_inference.listings.accepted_terms(card)` and its readiness check
+      with `non_request_priced_rate`. The open gap is 5.12's reprice scenario
+      through the app. `storefront.inference.toml`'s identity, wallet, and
+      authority pins are empty for section 10.
 
 ## 6. Inference service root `arkhai-inference-service`
 
@@ -1500,6 +1657,7 @@ part that would need a code edit returns the change to implementation.
 | D7 — the publish request carries the model card | the `inference` capability's `spec.md` — "Quota-backed publication" |
 | D8 — the request-priced guard is one removable entry | the `inference` capability's `spec.md` — "Only request-priced rate cards are publishable without metered consumption" |
 | D9 — Alkahest only, refused at startup | the `inference` capability's `spec.md` — "Alkahest is the only inference settlement mechanism" |
+| D9 (implementation) — the issuance label and the accepted-terms payload are domain-package values both roots share | the `inference` capability's `architecture.md` — "Role composition over the family kit" |
 | D10 — Compose files, identities, and env targets mirror API credits | the `deployment-state` capability's `spec.md` — "Local inference stack composition"; `docs/development/DEPLOYMENT_AND_CONFIG.md` — "Per-domain stack composition"; `dev-env/identities/README.md` — "The inference lane" |
 | D11 — the scenario runs in its own lane | the `test-compatibility` capability's `spec.md` — "Inference end-to-end deal path" |
 | D12 — the buyer plugin's contributions | the `inference` capability's `spec.md` — "The buyer plugin discovers by model card under the inference schema"; the `api-family` capability's `architecture.md` — "Contribution bundles" (inference column) |

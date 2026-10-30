@@ -71,10 +71,7 @@ class CreditGrant(Base):
 
 
 class GrantTerms(Base):
-    """The accepted terms a grant was issued under: their canonical JSON, digest, and charge.
-
-    A key's pinned terms are its first grant's row; a grant with no row is unpinned.
-    """
+    """The accepted terms a grant was issued under; a key pins its first grant's row."""
 
     __tablename__ = "grant_terms"
 

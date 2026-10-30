@@ -276,10 +276,9 @@ def _migrate_reservation_release_requested_at(engine: Engine) -> None:
 
 
 def _create_grant_terms(engine: Engine) -> None:
-    """Create ``grant_terms``; existing grants have no row and read as unpinned.
+    """Create ``grant_terms``; existing grants read as unpinned.
 
-    ``credit_grants`` is untouched, so an image that predates the table still
-    passes its grant-schema check against the migrated database.
+    ``credit_grants`` is untouched, so an older image still passes its schema check.
     """
     with engine.begin() as connection:
         connection.execute(

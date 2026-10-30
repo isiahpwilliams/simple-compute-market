@@ -46,8 +46,6 @@ def accepted_terms_digest(accepted_terms: dict[str, Any]) -> str:
 
 
 def omit_unset(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
-    """``data`` without each of ``fields`` whose value is ``None``."""
-
     return {key: value for key, value in data.items() if key not in fields or value is not None}
 
 
@@ -107,8 +105,7 @@ class IssuanceRequest(_IssuanceContract):
             raise ValueError("terms_digest does not match accepted_terms")
         return self
 
-    # Unannotated: a return annotation would replace the model's published
-    # serialisation schema with that annotation's.
+    # Unannotated: a return annotation would replace the published serialisation schema.
     @model_serializer(mode="wrap")
     def _omit_unset_terms(self, handler: SerializerFunctionWrapHandler):
         return omit_unset(handler(self), ACCEPTED_TERMS_FIELDS)

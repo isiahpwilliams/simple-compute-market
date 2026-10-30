@@ -68,8 +68,7 @@ class IssuanceEvidenceBodyV1(_EvidenceContract):
     terms_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
     request_charge: RequestCharge | None = None
 
-    # Unannotated: a return annotation would replace the model's published
-    # serialisation schema with that annotation's.
+    # Unannotated: a return annotation would replace the published serialisation schema.
     @model_serializer(mode="wrap")
     def _omit_unset_terms(self, handler: SerializerFunctionWrapHandler):
         return omit_unset(handler(self), _TERMS_FIELDS)

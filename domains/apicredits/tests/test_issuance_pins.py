@@ -1,8 +1,6 @@
 """Byte-for-byte pins of the issuance digests and evidence; each case set is written once with ``--write``.
 
-The API-credits cases set no accepted terms. One case under the inference label
-sets them, so the fixture also records the bytes a pinned issuance produces and
-the API-credits digest of the same request.
+The API-credits cases pin no terms; one inference-label case records a pinned issuance's bytes.
 """
 
 from __future__ import annotations

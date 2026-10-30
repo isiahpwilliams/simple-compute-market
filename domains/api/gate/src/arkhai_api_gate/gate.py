@@ -192,10 +192,9 @@ class TokenGate:
     async def charge(
         self, verified: VerifiedKey, *, idempotency_key: str | None = None,
     ) -> GateDecision:
-        """Charge a verified key the charge its terms pinned, else the configured amount.
+        """Charge a verified key its pinned charge, else the configured amount.
 
-        ``verified`` is what this gate's ``verify`` returned; a key it has not
-        verified is answered as an invalid key.
+        A key this gate has not verified is answered as invalid.
         """
         amount = (
             verified.request_charge

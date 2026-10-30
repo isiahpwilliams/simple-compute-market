@@ -25,9 +25,8 @@ class IssuanceSubject:
     """What a listing sells, as the authority's issuance command names it.
 
     ``endpoint`` is delivery metadata returned beside the key and never digested.
-    ``accepted_terms``, ``terms_digest``, and ``request_charge`` are what the
-    domain's projection reads from the accepted listing for the authority to pin
-    on the key; a domain that pins nothing leaves all three unset.
+    ``accepted_terms``, ``terms_digest``, and ``request_charge`` are the accepted
+    listing's terms for the authority to pin on the key; unset, nothing is pinned.
     """
 
     service: str

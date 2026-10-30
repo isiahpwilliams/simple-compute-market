@@ -203,11 +203,7 @@ def prepare_issuance_request(
 
 
 def evidence_terms(request: IssuanceRequest) -> dict[str, Any]:
-    """The terms digest and request charge the issued request pinned, for its signed evidence.
-
-    They are read from the request the authority answered, so the evidence's
-    terms are the ones its request digest covers.
-    """
+    """The issued request's pinned terms digest and charge, as its request digest covers them."""
     if request.terms_digest is None:
         return {}
     return {"terms_digest": request.terms_digest, "request_charge": request.request_charge}

@@ -1,9 +1,4 @@
-"""Accepted terms and key scope through the real credits service and its typed clients.
-
-An issuance that pins terms reaches the authority's grant table through the
-controller, verification returns them, and a caller naming another scope is
-refused uncharged; a caller naming none is answered as the baseline records.
-"""
+"""Accepted terms and key scope through the real credits service and its typed clients."""
 
 from __future__ import annotations
 

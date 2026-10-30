@@ -107,11 +107,7 @@ def _first_grant(db: Session, key_id: str) -> tuple[CreditGrant | None, GrantTer
 def _in_scope(
     grant: CreditGrant | None, *, service: str | None, resource_id: str | None
 ) -> bool:
-    """Whether a key's first grant names the service and resource a caller expects.
-
-    A caller that names neither expects nothing; a key with no issuance grant
-    has no scope to match one that is named.
-    """
+    """Whether a key's first grant names the service and resource a caller expects."""
     if service is None and resource_id is None:
         return True
     if grant is None:
@@ -122,10 +118,9 @@ def _in_scope(
 
 
 def _pinned_terms(row: GrantTerms | None) -> dict[str, Any]:
-    """A terms row as the wire carries it, verified against its digest; empty when unpinned.
+    """A terms row as the wire carries it, empty when unpinned.
 
-    A row whose payload no longer matches its digest is a corrupt store, so the
-    read fails rather than answering with terms nothing binds.
+    A payload that no longer matches its digest is a corrupt store, so the read fails.
     """
     if row is None:
         return {}

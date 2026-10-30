@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arkhai-inference-service"
+version = "0.1.0"
+license = "MIT"
+description = "Inference service: the api family authority under the inference label -- keys, request-credit grants, consumption, and the site quota ledger"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "arkhai-api-authority>=0.2.0",
+    "arkhai-api-contracts>=0.5.0",
+    "arkhai-inference-domain>=0.2.0",
+    "arkhai-kit-resource-pools-contracts>=0.2.0",
+    "arkhai-kit-site>=0.10.0",
+    "arkhai-kit-resource-pools>=0.3.0",
+    "arkhai-kit-identity==0.4.0",
+    "dynaconf>=3.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.7",
+    "sqlalchemy>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4,<9.0.0",
+    "pytest-asyncio>=0.23.8,<1.0.0",
+    "httpx>=0.28.1",
+    "arkhai-api>=0.2.0",
+    "starlette",
+    # Test-only: the signed boundary is proven against the clients that call
+    # it -- the storefront's issuance client and the gate's tokens client --
+    # rather than a signer written for the test.
+    "arkhai-api-gate[signed]>=0.2.0",
+    "arkhai-api-client>=0.1.0",
+    # Request credits are backed by declared capacity, so a test registers a
+    # quota resource through the client a seller uses before it can issue.
+    "arkhai-kit-site-client",
+]
+
+# Internal distributions declared without an import, each with the runtime
+# reason it is installed. make check-architecture warns on one without a reason.
+[tool.arkhai.architecture.runtime-dependencies]
+arkhai-kit-identity = "Pins the one identity-kit release every signing peer in the stack runs; the site kit signs and verifies on this service's behalf."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inference_service"]

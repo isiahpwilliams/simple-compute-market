@@ -299,6 +299,11 @@
       "dist": "arkhai-inference-domain"
     },
     {
+      "key": "inference-service",
+      "path": "domains/inference/service",
+      "dist": "arkhai-inference-service"
+    },
+    {
       "key": "inference-storefront",
       "path": "domains/inference/storefront",
       "dist": "arkhai-inference-storefront"

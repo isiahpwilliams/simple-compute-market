@@ -22,9 +22,7 @@ inference = "arkhai_inference_buyer.cli:domain"
 [dependency-groups]
 dev = [
   "pytest>=8.0.0",
-  # The identity, registry-query, settlement-error, and requirement types the
-  # tests build, and the reader of the inference registry's filter
-  # specification. Test-only.
+  # Test-only: types the tests build and the filter-spec reader.
   "arkhai-kit-identity==0.4.0",
   "arkhai-core-registry-client>=0.12.0",
   "arkhai-kit-settlement-runtime>=0.4.0",

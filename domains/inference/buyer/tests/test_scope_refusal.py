@@ -1,10 +1,4 @@
-"""`market inference settle --from` reports a scope refusal as the storefront names it, once, and does not retry.
-
-Settlement resumes from a synthetic run-log of an agreed top-up with its escrow
-already created; the seller's submit and status endpoints are scripted at the
-Alkahest stage's seam, so the storefront's settlement refusal is what the
-command is shown.
-"""
+"""`market inference settle --from` reports a storefront scope refusal once and does not retry."""
 
 from __future__ import annotations
 

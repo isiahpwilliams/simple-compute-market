@@ -1,11 +1,8 @@
 """The real storefront app and lifespan, composed from a seller's configuration.
 
-The signer comes from a development credential supplied as the Secret boundary
-supplies it. Two seams stand in for what lies beyond the storefront: the quota
-site's capacity runtime, which the listing service resolves through the
-container's ``QUOTA_CAPACITY``, and the startup tasks, which preflight the
-authority and start the timer loops. Every address and key here is a
-deterministic development value, never used on a public network.
+Only the quota site's capacity runtime and the startup tasks are stubbed. Every
+address and key here is a deterministic development value, never used on a
+public network.
 """
 
 from __future__ import annotations
@@ -54,8 +51,7 @@ ANVIL = ChainConfig(
 
 @contextmanager
 def replaced(**roots: Any) -> Iterator[None]:
-    """Replace whole settings roots: an override would merge into the test
-    configuration's own tables."""
+    """Replace whole settings roots; an override would merge into existing tables."""
     settings = storefront_config.settings
     saved = {name: deepcopy(settings.get(name)) for name in roots}
     try:

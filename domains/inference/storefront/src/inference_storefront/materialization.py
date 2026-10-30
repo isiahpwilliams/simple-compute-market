@@ -16,12 +16,10 @@ PUBLIC_RESULT_KEY = "materialization"
 def public_result_extension(
     listing_resource: Mapping[str, Any], result: IssuanceResult, delivery: DeliveryContext
 ) -> dict[str, Any]:
-    """The contract's materialization of the accepted listing, under one key.
+    """The accepted listing's materialization, under ``PUBLIC_RESULT_KEY``.
 
-    The listing is the one the kit recorded at acceptance, so a republication
-    at another rate does not change what the buyer is shown. The settlement
-    reference is the Alkahest escrow uid, the only mechanism this storefront
-    composes.
+    The listing is the one recorded at acceptance, so a republication at another
+    rate does not change what the buyer is shown.
     """
     card = InferenceModelCard.model_validate(coerce_resource_dict(listing_resource))
     materialization = InferenceMaterialization(

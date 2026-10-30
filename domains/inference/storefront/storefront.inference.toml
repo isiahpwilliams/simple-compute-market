@@ -87,18 +87,15 @@ policies = []
 default_min_price = "1"
 
 [seed]
-# On startup, register this quota resource in the authority's ledger and
-# publish one listing from it, so a fresh `compose up` has something to
-# discover. The quota is large, because a listing whose quota reaches zero
-# leaves discovery while its model server is fine.
+# Registered and published on startup so a fresh stack has a listing. The
+# quota is large because an exhausted listing leaves discovery.
 resource_id = "stub-instruct-quota"
 total_units = 100000000
 token       = "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0"
 chain       = "anvil"
 
 [seed.model_card]
-# The development model server is a deterministic stub built from this
-# repository; the artifact reference names it as a fixture.
+# A deterministic development stub; the artifact reference is a fixture.
 owner             = "arkhai"
 name              = "stub-instruct"
 artifact_ref      = "dev://arkhai/stub-instruct"

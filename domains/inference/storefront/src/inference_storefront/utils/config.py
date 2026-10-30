@@ -1,16 +1,14 @@
 """Inference storefront configuration via dynaconf.
 
 Layered (highest priority last):
-  1. ``settings.toml`` next to this package — committed defaults
-     documenting every supported key.
+  1. ``settings.toml`` next to this package — committed defaults.
   2. ``$XDG_CONFIG_HOME/arkhai/storefront.toml`` — an operator's own file.
   3. ``$XDG_CONFIG_HOME/arkhai/storefront.json`` — a chart-rendered document.
   4. ``$XDG_CONFIG_HOME/arkhai/storefront.secrets.toml`` — Secret overlay.
   5. ``INFERENCE_STOREFRONT_*`` environment variables (separator ``__``).
 
-The overlay files are the same ones the VM storefront reads — one
-storefront per container, each with its own mount; the env prefix
-differs so colocated local runs can still be steered independently.
+The overlay files are shared with the other storefronts (one per container);
+the env prefix differs so colocated local runs can be steered independently.
 """
 
 from __future__ import annotations
@@ -286,20 +284,9 @@ def credits_admin_key() -> str:
 def credits_expected_authorities() -> TrustedIdentitySet | None:
     """The authority principals whose signed responses this storefront accepts.
 
-    ``None`` when unset, which leaves the client on the shared-secret gate
-    -- matching the authority, which enables signed authentication
-    only once its own signing credential is selected. The two are flipped
-    together.
-
-    Read from `[credits.expected_authorities]` rather than reusing
-    `[capacity.sites.default.expected_authorities]`, even though both name
-    the same service today. The capacity key belongs to the
-    capacity-publication subsystem, and a deployment may reconfigure or
-    drop that subsystem while credits issuance still needs an authority.
-    More importantly it is a dynaconf *list*: merged rather than replaced,
-    so whatever a deployment appends to the capacity site's authorities
-    would silently widen what the credits boundary trusts. Two privilege
-    surfaces should not share one knob.
+    ``None`` when unset, leaving the client on the shared-secret gate. Kept
+    apart from the capacity site's authorities: that dynaconf list is merged,
+    so anything appended there would silently widen what issuance trusts.
     """
     raw = settings.get("credits.expected_authorities.identities", None)
     if not raw:
@@ -319,9 +306,7 @@ def credits_expected_authorities() -> TrustedIdentitySet | None:
 
 
 def seconds_setting(key: str, default: float, source: Dynaconf | None = None) -> float:
-    """A duration setting, ``default`` unless stated, refused by key unless it
-    is a positive, finite number of seconds that can be applied to an
-    instant."""
+    """A duration setting, refused by key unless positive, finite seconds."""
 
     active = settings if source is None else source
     try:
@@ -333,8 +318,7 @@ def seconds_setting(key: str, default: float, source: Dynaconf | None = None) ->
 
 
 def settlement_servicing_interval(source: Dynaconf | None = None) -> float:
-    """Seconds between the settlement servicing sweeps:
-    `settlement_servicing_interval_seconds`, thirty unless stated."""
+    """Seconds between settlement servicing sweeps."""
 
     return seconds_setting("settlement_servicing_interval_seconds", 30, source)
 
@@ -358,12 +342,12 @@ def configured_site_ids() -> tuple[str, ...]:
 
 
 def capacity_poll_interval() -> float:
-    """`[capacity].poll_interval`, five seconds unless stated, refused by its key unless positive."""
+    """`[capacity].poll_interval` in seconds."""
     return seconds_setting("capacity.poll_interval", 5)
 
 
 def negotiation_watchdog_policy() -> NegotiationWatchdogPolicy:
-    """The watchdog's timeout and interval, each refused by its key unless positive seconds."""
+    """The negotiation watchdog's timeout and interval."""
     return NegotiationWatchdogPolicy(
         timeout_seconds=seconds_setting("negotiation_timeout_seconds", 1800),
         interval_seconds=seconds_setting("negotiation_watchdog_interval", 60),
@@ -380,7 +364,7 @@ LOOP_SETTINGS = LoopSettings(
 
 
 def round_settings() -> RoundSettings:
-    """What the seller's round reads, read once per round."""
+    """What the seller's round reads, once per round."""
     return RoundSettings(
         floor_key="pricing.default_min_price",
         negotiation_config=settings.get("negotiation"),

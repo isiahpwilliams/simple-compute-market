@@ -1,11 +1,7 @@
-"""The purchase-time verification hook.
+"""Purchase-time verification hook, run on a listing's attestation envelope before any settlement is proposed.
 
-It is called with the attestation envelope of the listing being bought, as the
-listing carries it, before a settlement is proposed, so a refused listing costs
-the buyer nothing. It runs in a plugin-local subclass of the Alkahest stage and
-its buy session, the two places the buying library proposes from. No proof
-format is defined here; the default admits every listing, and reading the
-envelope is the hook's own business.
+Both the Alkahest stage and its buy session are subclassed because they are the
+two places the buying library proposes from. No proof format is defined here.
 """
 
 from __future__ import annotations
@@ -26,12 +22,10 @@ class PurchaseVerificationHook(Protocol):
 
 
 def admit_all(attestation: Mapping[str, Any] | None) -> str | None:
-    """The default hook: admits every listing."""
     return None
 
 
 def listing_refusal(listing: Mapping[str, Any], verify: PurchaseVerificationHook) -> str | None:
-    """The hook's answer for one registry row."""
     attestation = coerce_resource_dict(listing.get("listing_resource")).get("attestation")
     return verify(attestation if isinstance(attestation, Mapping) else None)
 
@@ -61,8 +55,7 @@ class _VerifyingBuySession(AlkahestBuySession):
     def propose(self, listing: Mapping[str, Any], *, expiration_unix: int) -> Any | None:
         refusal = listing_refusal(listing, self._verify)
         if refusal is not None:
-            # The listing is skipped, as one with no compatible settlement is;
-            # another match may still be bought.
+            # Skip it like a listing with no compatible settlement; another match may still be bought.
             typer.secho(
                 f"listing {listing.get('listing_id')!r} refused before settlement: {refusal}",
                 err=True,

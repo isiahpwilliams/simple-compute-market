@@ -1,8 +1,4 @@
-"""The gateway's request ordering against a fake gate and a fake model server.
-
-The gateway has no typed client of its own: the OpenAI version-1 wire shape is
-its contract, so these tests speak it directly.
-"""
+"""The gateway's request ordering against a fake gate and a fake model server."""
 
 from __future__ import annotations
 

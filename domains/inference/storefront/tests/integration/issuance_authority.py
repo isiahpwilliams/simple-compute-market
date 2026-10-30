@@ -1,10 +1,7 @@
 """A scripted inference authority behind the storefront's real authority client.
 
-The storefront's fulfillment hook issues from settlement evidence carrying the
-accepted listing, as the selling library records it at acceptance. The
-authority is mocked only at its HTTP boundary, so the issuance request is the
-one the client puts on the wire. Every key and address is a deterministic
-development value.
+Mocked only at its HTTP boundary, so the recorded request is the one the client
+puts on the wire. Every key and address is a deterministic development value.
 """
 
 from __future__ import annotations

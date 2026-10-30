@@ -1,9 +1,4 @@
-"""The inference authority through the typed clients that call it.
-
-The real app over ASGI: the storefront's `AuthorityClient` issues, the gate's
-`TokensClient` verifies and consumes, and the quota is registered through the
-site client a seller uses.
-"""
+"""The inference authority over ASGI through the storefront, gate, and site clients that call it."""
 
 from __future__ import annotations
 

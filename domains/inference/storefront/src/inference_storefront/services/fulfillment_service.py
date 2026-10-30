@@ -1,9 +1,4 @@
-"""This storefront's binding of the selling library's issuance and failure policy.
-
-Supplies the process's parts: settings, the capacity runtime and listing
-reopen pass a released hold needs, the settlement composition a refund reads,
-and the composed authority client.
-"""
+"""This storefront's binding of the selling library's issuance and failure policy."""
 
 from __future__ import annotations
 

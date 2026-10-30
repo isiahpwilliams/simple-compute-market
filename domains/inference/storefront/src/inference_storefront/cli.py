@@ -1,10 +1,4 @@
-"""Inference storefront admin CLI — `inference-storefront` console script.
-
-Subcommands:
-    serve      Run the storefront HTTP server in-process.
-    publish    Create + publish a model-card listing backed by a quota resource.
-    listings   List the storefront's local listings.
-"""
+"""Inference storefront admin CLI — the `inference-storefront` console script."""
 
 from __future__ import annotations
 
@@ -159,8 +153,8 @@ def publish_cmd(
             )
         ]
 
-    # The same listing service the running storefront composes, with its
-    # settlement composition, and the signer its capacity runtime reads.
+    # The same services the running storefront composes, including the signer
+    # its capacity runtime reads.
     services = _build_inference_services(get_market_domain_contract())
     _container.resolved_marketplace_signer = services.marketplace_signer
     _container.resolved_sqlite_client = services.sqlite_client

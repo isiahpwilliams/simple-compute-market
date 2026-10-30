@@ -1,10 +1,4 @@
-"""The real gateway, gate, and gate client against a scripted authority and model server.
-
-The authority is scripted at its HTTP boundary, as the gate's conformance
-runner scripts one, so the gate's request shaping and response parsing are
-exercised rather than stubbed. The gateway has no typed client of its own: the
-OpenAI version-1 wire shape is its contract, so these tests speak it directly.
-"""
+"""The real gateway, gate, and gate client against an authority scripted at its HTTP boundary."""
 
 from __future__ import annotations
 
@@ -192,11 +186,7 @@ class ControlledStream:
 
 @pytest.fixture
 def served_gateway() -> Iterator[tuple[str, ControlledStream, ScriptedAuthority]]:
-    """The gateway served by uvicorn on an ephemeral port in a thread.
-
-    ``httpx.ASGITransport`` joins the body parts after the app returns, so it
-    cannot observe an event arriving before the stream ends; a real socket can.
-    """
+    """The gateway served by uvicorn in a thread; ``ASGITransport`` cannot observe mid-stream events."""
     offering = _offering()
     authority = ScriptedAuthority(balance=10, request_charge=None)
     upstream = ControlledStream()
@@ -205,8 +195,7 @@ def served_gateway() -> Iterator[tuple[str, ControlledStream, ScriptedAuthority]
         _gate(offering, authority),
         http=httpx.AsyncClient(transport=httpx.MockTransport(upstream.handle)),
     )
-    # The socket listens before the server starts, so a connection made at once
-    # waits in its backlog rather than being refused.
+    # Listening before the server starts queues early connections instead of refusing them.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     sock.listen()

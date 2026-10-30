@@ -1,9 +1,4 @@
-"""Discovery under the inference schema: which registries are queried, and what a query may say.
-
-The registries are scripted at the signed client's seam; the query compiles
-against the inference registry's own filter specification, read from this
-repository, which is what that registry serves.
-"""
+"""Inference-schema discovery: which registries are kept, and queries compiled against the repository's filter spec."""
 
 from __future__ import annotations
 

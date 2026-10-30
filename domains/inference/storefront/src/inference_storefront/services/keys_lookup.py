@@ -1,9 +1,7 @@
 """Key→owner lookup against the inference authority.
 
-The negotiation round hook captures one key record per round through
-this function — the side input ``key_owned_by_buyer_principal`` consults,
-analogous to the inventory snapshot. The guard is the interface, not
-the enforcement: issuance re-checks the claim authoritatively.
+The negotiation guard reading it is advisory; issuance re-checks ownership
+authoritatively.
 """
 
 from __future__ import annotations

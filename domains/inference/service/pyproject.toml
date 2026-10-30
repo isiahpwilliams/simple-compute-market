@@ -30,18 +30,14 @@ dev = [
     "httpx>=0.28.1",
     "arkhai-api>=0.2.0",
     "starlette",
-    # Test-only: the signed boundary is proven against the clients that call
-    # it -- the storefront's issuance client and the gate's tokens client --
-    # rather than a signer written for the test.
+    # Test-only: the signed boundary is tested through its real callers' clients.
     "arkhai-api-gate[signed]>=0.2.0",
     "arkhai-api-client>=0.1.0",
-    # Request credits are backed by declared capacity, so a test registers a
-    # quota resource through the client a seller uses before it can issue.
+    # Issuance needs declared capacity; tests register quota through the seller's client.
     "arkhai-kit-site-client",
 ]
 
-# Internal distributions declared without an import, each with the runtime
-# reason it is installed. make check-architecture warns on one without a reason.
+# Internal distributions declared without an import, with the runtime reason for each.
 [tool.arkhai.architecture.runtime-dependencies]
 arkhai-kit-identity = "Pins the one identity-kit release every signing peer in the stack runs; the site kit signs and verifies on this service's behalf."
 

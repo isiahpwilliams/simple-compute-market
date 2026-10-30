@@ -1,18 +1,8 @@
 """Configuration the storefront refuses to start under.
 
-Each kind of problem stops the storefront before it resolves its signer, opens
-its database, or starts a loop, reported under its own heading with every
-problem of that kind named by its key:
-
-- a capacity configuration it cannot read: no site, a site missing its URL or
-  trusted authorities, authorities that are not valid principals, or a
-  `[capacity].poll_interval` that is not a positive, finite number of seconds.
-  Reading it here, rather than when the capacity runtime or the capacity-event
-  pollers are first composed, keeps a malformed site or interval from stopping
-  startup after some of it has run;
-- a `[settlement].priority` naming a mechanism the seller stage table does not
-  hold. Resolving the settlement configuration refuses one too, but alone and
-  only when it is resolved; read here, it is named with every other problem.
+Checked before the signer, database, or any loop starts, so a malformed
+capacity site, poll interval, or `[settlement].priority` cannot stop startup
+partway, and every problem is reported together under its heading.
 """
 
 from __future__ import annotations
@@ -35,8 +25,7 @@ class StorefrontStartupError(RuntimeError):
 
 
 def capacity_configuration_problems() -> list[str]:
-    """Why the configured capacity sites or poll interval cannot be read, if
-    they cannot, each refusal naming its key."""
+    """Why the configured capacity sites or poll interval cannot be read."""
     problems: list[str] = []
     try:
         configured_site_ids()
@@ -50,7 +39,7 @@ def capacity_configuration_problems() -> list[str]:
 
 
 def mechanism_configuration_problems(source: Dynaconf | None = None) -> list[str]:
-    """Each mechanism `[settlement].priority` names that no composed stage settles, by name."""
+    """Each `[settlement].priority` mechanism that no composed stage settles."""
     try:
         priority = settlement_config_mapping(source).get("priority") or []
     except ValueError as exc:

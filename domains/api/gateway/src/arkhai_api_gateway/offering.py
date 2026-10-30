@@ -1,9 +1,4 @@
-"""The one value a gateway is configured with.
-
-A domain's executable validates its own listing and projects it to a
-`GatewayOffering`; the library reads nothing else, so it learns no domain's
-listing schema.
-"""
+"""The one value a gateway is configured with, so it learns no domain's listing schema."""
 
 from __future__ import annotations
 
@@ -20,15 +15,8 @@ from arkhai_api_gate import GateConfig, PurchasePointer
 class GatewayOffering:
     """What one gateway deployment serves and how it charges.
 
-    ``service`` is the one name admitted in a request's ``model`` and the only
-    entry of the model list. ``scope_service`` and ``scope_resource_id`` are the
-    offering a key must have been issued for, which the authority enforces.
-    ``default_charge`` is charged only when a key's verification pins no
-    charge of its own. ``upstream_base_url`` is the model server's OpenAI base
-    URL, the one its ``/chat/completions`` is under, and
-    ``upstream_credential_file`` the mounted secret the gateway presents to it,
-    if it requires one. ``current_terms`` is the offering's current canonical
-    terms, handed to the verification hook.
+    ``service`` is the only model admitted and listed. ``default_charge``
+    applies only when a key's verification pins no charge of its own.
     """
 
     service: str
@@ -50,9 +38,8 @@ class GatewayOffering:
     def gate_config(self, base: GateConfig) -> GateConfig:
         """``base`` with this offering's scope, default charge, and purchase pointer.
 
-        The gate is configured from the offering rather than beside it, so the
-        scope verification sends and the charge it falls back to cannot differ
-        from what the gateway admits.
+        Deriving it from the offering keeps the gate's scope and fallback charge
+        from diverging from what the gateway admits.
         """
         return dataclasses.replace(
             base,
@@ -64,10 +51,9 @@ class GatewayOffering:
 
 
 def read_upstream_credential(path: Path) -> str:
-    """The credential in a mounted secret file, stripped of a trailing newline.
+    """The credential in a mounted secret file, stripped.
 
-    A mounted secret is routinely group-readable, so its mode is not checked;
-    it must be a regular, non-empty file.
+    Its mode is not checked, since mounted secrets are routinely group-readable.
     """
     try:
         if not path.is_file():

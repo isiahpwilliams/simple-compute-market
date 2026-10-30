@@ -60,9 +60,8 @@ def _build_market_domain_contract() -> MarketDomainContract:
     )
 
 
-#: Installed storefront-domain entry points load concrete validated contracts,
-#: not factories. Keeping this immutable object module-local also ensures every
-#: service in one process consumes the same composed capability set.
+#: Entry points load a validated contract, not a factory, so every service in
+#: one process consumes the same composed capability set.
 INFERENCE_STOREFRONT_DOMAIN = _build_market_domain_contract()
 
 

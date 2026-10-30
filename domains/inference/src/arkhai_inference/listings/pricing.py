@@ -33,12 +33,11 @@ METERED_RATE_FIELDS = (
 
 
 def non_request_priced_rate(card: InferenceRateCard) -> str | None:
-    """The field that keeps ``card`` from being charged a fixed amount per request, or ``None``.
+    """The field that keeps ``card`` from a fixed per-request charge, or ``None``.
 
-    A metered rate must be zero, since nothing meters consumption. The request
-    charge must be at least one, because the authority's ``consume`` refuses
-    less, and at most ``MAX_REQUEST_CHARGE``, because it enters the issuance
-    digest through canonical JSON, whose integers end there.
+    Metered rates must be zero, since nothing meters consumption. The request
+    charge is at least one (``consume`` refuses less) and at most
+    ``MAX_REQUEST_CHARGE``, the canonical-JSON integer bound of the issuance digest.
     """
     for field in METERED_RATE_FIELDS:
         if getattr(card, field):

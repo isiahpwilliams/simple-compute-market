@@ -67,8 +67,7 @@ class NegotiationsController:
         self,
         listing_id: str, neg_id: str, body: ForceAcceptRequest, request: Request
     ) -> ForceAcceptResponse:
-        # The canonical storefront client's signed contract, which every
-        # storefront binding this control verifies, not this route's own name.
+        # The canonical client's signed operation, not this route's own name.
         actor_principal = await _container.AUTH.authenticate_admin(
             request,
             operation="admin_force_accept_negotiation",

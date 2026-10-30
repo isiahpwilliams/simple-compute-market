@@ -1,7 +1,7 @@
-"""Lifecycle controls: one pause holding the timer loops, and one step per loop.
+"""Lifecycle controls: pause the timer loops, or step one loop.
 
-The signed operations and resources are the canonical storefront client's, so
-one administrator client drives every storefront.
+Signed operations match the canonical storefront client's, so one admin client
+drives every storefront.
 """
 
 from __future__ import annotations

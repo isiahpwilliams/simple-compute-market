@@ -1,10 +1,7 @@
-"""The per-request verification hook.
+"""The per-request verification hook, run after key verification and before the charge.
 
-It runs after the key is verified and before it is charged, so a refusal costs
-the buyer nothing. It receives the offering's current canonical terms and the
-key's accepted terms and digest as verification returned them, so a proof
-format can detect a change since acceptance or verify against the accepted
-terms themselves. No proof format is defined here.
+It receives the current and accepted terms so a proof format can detect a
+change since acceptance; no proof format is defined here.
 """
 
 from __future__ import annotations
@@ -16,7 +13,7 @@ from typing import Any, Protocol
 
 @dataclass(frozen=True)
 class VerificationRefusal:
-    """Why a hook refused a request: the HTTP status and a machine-readable error code."""
+    """Why a hook refused a request."""
 
     status: int
     error: str

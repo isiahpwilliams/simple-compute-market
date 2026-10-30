@@ -11,11 +11,10 @@ from arkhai_inference.listings import InferenceModelCard, accepted_terms, coerce
 
 
 def issuance_projection(listing_resource: Mapping[str, Any]) -> IssuanceSubject:
-    """The accepted card's served model, its quota resource, and its terms, digest, and charge.
+    """Project the accepted card onto the issuance subject.
 
-    The served model name is the digested service, so a grant is bound to what
-    the gateway admits in a request's ``model``; the endpoint is delivery
-    metadata and is not digested.
+    The served model name is the digested service, so a grant binds to what the
+    gateway admits in a request's ``model``; the endpoint is not digested.
     """
     card = InferenceModelCard.model_validate(coerce_resource_dict(listing_resource))
     terms = accepted_terms(card)

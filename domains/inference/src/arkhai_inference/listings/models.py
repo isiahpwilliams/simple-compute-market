@@ -157,10 +157,9 @@ class InferenceModelCard(BaseModel):
 
 
 def accepted_terms(card: InferenceModelCard) -> dict[str, Any]:
-    """The terms a buyer accepts with ``card``: its rate card and attestation envelope, as plain JSON.
+    """The terms a buyer accepts with ``card``: its rate card and attestation, as plain JSON.
 
-    The storefront pins these on the key it issues and the gateway hands the
-    current ones to its verification hook, so both build them here.
+    Storefront and gateway both build them here so the pinned and current terms agree.
     """
     return {
         "rate_card": card.rate_card.model_dump(mode="json"),

@@ -1,7 +1,5 @@
-# Inference storefront image. An inference deal issues prepaid credits and
-# provisions no network, so the image carries no zerotier / NET_ADMIN / sudo
-# machinery. Serves the
-# `inference-storefront` console script from its own /app/data volume.
+# Inference storefront image: serves `inference-storefront` with its own
+# /app/data volume. No network provisioning, so no zerotier/NET_ADMIN/sudo.
 #
 # --platform=linux/amd64 is intentional: production targets x86_64, and
 # alkahest_py's wheel is resolved for that platform.
@@ -20,11 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git g++ && rm -
 
 WORKDIR /app
 
-# The lock is used as committed: the project's pyproject and lock sit at the
-# same depth below /repo as below the repository root, so the lock's relative
-# wheelhouse path resolves to /repo/.dist. uv_project.py derives the internal
-# packages from the lock and reinstalls them, so a cached build of a
-# same-version wheel is never reused.
+# The project sits at the same depth below /repo as in the repository, so the
+# lock's relative wheelhouse path resolves to /repo/.dist. uv_project.py
+# reinstalls internal packages so a cached same-version wheel is never reused.
 COPY .dist/ /repo/.dist/
 COPY scripts/uv_project.py /repo/scripts/uv_project.py
 COPY domains/inference/storefront/pyproject.toml domains/inference/storefront/uv.lock /repo/domains/inference/storefront/
@@ -38,8 +34,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fi && \
     python3 /repo/scripts/uv_project.py image --project /repo/domains/inference/storefront -- --no-dev --no-install-project
 
-# The storefront itself is installed from its staged wheel at the version its
-# pyproject declares; the runtime image never receives repository source.
+# Installed from its staged wheel; the runtime image never receives source.
 RUN --mount=type=cache,target=/root/.cache/uv \
     python3 /repo/scripts/uv_project.py install-wheel --project /repo/domains/inference/storefront
 

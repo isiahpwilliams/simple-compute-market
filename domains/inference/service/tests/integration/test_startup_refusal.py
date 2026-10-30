@@ -25,8 +25,7 @@ def _main(directory: Path, monkeypatch, *, credential: bool):
         seed_file.write_bytes(urlsafe_b64encode(AUTHORITY_SEED).rstrip(b"=") + b"\n")
         monkeypatch.setenv("INFERENCE_SITE_SIGNING_KEY_FILE", str(seed_file))
     unload_service_modules()
-    # Imported here, after the environment is set: the modules resolve their
-    # configuration and identity at import.
+    # Imported after the environment is set: configuration resolves at import.
     return importlib.import_module("inference_service.main")
 
 

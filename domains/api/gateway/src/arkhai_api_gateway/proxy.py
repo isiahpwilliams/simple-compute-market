@@ -10,13 +10,11 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 UPSTREAM_UNAVAILABLE = "upstream_unavailable"
 
-# Only what describes the body crosses to the model server: the buyer's
-# Authorization in particular never does.
+# The buyer's Authorization must never reach the model server.
 _FORWARDED_REQUEST_HEADERS = ("content-type", "accept")
 
-# Hop-by-hop headers describe one connection. The body is relayed decoded, as
-# the gateway's own client negotiated its encoding, so its encoding and length
-# are the server's to frame again; and the server writes its own date and name.
+# Hop-by-hop headers, plus encoding and length (the body is relayed decoded)
+# and the date and server name the gateway's server writes itself.
 _DROPPED_RESPONSE_HEADERS = frozenset({
     "connection",
     "keep-alive",
@@ -40,11 +38,7 @@ async def forward(
     request_headers: httpx.Headers,
     credential: str | None,
 ) -> Response:
-    """POST ``body`` to ``url`` and relay the response as its bytes arrive.
-
-    The response is never read whole: a streamed completion's events reach
-    the caller as the model server sends them.
-    """
+    """POST ``body`` to ``url`` and relay the response as its bytes arrive, never read whole."""
     headers = {
         name: request_headers[name]
         for name in _FORWARDED_REQUEST_HEADERS

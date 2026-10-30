@@ -1,8 +1,4 @@
-"""Composition root: build order and resolved singletons.
-
-Plain module-level wiring. ``init()`` runs once in the FastAPI lifespan;
-routers resolve services per request through ``lambda: resolved_X``.
-"""
+"""Composition root: ``init()`` runs once in the FastAPI lifespan; routers read the singletons per request."""
 
 from __future__ import annotations
 

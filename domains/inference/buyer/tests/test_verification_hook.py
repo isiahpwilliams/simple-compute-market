@@ -1,8 +1,4 @@
-"""The purchase-time hook runs before the Alkahest stage proposes, with the listing's envelope.
-
-The Alkahest library's own `propose` and `prepare_selection` are replaced by
-recorders, so what is observed is whether the plugin's subclass reaches them.
-"""
+"""The purchase-time hook runs before the Alkahest stage proposes; the library's methods are replaced by recorders."""
 
 from __future__ import annotations
 

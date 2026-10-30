@@ -419,12 +419,14 @@ steps"; D16's ordering, verification before charge).
       body to hold every required field and no unset optional one, and a scoped
       client to send its scope and parse a pinned key's terms;
       `KEY_OUT_OF_SCOPE` joins the declared consume refusals.
-- [ ] 3.2 `domains/api/gate/src/arkhai_api_gate/config.py`: `GateConfig`
+- [x] 3.2 `domains/api/gate/src/arkhai_api_gate/config.py`: `GateConfig`
       gains optional `scope_service` and `scope_resource_id`, read by
       `from_env` as `SCOPE_SERVICE` and `SCOPE_RESOURCE_ID` under the
       deployment's prefix, unset by default (the sample app and every
       API-credits deployment set neither).
-- [ ] 3.3 `domains/api/gate/src/arkhai_api_gate/gate.py`: `TokenGate.verify(authorization)`
+      *Note:* unit (`tests/test_config.py`): both unset by default, read under
+      the prefix when set.
+- [x] 3.3 `domains/api/gate/src/arkhai_api_gate/gate.py`: `TokenGate.verify(authorization)`
       returns either a deny `GateDecision` (401 missing or invalid, 403
       revoked, 403 `key_out_of_scope` when the authority refuses by scope) or
       a verified key value carrying `key_id`, the cached `VerifyResult`'s
@@ -438,9 +440,21 @@ steps"; D16's ordering, verification before charge).
       the offering's default only when verification returns none"; D4: no
       idempotency key is introduced). The cached `_KeyState` holds the verified
       terms for the verify TTL (review 01 F2: the gate is otherwise unchanged).
-- [ ] 3.4 `domains/api/gate/src/arkhai_api_gate/asgi.py`: `TokenGateMiddleware`
+      *Note:* `TokenGate.verify` returns a `GateDecision` denial or a
+      `VerifiedKey` (exported); `charge(verified, idempotency_key=None)` falls back
+      to the configured amount only when verification returned no charge, and
+      answers a key it never verified as invalid (`401`). Charges keep today's
+      path, batching included, for scoped and unscoped gates alike: a batch item
+      carries no scope, and need not, since a key's scope is fixed by its first
+      grant and was checked at verification. (This corrects section 2's handoff,
+      which proposed that a scoped gate not batch.) The flush's requeue of an
+      unavailable batch keeps each item's own amount rather than the configured
+      one, the same value whenever no charge is pinned. A consume refused
+      `key_out_of_scope` is answered `403` like the verify refusal.
+- [x] 3.4 `domains/api/gate/src/arkhai_api_gate/asgi.py`: `TokenGateMiddleware`
       keeps calling `authorize`; its behaviour is unchanged.
-- [ ] 3.5 Unit tests (`domains/api/gate/tests/test_gate.py`): verify then
+      *Note:* `asgi.py` is untouched.
+- [x] 3.5 Unit tests (`domains/api/gate/tests/test_gate.py`): verify then
       refuse leaves the balance unchanged and the fake authority saw only the
       verification; verify then charge equals `authorize` call for call; a
       verified `request_charge` is the amount consumed and its absence falls
@@ -452,7 +466,17 @@ steps"; D16's ordering, verification before charge).
       the TypeScript and Rust gates and the trace are not edited (api-family
       delta "with the same authority exchanges and cached state"; the
       `api-family` capability's "The conformance trace is replayed" scenario).
-- [ ] 3.6 **Verification.** `make test-api-gate` (unit, the conformance
+      *Note:* unit (`tests/test_gate.py`, a scripted client recording each call):
+      verify alone calls only verify and returns the pinned terms; the pinned charge is consumed and the configured amount otherwise; a scoped
+      configuration sends its scope on verify and consume and an unscoped one sends
+      none; a pinned charge is batched and requeued at its own amount; charging a
+      key never verified is `401`; verify then charge equals `authorize` in
+      decisions, calls, and cache use, synchronous and batched; an out-of-scope
+      verify is `403` uncharged and an out-of-scope consume is `403`. `tests/test_conformance.py`
+      replays `session.json` unchanged; the trace and the TypeScript and Rust gates
+      are not edited. The scoped exchanges against the real authority are
+      section 2's application-integration test.
+- [x] 3.6 **Verification.** `make test-api-gate` (unit, the conformance
       replay, and the contract parity); `make test-apicredits` for the sample
       app's unit tests (`domains/apicredits/sample-app/tests/test_sample_app.py`),
       which must pass unchanged. `make test`. `domains/api/gate` bumps for the
@@ -461,6 +485,20 @@ steps"; D16's ordering, verification before charge).
       check-packaging`. Once deployed, `e2e_credits_deal` exercises the
       unchanged `authorize` path through the sample app and
       `e2e_inference_deal` the separable steps through the gateway.
+      *Note:* `make test-api-gate` passed (39, the conformance replay and the
+      parity suite included); `make test-apicredits` passed, the sample app's
+      unit tests unchanged; `make check-packaging` passed; `make -k test` passed
+      every target but the provisioning unit test that fails only in its suite
+      (section 1's note). No version bump or relock here: the gate went to 0.2.0
+      in section 2, for 3.1's client, and has not been released since, so its new
+      public `verify`, `charge`, and `VerifiedKey` ship in that same version and no
+      requirement or lock changed. The compliance check's findings were fixed
+      except the batching restriction, which was dropped instead of recorded as a
+      decision (3.3's note).
+      *Handoff:* the family gateway (section 4) calls `gate.verify`, then its
+      hook, then `gate.charge`, with the gate's `scope_service` and
+      `scope_resource_id` set from the offering; a hook refusal never reaches
+      `charge`.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

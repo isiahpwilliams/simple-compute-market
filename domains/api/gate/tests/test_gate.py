@@ -16,7 +16,7 @@ import pytest
 
 from arkhai_api_gate.client import ConsumeResult, TokensClient, VerifyResult
 from arkhai_api_gate.config import GateConfig, PurchasePointer
-from arkhai_api_gate.gate import TokenGate
+from arkhai_api_gate.gate import TokenGate, VerifiedKey
 from arkhai_api_gate.asgi import TokenGateMiddleware
 
 
@@ -29,11 +29,11 @@ class FakeClient:
         self.consume_calls: list[dict] = []
         self.batch_calls: list[list[dict]] = []
 
-    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
         self.verify_calls += 1
         return VerifyResult(valid=True, status="active", balance=self._balance)
 
-    async def consume(self, *, key_id, amount, idempotency_key=None) -> ConsumeResult:
+    async def consume(self, *, key_id, amount, idempotency_key=None, service=None, resource_id=None) -> ConsumeResult:
         self.consume_calls.append({"key_id": key_id, "amount": amount})
         self._balance = max(0, self._balance - amount)
         if self._balance < 0:
@@ -164,13 +164,13 @@ class SecretCheckingClient:
         self.verified: list[str] = []
         self.consumed = 0
 
-    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
         self.verified.append(secret)
         if secret in self.accepted:
             return VerifyResult(valid=True, status="active", balance=10)
         return VerifyResult(valid=False, status=None, balance=0)
 
-    async def consume(self, *, key_id, amount, idempotency_key=None) -> ConsumeResult:
+    async def consume(self, *, key_id, amount, idempotency_key=None, service=None, resource_id=None) -> ConsumeResult:
         self.consumed += 1
         return ConsumeResult(ok=True, balance=10 - self.consumed, consumed=amount)
 
@@ -219,7 +219,7 @@ class HeldVerificationClient(SecretCheckingClient):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
         if secret != self.held or self.started.is_set():
             return await super().verify(key_id=key_id, secret=secret)
         self.verified.append(secret)
@@ -265,3 +265,136 @@ async def test_a_late_answer_does_not_outlast_a_newer_refusal_of_the_same_secret
 
     assert (again.allowed, again.status) == (False, 401)
     assert client.verified == ["ak_k.new", "ak_k.old", "ak_k.old", "ak_k.old"]
+
+
+# Verification and charge as separable steps
+
+
+class ScriptedClient:
+    """Answers verify with a scripted result and records every call with its arguments."""
+
+    def __init__(self, verify: VerifyResult, *, consume: ConsumeResult | None = None) -> None:
+        self._verify = verify
+        self._consume = consume
+        self.calls: list[tuple[str, dict]] = []
+
+    async def verify(self, **kwargs) -> VerifyResult:
+        self.calls.append(("verify", kwargs))
+        return self._verify
+
+    async def consume(self, **kwargs) -> ConsumeResult:
+        self.calls.append(("consume", kwargs))
+        return self._consume or ConsumeResult(ok=True, balance=self._verify.balance - kwargs["amount"], consumed=kwargs["amount"])
+
+    async def consume_batch(self, items) -> list[ConsumeResult]:
+        self.calls.append(("consume_batch", {"items": list(items)}))
+        return [ConsumeResult(ok=True, balance=0, consumed=item["amount"]) for item in items]
+
+
+PINNED = VerifyResult(
+    valid=True, status="active", balance=50,
+    accepted_terms={"rate_card": {}}, terms_digest="sha256:" + "a" * 64, request_charge=3,
+)
+
+
+async def test_verification_alone_makes_no_charge():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(), client)
+
+    verified = await gate.verify("Bearer ak_live.s")
+
+    assert verified.key_id == "ak_live"
+    assert (verified.accepted_terms, verified.terms_digest, verified.request_charge) == (
+        PINNED.accepted_terms, PINNED.terms_digest, 3,
+    )
+    assert [name for name, _ in client.calls] == ["verify"]
+
+
+@pytest.mark.parametrize("batched", [False, True], ids=["synchronous", "batched"])
+async def test_verify_then_charge_makes_the_same_exchanges_and_state_as_authorize(batched):
+    config = _cfg(flush_interval_seconds=60.0, low_balance_threshold=1) if batched else _cfg()
+    separate, together = ScriptedClient(PINNED), ScriptedClient(PINNED)
+    gate_a, gate_b = TokenGate(config, separate), TokenGate(config, together)
+
+    for idem in ("idem-1", "idem-2"):
+        decision_a = await gate_a.charge(await gate_a.verify("Bearer ak_live.s"), idempotency_key=idem)
+        decision_b = await gate_b.authorize("Bearer ak_live.s", idempotency_key=idem)
+        assert decision_a == decision_b
+    await gate_a.flush()
+    await gate_b.flush()
+
+    # The second request is answered from the cached verification in both.
+    assert separate.calls == together.calls
+    assert [name for name, _ in separate.calls].count("verify") == 1
+
+
+@pytest.mark.parametrize(
+    ("verified", "charged"),
+    [(PINNED, 3), (VerifyResult(valid=True, status="active", balance=50), 2)],
+    ids=["pinned-charge", "configured-default"],
+)
+async def test_the_charge_is_the_verified_one_and_the_configured_amount_otherwise(verified, charged):
+    client = ScriptedClient(verified)
+    gate = TokenGate(_cfg(amount_per_request=2), client)
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    assert client.calls[-1][1]["amount"] == charged
+
+
+@pytest.mark.parametrize(
+    ("scope", "sent"),
+    [
+        ({"scope_service": "svc", "scope_resource_id": "quota"}, {"service": "svc", "resource_id": "quota"}),
+        ({}, {"service": None, "resource_id": None}),
+    ],
+    ids=["scoped", "unscoped"],
+)
+async def test_the_configured_scope_is_sent_on_verify_and_consume(scope, sent):
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(**scope), client)
+
+    await gate.authorize("Bearer ak_live.s")
+
+    for name, kwargs in client.calls:
+        assert {key: kwargs[key] for key in ("service", "resource_id")} == sent, name
+
+
+async def test_a_pinned_charge_is_batched_and_requeued_at_its_own_amount():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0, low_balance_threshold=1, scope_service="svc"), client)
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    async def unavailable(items):
+        client.calls.append(("consume_batch", {"items": list(items)}))
+        return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+
+    client.consume_batch = unavailable
+    await gate.flush()
+    await gate.flush()
+    batches = [kwargs["items"] for name, kwargs in client.calls if name == "consume_batch"]
+    assert [[item["amount"] for item in batch] for batch in batches] == [[3], [3]]
+
+
+async def test_charging_a_key_the_gate_never_verified_is_an_invalid_key():
+    decision = await TokenGate(_cfg(), ScriptedClient(PINNED)).charge(VerifiedKey(key_id="ak_other"))
+    assert (decision.allowed, decision.status) == (False, 401)
+
+
+async def test_a_key_out_of_scope_is_403_and_never_charged():
+    client = ScriptedClient(VerifyResult(valid=False, status="key_out_of_scope", balance=0))
+    gate = TokenGate(_cfg(scope_service="svc"), client)
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body["error"]) == (False, 403, "key_out_of_scope")
+    assert [name for name, _ in client.calls] == ["verify"]
+
+
+async def test_a_consume_refused_out_of_scope_is_403():
+    client = ScriptedClient(PINNED, consume=ConsumeResult(ok=False, balance=0, reason="key_out_of_scope"))
+    gate = TokenGate(_cfg(scope_service="svc"), client)
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body["error"]) == (False, 403, "key_out_of_scope")

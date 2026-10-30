@@ -5,7 +5,9 @@ middleware in ``asgi.py`` is the first). It owns the verify cache, the
 per-key balance estimate, the batched-charge accumulator, and the
 background flush loop; an adapter only translates a request's
 ``Authorization`` header into ``authorize(...)`` and a ``GateDecision``
-back into an HTTP response.
+back into an HTTP response. ``authorize`` is ``verify`` then ``charge``; a
+composition that must check a verified key before charging it calls the two
+itself.
 
 Decision vocabulary (status + machine-readable body) is identical
 across languages — it is the behavioral contract the conformance
@@ -27,6 +29,7 @@ from typing import Any
 from .client import (
     INSUFFICIENT_CREDITS,
     KEY_NOT_FOUND,
+    KEY_OUT_OF_SCOPE,
     KEY_REVOKED,
     TokensClient,
     VerifyResult,
@@ -52,6 +55,16 @@ class GateDecision:
     status: int = 200
     key_id: str | None = None
     body: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class VerifiedKey:
+    """A key the authority verified, with the terms its first grant pinned, if any."""
+
+    key_id: str
+    accepted_terms: dict[str, Any] | None = None
+    terms_digest: str | None = None
+    request_charge: int | None = None
 
 
 @dataclass
@@ -139,6 +152,13 @@ class TokenGate:
     async def authorize(
         self, authorization: str | None, *, idempotency_key: str | None = None,
     ) -> GateDecision:
+        verified = await self.verify(authorization)
+        if isinstance(verified, GateDecision):
+            return verified
+        return await self.charge(verified, idempotency_key=idempotency_key)
+
+    async def verify(self, authorization: str | None) -> GateDecision | VerifiedKey:
+        """Verify the presented key without charging it: a denial, or the verified key."""
         secret = parse_bearer(authorization)
         if secret is None:
             return GateDecision(
@@ -156,12 +176,33 @@ class TokenGate:
         if not verify.valid:
             if verify.status == "revoked":
                 return self._deny(403, KEY_REVOKED, key_id)
+            if verify.status == KEY_OUT_OF_SCOPE:
+                return self._deny(403, KEY_OUT_OF_SCOPE, key_id)
             return GateDecision(
                 allowed=False, status=401, key_id=key_id,
                 body={"error": INVALID_API_KEY},
             )
+        return VerifiedKey(
+            key_id=key_id,
+            accepted_terms=verify.accepted_terms,
+            terms_digest=verify.terms_digest,
+            request_charge=verify.request_charge,
+        )
 
-        return await self._charge(key_id, idempotency_key)
+    async def charge(
+        self, verified: VerifiedKey, *, idempotency_key: str | None = None,
+    ) -> GateDecision:
+        """Charge a verified key the charge its terms pinned, else the configured amount.
+
+        ``verified`` is what this gate's ``verify`` returned; a key it has not
+        verified is answered as an invalid key.
+        """
+        amount = (
+            verified.request_charge
+            if verified.request_charge is not None
+            else self._cfg.amount_per_request
+        )
+        return await self._charge(verified.key_id, amount, idempotency_key)
 
     async def _verified_state(self, key_id: str, secret: str) -> VerifyResult:
         # The key id is public, read off any bearer header, so a cached
@@ -179,7 +220,12 @@ class TokenGate:
             ):
                 return state.verify
 
-        verify = await self._client.verify(key_id=key_id, secret=secret)
+        verify = await self._client.verify(
+            key_id=key_id,
+            secret=secret,
+            service=self._cfg.scope_service,
+            resource_id=self._cfg.scope_resource_id,
+        )
 
         async with self._lock:
             existing = self._states.get(key_id)
@@ -221,14 +267,20 @@ class TokenGate:
         return verify
 
     async def _charge(
-        self, key_id: str, idempotency_key: str | None,
+        self, key_id: str, amount: int, idempotency_key: str | None,
     ) -> GateDecision:
-        amount = self._cfg.amount_per_request
         idem = idempotency_key or uuid.uuid4().hex
+        # A batch item carries no scope. It need not: a key's scope is fixed by
+        # its first grant and was checked when the key was verified.
         batching = self._cfg.flush_interval_seconds > 0
 
         async with self._lock:
-            state = self._states[key_id]
+            state = self._states.get(key_id)
+            if state is None:
+                return GateDecision(
+                    allowed=False, status=401, key_id=key_id,
+                    body={"error": INVALID_API_KEY},
+                )
             if state.exhausted:
                 return self._deny(402, INSUFFICIENT_CREDITS, key_id)
             estimated_after = state.estimated_balance - amount
@@ -244,7 +296,11 @@ class TokenGate:
 
         # Synchronous charge — outside the lock (network call).
         result = await self._client.consume(
-            key_id=key_id, amount=amount, idempotency_key=idem,
+            key_id=key_id,
+            amount=amount,
+            idempotency_key=idem,
+            service=self._cfg.scope_service,
+            resource_id=self._cfg.scope_resource_id,
         )
         async with self._lock:
             state = self._states.get(key_id)
@@ -254,6 +310,8 @@ class TokenGate:
             return GateDecision(allowed=True, status=200, key_id=key_id)
         if result.reason == KEY_REVOKED:
             return self._deny(403, KEY_REVOKED, key_id)
+        if result.reason == KEY_OUT_OF_SCOPE:
+            return self._deny(403, KEY_OUT_OF_SCOPE, key_id)
         if result.reason == KEY_NOT_FOUND:
             return GateDecision(
                 allowed=False, status=401, key_id=key_id,
@@ -293,7 +351,7 @@ class TokenGate:
             return
         results = await self._client.consume_batch(items)
         async with self._lock:
-            for owner, result in zip(owners, results):
+            for owner, item, result in zip(owners, items, results):
                 state = self._states.get(owner)
                 if state is None:
                     continue
@@ -302,7 +360,7 @@ class TokenGate:
                 elif result.reason == "batch_unavailable":
                     # Transport hiccup — requeue so the charge isn't lost.
                     state.pending.append(
-                        {"key_id": owner, "amount": self._cfg.amount_per_request,
+                        {"key_id": owner, "amount": item["amount"],
                          "idempotency_key": uuid.uuid4().hex}
                     )
                 else:

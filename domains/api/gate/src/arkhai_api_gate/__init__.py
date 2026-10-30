@@ -21,6 +21,7 @@ from .gate import (
     MISSING_API_KEY,
     GateDecision,
     TokenGate,
+    VerifiedKey,
     key_id_from_secret,
     parse_bearer,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "TokenGate",
     "TokenGateMiddleware",
     "TokensClient",
+    "VerifiedKey",
     "VerifyResult",
     "key_id_from_secret",
     "parse_bearer",

@@ -5,8 +5,8 @@ export UV_PYTHON := $(or $(shell cat ../.python-version 2>/dev/null),$(error ../
 	dist-bare-metal-storefront dist-storefront dist-provisioning-operator-client dist-provisioning-adapters \
 	dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront \
 	dist-apicredits-sample-app dist-apicredits-buyer \
-	dist-inference-domain dist-inference-service dist-inference-storefront dist-buyer test-provisioning-iac test-provisioning-adapter test-storefront \
-	test-bare-metal test-compute test-api test-api-client test-api-authority test-api-selling test-api-selling-alkahest test-api-selling-arkhai-payments test-api-buying test-api-buying-alkahest test-api-buying-arkhai-payments test-api-gate test-api-gateway test-vms-domain test-vms-buyer test-apicredits test-inference test-inference-service test-inference-storefront
+	dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-buyer test-provisioning-iac test-provisioning-adapter test-storefront \
+	test-bare-metal test-compute test-api test-api-client test-api-authority test-api-selling test-api-selling-alkahest test-api-selling-arkhai-payments test-api-buying test-api-buying-alkahest test-api-buying-arkhai-payments test-api-gate test-api-gateway test-vms-domain test-vms-buyer test-apicredits test-inference test-inference-service test-inference-storefront test-inference-buyer
 
 DIST_DIR ?= $(abspath ../.dist)
 
@@ -15,7 +15,7 @@ dist: dist-compute dist-api dist-api-contracts dist-api-client dist-api-authorit
 	dist-storefront dist-provisioning-operator-client dist-provisioning-adapters \
 	dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront \
 	dist-apicredits-sample-app dist-apicredits-buyer \
-	dist-inference-domain dist-inference-service dist-inference-storefront dist-buyer ## Build every domains-scoped wheel
+	dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-buyer ## Build every domains-scoped wheel
 
 # ---------------------------------------------------------------------------
 # Dist -- leaf wheel-build recipes for domains/-scoped packages, mirroring
@@ -216,6 +216,12 @@ dist-inference-storefront: dist-inference-domain dist-api-selling dist-api-selli
 	@ls $(DIST_DIR)/arkhai_inference_storefront-*-none-any.whl > /dev/null 2>&1 || \
 		(echo "ERROR: arkhai-inference-storefront produced a platform-specific wheel -- must build inside Docker" && exit 1)
 
+dist-inference-buyer: dist-inference-domain dist-api-buying dist-api-buying-alkahest ## Build arkhai-inference-buyer wheel into .dist/
+	-mkdir -p $(DIST_DIR)
+	cd inference/buyer && uv build --wheel --out-dir $(DIST_DIR)
+	@ls $(DIST_DIR)/arkhai_inference_buyer-*-none-any.whl > /dev/null 2>&1 || \
+		(echo "ERROR: arkhai-inference-buyer produced a platform-specific wheel -- must build inside Docker" && exit 1)
+
 dist-buyer: dist-vms-listings dist-vms-negotiation dist-vms-settlement ## Build arkhai-vms-buyer (the `market` CLI) wheel into .dist/
 	-mkdir -p $(DIST_DIR)
 	cd vms/buyer && uv build --wheel --out-dir $(DIST_DIR)
@@ -307,6 +313,9 @@ test-inference-service: ## Inference service tests: unit and application integra
 
 test-inference-storefront: ## Inference storefront tests: unit and application integration
 	cd inference && $(MAKE) test-storefront
+
+test-inference-buyer: ## Inference buyer plugin tests: unit
+	cd inference && $(MAKE) test-buyer
 
 
 test-provisioning-adapter: ## VM provisioning adapter tests against built wheels

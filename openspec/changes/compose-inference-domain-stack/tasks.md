@@ -1260,7 +1260,7 @@ verification hook, and the surfaced scope refusal (D9, D12, D16; review 01 F4
 carry verification seams for a later proof"; market-composition delta
 "Versioned market-domain contract", scenario "Shipped domains are loaded").
 
-- [ ] 7.1 Create `domains/inference/buyer/` with `pyproject.toml`
+- [x] 7.1 Create `domains/inference/buyer/` with `pyproject.toml`
       (`arkhai-inference-buyer`, hatchling, `packages =
       ["src/arkhai_inference_buyer"]`, entry point `market.buyer_domains` →
       `inference = "arkhai_inference_buyer.cli:domain"`) depending on `typer`,
@@ -1268,7 +1268,13 @@ carry verification seams for a later proof"; market-composition delta
       `arkhai-inference-domain`, `arkhai-core-buyer`, `arkhai-core`, and not on
       `arkhai-api-buying-arkhai-payments` (D9); a `Makefile` with `reinit` and
       `test`; `tests/`.
-- [ ] 7.2 `src/arkhai_inference_buyer/cli.py`: `CONTRIBUTIONS =
+      *Note:* `arkhai-inference-buyer` 0.1.0, as planned, plus `pydantic`
+      (the verification module validates the envelope) and floors at the
+      current family versions. Its dev group declares what only the tests
+      import: the identity kit, the registry client, `pyyaml` (reading the
+      registry's specification), and `packaging`. Locked with
+      `uv lock --find-links .dist`, then `scripts/uv_project.py lock`.
+- [x] 7.2 `src/arkhai_inference_buyer/cli.py`: `CONTRIBUTIONS =
       BuyingContributions(schema_id="inference",
       provision_terms=InferenceProvisionTerms, command="inference",
       command_help=..., noun="inference", resource_query_example=<a model_id
@@ -1285,21 +1291,56 @@ carry verification seams for a later proof"; market-composition delta
       filters compile from the served specification and the plugin encodes no
       rate-bound pairing (D12; inference delta scenario "Buyer bounds a rate
       without naming an asset").
-- [ ] 7.3 `src/arkhai_inference_buyer/verification.py`: the purchase-time
+      *Note:* `cli.py` on the API-credits plugin's shape. The summary is the
+      `model_id`, with `(as <served_model_name>)` when the served name differs;
+      the columns are quantization, context, provenance, and the per-request
+      charge; the details are the card's identity, artifact, quantization,
+      context, base URL, rate asset, request charge, and attestation kind. The
+      stage table's one entry is the plugin's `VerifyingAlkahestStage` (7.3),
+      whose mechanism is `alkahest.v1`. `settlement status` comes from the
+      family's command group, as `settle` does.
+- [x] 7.3 `src/arkhai_inference_buyer/verification.py`: the purchase-time
       hook — called with the attestation envelope of the listing being bought,
       before settlement is proposed, returning a refusal or `None` — and its
       `admit_all` default, applied as a plugin-local wrapper around the
       Alkahest stage's `propose` so the library is unchanged (D16; inference
       delta "The gateway and buyer carry verification seams for a later
       proof"). No proof `kind` is defined.
-- [ ] 7.4 The authority's `key_out_of_scope` refusal of a top-up, relayed by
+      *Note:* `verification.py`. Against the plan's wording, the wrapper is a
+      subclass of the Alkahest stage and of its buy session rather than a
+      wrapper around one method, because the buying library proposes through
+      two paths: `buy` asks the session to `propose`, and `negotiate` asks the
+      stage to `prepare_selection` before its `proposal`. Recorded under D12 in
+      `design.md`. A refusal in `propose` skips the listing with a message
+      naming it; one in `prepare_selection` raises `ValueError`. That `buy`
+      then tries another match and `negotiate` reports a bad parameter is the
+      library's code as read (`settlement_composition.select_proposal`,
+      `negotiate`), not driven by a test here. The hook is synchronous and
+      takes the listing's envelope as it carries it, or `None`; reading it is
+      the hook's business, so the default admits a listing whose envelope no
+      proof format reads, as the delta's "No proof format is configured" asks.
+- [x] 7.4 The authority's `key_out_of_scope` refusal of a top-up, relayed by
       the storefront's settlement refusal, is reported by `market inference
       buy --key-id` as the storefront names it and is not retried (review 01
       F4; inference delta scenario "A buyer tops up from another model's
       listing", the buyer half). A completed purchase shows the key, the base
       URL, and the served model name from the kit's connection payload
       (inference delta scenario "A buyer completes a purchase").
-- [ ] 7.5 Unit tests (`tests/`): `test_plugin_export.py` — the entry point
+      *Note:* **partly met.** The plugin adds nothing here: the storefront fails
+      the delivery with the authority's reason (`arkhai_api_selling.issuance`),
+      and the family's settle path shows a failed terminal's reason once and
+      exits 7 without resubmitting. `test_scope_refusal.py` proves it through
+      `market inference settle --from` (the resume path) with the seller's
+      submit and status calls scripted, not through `buy --key-id`, whose
+      settle hook is a different function of the Alkahest stage and is not
+      driven in process; `e2e_inference_deal` owes the `buy` half. A completed
+      purchase shows the key and the base URL; **the served model name is not
+      shown**: the kit's credential panel renders `key_id`, `secret`,
+      `base_url`, and `balance`, and the served name travels only in the
+      delivery's `connection_details`, which no buyer command renders. Showing
+      it is a buying-library change, recorded as open under D12 in `design.md`
+      for review to weigh rather than widening this section.
+- [x] 7.5 Unit tests (`tests/`): `test_plugin_export.py` — the entry point
       loads the `inference.v1` contract once with the buyer capability and the
       `inference` schema identity; `test_listing_helpers.py` — the rendering's
       summary and columns from a card; `test_discovery_routing.py` — with
@@ -1315,25 +1356,75 @@ carry verification seams for a later proof"; market-composition delta
       — a scripted storefront refusal naming the key's scope reaches the
       command's output once; `test_packaging.py` on the API-credits buyer's
       pattern.
-- [ ] 7.6 `core/tests/unit/test_domain_boundaries.py`: `CONCRETE_IDENTITIES`
+      *Note:* unit, 23 tests in `tests/`, passed: `test_plugin_export.py`
+      (5: discovery yields `inference.v1` once; the module's contract carries
+      the buyer capability), `test_listing_helpers.py` (3),
+      `test_discovery_routing.py` (4: core's schema routing, given the plugin's
+      schema id, keeps only the inference registry among compute, API-credits,
+      and inference registries scripted at the signed client's seam; the
+      plugin's schema equals the specification's; through the registry
+      client's compiler against the inference specification, a `model_id`
+      query compiles and a `prompt_credits` bound without `rate_card_asset` is
+      refused — no plugin command is driven, and that only that model's
+      listings return is end-to-end), `test_settlement_composition.py` (3: the
+      stage table holds Alkahest alone; the installed project's declared
+      requirements through `importlib.metadata` name no payments distribution;
+      a buyer configuration whose priority names `arkhai.payments.v1` is refused
+      naming it), `test_verification_hook.py` (5, the library's `propose` and
+      `prepare_selection` replaced by recorders), `test_scope_refusal.py` (2,
+      7.4), `test_packaging.py` (1, the lock).
+- [x] 7.6 `core/tests/unit/test_domain_boundaries.py`: `CONCRETE_IDENTITIES`
       gains `inference.v1`, so core is checked for branches on the new identity
       (market-composition delta scenario "Shipped domains are loaded";
       `market-composition` requirement "Schema-opaque core orchestration"). The
       installed-plugin half of that scenario is the end-to-end image, which
       installs every shipped buyer plugin (section 11).
-- [ ] 7.7 Build and release: `domains/Makefile` and the root `Makefile` gain
+      *Note:* as planned; `test_domain_boundaries.py` passed (unit).
+- [x] 7.7 Build and release: `domains/Makefile` and the root `Makefile` gain
       `dist-inference-buyer` (after `dist-api-buying-alkahest`) and
       `test-inference-buyer` in the aggregates; `.github/workflows/tests.yml`
       gains `inference-buyer`; the manifest (`wheel_only`, as the API-credits
       buyer is), publish workflow, and `RELEASING.md` gain
       `arkhai-inference-buyer`.
-- [ ] 7.8 **Verification.** `make test-inference-buyer` (unit); `make
+      *Note:* all entries; the manifest and publish matrix mark it
+      `wheel_only`, as the API-credits buyer is. The root `dist-inference-buyer`
+      builds the domain, buying-Alkahest, and registry-client wheels; the root
+      `test-inference` requires the buyer's wheels too.
+- [x] 7.8 **Verification.** `make test-inference-buyer` (unit); `make
       test-core` for the boundary test. `make test`. New project: `make lock
       PROJECTS=domains/inference/buyer` and `make check-packaging`. Once
       deployed, `e2e_inference_deal` exercises discovery with three registries
       configured, `buy`, settlement, the delivered credential, and the top-up;
       the hook and the scope refusal's rendering are proven in process.
 
+      *Note:* `make test-inference-buyer` passed (23, unit); the core boundary
+      test passed (`make test-core`); the new project's lock
+      (`uv lock --find-links .dist`, then `scripts/uv_project.py lock`), `make
+      check-packaging`, `make check-comment-hygiene`, and `make check-change`
+      passed. `make -k test` passed every target but the provisioning unit test
+      that fails only within its suite (section 1's note); `anvil` was on
+      `PATH`. No end-to-end scenario exercises the plugin yet:
+      `e2e_inference_deal` is section 11's, and owes `buy` with a key top-up
+      (7.4's `buy` half) besides discovery, settlement, and delivery.
+      The compliance check found no layering or packaging failure. Fixed: the
+      default hook refused a listing whose envelope did not validate, against
+      "No proof format is configured" (the hook now reads the envelope
+      itself); the buyer's refusal of another mechanism had no test (added);
+      the subclassing and the unmet served-name display were recorded only in
+      task notes (now under D12 in `design.md`); the notes overstated what the
+      hook, discovery, and composition tests drive (corrected above);
+      docstring and dev-group comment wording; an unpinned dev dependency.
+      Declined: replacing the module-attribute patches in the scope-refusal and
+      routing tests with injected seams (the precedent's shape; the library
+      offers no seam), and unchecking 7.4 — it stays checked as partly met, as
+      5.12 did, with its gap open in `design.md`.
+      *Handoff:* the gateway executable (section 8) is independent of this
+      plugin. For section 11, the plugin is `market inference`, its schema id
+      `inference`, its resource query over the inference registry's filters
+      (a rate bound needs `rate_card_asset`), and a refused top-up surfaces as
+      a failed settlement whose reason is `key_out_of_scope`. Two items are
+      open for review: the served model name on a completed purchase (a
+      buying-library change) and 5.12's reprice scenario through the app.
 ## 8. Inference gateway executable `arkhai-inference-gateway-service`
 
 Delivers the `arkhai:inference-gateway` image: the root that reads and

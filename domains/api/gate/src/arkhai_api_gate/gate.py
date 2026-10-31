@@ -86,7 +86,13 @@ class _KeyState:
     secret_fingerprint: bytes
     verified_ticket: int
     pending: list[dict[str, Any]] = field(default_factory=list)
+    # Credits sent in a batch whose answer has not been processed.
+    in_flight: int = 0
     exhausted: bool = False
+
+    def settled_estimate(self, balance: int) -> int:
+        """An authority-reported balance less the charges it has not yet settled."""
+        return balance - self.in_flight - sum(item["amount"] for item in self.pending)
 
 
 def _fingerprint(secret: str) -> bytes:
@@ -134,6 +140,11 @@ class TokenGate:
         self._lock = asyncio.Lock()
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
+        # A flush called directly holds detached charges no queue shows, so
+        # ``aclose`` waits until no flush is in progress.
+        self._flushes = 0
+        self._no_flush = asyncio.Event()
+        self._no_flush.set()
 
     # -- lifecycle ----------------------------------------------------
 
@@ -156,6 +167,7 @@ class TokenGate:
             except asyncio.CancelledError:
                 pass
             self._flush_task = None
+        await self._no_flush.wait()
         await self.flush()
 
     # -- request path -------------------------------------------------
@@ -283,10 +295,7 @@ class TokenGate:
                 return verify, ticket
             estimated = verify.balance
             if existing is not None:
-                # Keep the running estimate (it may be ahead of the
-                # verify-reported balance because of un-flushed charges).
-                estimated = min(existing.estimated_balance, verify.balance) \
-                    if existing.pending else verify.balance
+                estimated = existing.settled_estimate(verify.balance)
                 existing.verify = verify
                 existing.verify_expires = now + self._cfg.verify_ttl_seconds
                 existing.secret_fingerprint = fingerprint
@@ -360,7 +369,7 @@ class TokenGate:
         async with self._lock:
             state = self._states.get(key_id)
             if state is not None:
-                state.estimated_balance = result.balance
+                state.estimated_balance = state.settled_estimate(result.balance)
         if result.ok:
             return GateDecision(allowed=True, status=200, key_id=key_id)
         if result.reason == KEY_REVOKED:
@@ -392,6 +401,16 @@ class TokenGate:
 
     async def flush(self) -> None:
         """Settle all accumulated batched charges with the authority."""
+        self._flushes += 1
+        self._no_flush.clear()
+        try:
+            await self._flush_once()
+        finally:
+            self._flushes -= 1
+            if not self._flushes:
+                self._no_flush.set()
+
+    async def _flush_once(self) -> None:
         async with self._lock:
             items: list[dict[str, Any]] = []
             owners: list[str] = []
@@ -399,6 +418,7 @@ class TokenGate:
                 for item in state.pending:
                     items.append(dict(item))
                     owners.append(key_id)
+                    state.in_flight += item["amount"]
                 state.pending.clear()
                 if len(items) >= self._cfg.flush_max_batch:
                     break
@@ -429,11 +449,13 @@ class TokenGate:
                 state = self._states.get(owner)
                 if state is None:
                     continue
-                if result.ok:
-                    state.estimated_balance = result.balance
-                elif result.reason in (BATCH_UNAVAILABLE, UNAUTHENTICATED_SERVICE):
+                if result.reason in (BATCH_UNAVAILABLE, UNAUTHENTICATED_SERVICE):
                     # Whether the authority applied it is unknown.
                     unanswered.append((owner, item))
+                    continue
+                state.in_flight -= item["amount"]
+                if result.ok:
+                    state.estimated_balance = state.settled_estimate(result.balance)
                 elif result.reason == KEY_OUT_OF_SCOPE:
                     # The key is not this gateway's: deny it as verify would
                     # until a fresh verification answers for it.
@@ -442,7 +464,7 @@ class TokenGate:
                     )
                     state.verified_ticket = next(self._tickets)
                 else:
-                    state.estimated_balance = result.balance
+                    state.estimated_balance = state.settled_estimate(result.balance)
                     state.exhausted = True
             unanswered.extend(zip(owners[len(results):], items[len(results):]))
             self._requeue(unanswered)
@@ -457,6 +479,7 @@ class TokenGate:
         for owner, owned in by_owner.items():
             state = self._states.get(owner)
             if state is not None:
+                state.in_flight -= sum(item["amount"] for item in owned)
                 state.pending[:0] = owned
 
     # -- helpers ------------------------------------------------------

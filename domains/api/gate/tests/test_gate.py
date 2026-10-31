@@ -663,3 +663,94 @@ async def test_an_unverifiable_consume_answer_is_a_502_that_leaves_the_key_untou
     )
     state = gate._states["ak_live"]
     assert (state.exhausted, state.estimated_balance) == (False, 10)
+
+
+class BlockedBatch:
+    """Holds each batch at the authority until released, then answers it as ``client`` would."""
+
+    def __init__(self, client: FakeClient, *, fail_first: bool = False) -> None:
+        self._answer = client.consume_batch
+        self.items: list[list[dict]] = []
+        self.arrived = asyncio.Event()
+        self.release = asyncio.Event()
+        self._fail_first = fail_first
+
+    async def __call__(self, items):
+        self.items.append([dict(item) for item in items])
+        if len(self.items) == 1:
+            self.arrived.set()
+            await self.release.wait()
+            if self._fail_first:
+                raise httpx.ConnectError("connection reset")
+        return await self._answer(items)
+
+
+async def test_a_charge_admitted_while_a_flush_waits_keeps_its_deduction():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(amount_per_request=3, flush_interval_seconds=60.0), client)
+    client.consume_batch = batch = BlockedBatch(client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    batch.release.set()
+    await flushing
+
+    state = gate._states["ak_live"]
+    assert (state.estimated_balance, state.in_flight, len(state.pending)) == (44, 0, 1)
+
+
+async def test_a_synchronous_charge_keeps_the_deduction_of_a_queued_one():
+    client = FakeClient(balance=10)
+    gate = TokenGate(
+        _cfg(amount_per_request=3, flush_interval_seconds=60.0, low_balance_threshold=5), client,
+    )
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    # 7 - 3 falls to the threshold, so this one is consumed synchronously.
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    assert len(client.consume_calls) == 1
+    assert gate._states["ak_live"].estimated_balance == 4
+
+
+async def test_a_verification_answered_while_a_batch_is_in_flight_keeps_its_deduction():
+    now = [0.0]
+    client = FakeClient(balance=50)
+    gate = TokenGate(
+        _cfg(amount_per_request=3, flush_interval_seconds=60.0, verify_ttl_seconds=10.0),
+        client, clock=lambda: now[0],
+    )
+    client.consume_batch = batch = BlockedBatch(client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+
+    now[0] = 20.0
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    assert client.verify_calls == 2
+    assert gate._states["ak_live"].estimated_balance == 44
+    batch.release.set()
+    await flushing
+
+    assert gate._states["ak_live"].estimated_balance == 44
+
+
+async def test_closing_waits_for_a_flush_called_directly_and_resends_its_items():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    client.consume_batch = batch = BlockedBatch(client, fail_first=True)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+
+    closing = asyncio.ensure_future(gate.aclose())
+    await asyncio.sleep(0)
+    assert not closing.done()
+    batch.release.set()
+    with pytest.raises(httpx.ConnectError):
+        await flushing
+    await closing
+
+    assert [item["idempotency_key"] for call in batch.items for item in call] == ["idem-1", "idem-1"]
+    assert gate._states["ak_live"].pending == []

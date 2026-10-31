@@ -546,6 +546,18 @@ steps"; D16's ordering, verification before charge).
       test-api-gate` (55) and `make test-apicredits` pass, with unit tests for
       a flush cancelled between its answer and its processing and for an
       unverifiable consume answer.
+      *Fix (implementation review 11 F1, F2):* the gate tracks each key's
+      credits in flight — sent in a batch whose answer is not yet processed —
+      and every balance the authority reports, from a batch, a synchronous
+      consume, or a verification, becomes the estimate less the charges still
+      queued and in flight, so a charge admitted while a flush waits keeps its
+      deduction and a top-up still raises the estimate. `aclose` waits until
+      no flush is in progress, a flush called directly included, before its
+      final flush, so charges such a flush puts back are resent. Evidence:
+      `make test-api-gate` (59) passes, with unit tests for a charge admitted
+      during a flush, a synchronous charge beside a queued one, a
+      verification answered during a flush, and a close during a direct
+      flush; each fails against the gate before the fix.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

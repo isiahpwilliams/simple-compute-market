@@ -32,6 +32,10 @@ KEY_OUT_OF_SCOPE = "key_out_of_scope"
 #: perfectly good and something on the path is answering for the authority.
 UNAUTHENTICATED_SERVICE = "unauthenticated_service"
 
+#: Reported for every item of a batch the authority did not answer; whether
+#: it settled them is unknown.
+BATCH_UNAVAILABLE = "batch_unavailable"
+
 #: The path and signed operation of each route this client calls, spelled
 #: locally so the gate depends on httpx alone. The authority signs over its
 #: own declarations, so any drift fails verification;
@@ -247,7 +251,7 @@ class TokensClient:
             # The whole flush failed at the transport/auth layer; report
             # every item as a soft failure so the caller can retry.
             return [
-                ConsumeResult(ok=False, balance=0, reason="batch_unavailable")
+                ConsumeResult(ok=False, balance=0, reason=BATCH_UNAVAILABLE)
                 for _ in items
             ]
         results = resp.json().get("results") or []

@@ -521,6 +521,21 @@ steps"; D16's ordering, verification before charge).
       `make check-architecture` and `make check-comment-hygiene` pass. No
       version changes: contracts 0.5.0, authority 0.2.0 and gate 0.2.0 are
       unreleased.
+      *Fix (implementation review 09 F1, F2):* a synchronous consume never
+      sees the secret, so it does not re-authenticate: a `VerifiedKey` also
+      keeps the presented secret (out of its repr and equality), and once the
+      cached verification has expired `charge` verifies that secret again and
+      denies as `verify` would when the authority no longer accepts it — a
+      secret rotated away by an issuance replay is refused 401 and never
+      charged. A flush whose outcome is unknown — `consume_batch` raising
+      (cancellation included), an item answered `batch_unavailable` or
+      `unauthenticated_service`, or a short answer — puts the exact items back
+      ahead of newer pending charges, idempotency key and scope unchanged, so
+      no charge is lost and a committed batch is never debited twice.
+      Evidence: `make test-api-gate` (unit, parity, conformance replay; 53)
+      and `make test-apicredits` pass, with unit tests for the rotation, a
+      re-verified expired handle, a raising flush, an unavailable or
+      unauthenticated batch, a short answer, and a close during a flush.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

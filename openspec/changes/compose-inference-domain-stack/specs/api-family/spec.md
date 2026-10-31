@@ -75,6 +75,27 @@ verification to expire.
 - **THEN** requests inside the recheck window are denied `402` without an
   authority call, and the first request after it is charged and admitted
 
+### Requirement: The gate charges a key in the order it admitted the key's requests
+
+A charge the gate sends to the authority synchronously MUST reach it after
+every charge of the same key admitted before it and still queued, so a request
+already served is never refused for credit a later charge took. When those
+older charges go unanswered, the synchronous charge MUST be refused `503`
+without being consumed. Closing the gate MUST wait for every charge being
+settled with the authority, batched or synchronous.
+
+#### Scenario: A queued charge and a later synchronous charge share the last credit
+
+- **WHEN** a key with 10 credits has a 6-credit charge queued and a second
+  6-credit request falls below the low-balance threshold
+- **THEN** the queued charge is settled first, and the second request is
+  denied `402`
+
+#### Scenario: A synchronous charge arrives while the gate closes
+
+- **WHEN** a charge is being consumed synchronously while the gate closes
+- **THEN** closing returns only after the authority has answered it
+
 ### Requirement: The public-result extension receives the delivery's settlement context
 
 The selling library MUST call a domain's public-result extension with the

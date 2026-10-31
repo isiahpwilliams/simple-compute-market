@@ -17,6 +17,7 @@ fixtures pin (``domains/apicredits/middleware/conformance``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import heapq
@@ -24,7 +25,7 @@ import hmac
 import itertools
 import time
 import uuid
-from collections.abc import Callable, Container, Iterable
+from collections.abc import Callable, Collection, Container, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,7 +61,8 @@ class GateDecision:
     """Outcome of authorizing one request.
 
     ``allowed`` requests pass through to the gated app. Denials carry a
-    status (401/402/403) and a machine-readable ``body`` — exhaustion
+    status (401/402/403, or 502/503 when the authority cannot settle the
+    charge) and a machine-readable ``body`` — exhaustion
     and revocation bodies include the ``purchase`` pointer so a client
     can re-enter the buy loop.
     """
@@ -166,13 +168,13 @@ class TokenGate:
         self._admissions = itertools.count()
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
-        # A flush called directly holds detached charges no queue shows, so
-        # ``aclose`` waits until no flush is in progress. Once closing, a
-        # charge is consumed synchronously, a direct flush takes nothing, and
-        # ``aclose`` drains the queue itself.
-        self._flushes = 0
-        self._no_flush = asyncio.Event()
-        self._no_flush.set()
+        # A flush or synchronous charge in progress holds a charge no queue
+        # shows, so ``aclose`` waits until none is. Once closing, a charge is
+        # consumed synchronously, a direct flush takes nothing, and ``aclose``
+        # drains the queue itself.
+        self._calls = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
 
     # -- lifecycle ----------------------------------------------------
 
@@ -200,15 +202,30 @@ class TokenGate:
             except asyncio.CancelledError:
                 pass
             self._flush_task = None
-        # Re-checked on every wake: the event says only that the count was
-        # zero at some point.
-        while self._flushes:
-            await self._no_flush.wait()
+        await self._settled()
         # Nothing is queued once closing, so the drain ends when every
         # charge queued before it has been offered.
         offered: set[int] = set()
         while sent := await self._flush_once(exclude=offered):
             offered.update(sent)
+        await self._settled()
+
+    async def _settled(self) -> None:
+        # Re-checked on every wake: the event says only that the count was
+        # zero at some point.
+        while self._calls:
+            await self._idle.wait()
+
+    @contextlib.contextmanager
+    def _authority_call(self) -> Iterator[None]:
+        self._calls += 1
+        self._idle.clear()
+        try:
+            yield
+        finally:
+            self._calls -= 1
+            if not self._calls:
+                self._idle.set()
 
     # -- request path -------------------------------------------------
 
@@ -421,9 +438,29 @@ class TokenGate:
                 state.queued += amount
                 state.estimated_balance = estimated_after
                 return GateDecision(allowed=True, status=200, key_id=key_id)
+            admission = next(self._admissions)
 
-        # Synchronous charge — outside the lock (network call).
+        with self._authority_call():
+            return await self._charge_now(key_id, amount, idem, admission)
+
+    async def _charge_now(
+        self, key_id: str, amount: int, idem: str, admission: int,
+    ) -> GateDecision:
         async with self._key_lock(key_id):
+            # The key's charges admitted before this one reach the authority
+            # first, or a request already served could be refused for credit
+            # this charge took.
+            limit = max(self._cfg.flush_max_batch, 1)
+            while True:
+                async with self._lock:
+                    entries = self._take(self._choose(limit, owners=(key_id,), before=admission))
+                if not entries:
+                    break
+                if not await self._send(entries):
+                    return GateDecision(
+                        allowed=False, status=503, key_id=key_id,
+                        body={"error": BATCH_UNAVAILABLE},
+                    )
             result = await self._client.consume(
                 key_id=key_id,
                 amount=amount,
@@ -477,78 +514,98 @@ class TokenGate:
         """Settle up to one batch of accumulated charges with the authority."""
         if self._closing:
             return
-        self._flushes += 1
-        self._no_flush.clear()
-        try:
+        with self._authority_call():
             await self._flush_once()
-        finally:
-            self._flushes -= 1
-            if not self._flushes:
-                self._no_flush.set()
 
     async def _flush_once(self, *, exclude: Container[int] = ()) -> list[int]:
         """Send one batch of the oldest charges not in ``exclude``; their admission numbers."""
-        async with self._lock:
-            entries = self._take(max(self._cfg.flush_max_batch, 1), exclude)
-        if not entries:
-            return []
+        limit = max(self._cfg.flush_max_batch, 1)
+        while True:
+            async with self._lock:
+                owners = sorted(self._choose(limit, exclude))
+            if not owners:
+                return []
+            # A key's charges leave its queue only under its lock, so a
+            # synchronous charge holding it sees every older charge queued.
+            # Sorted, so two flushes sharing keys cannot deadlock.
+            held: list[asyncio.Lock] = []
+            try:
+                for owner in owners:
+                    lock = self._key_lock(owner)
+                    await lock.acquire()
+                    held.append(lock)
+                async with self._lock:
+                    entries = self._take(self._choose(limit, exclude, owners=owners))
+                if entries:
+                    await self._send(entries)
+                    return [admitted for _, admitted, _ in entries]
+                # A synchronous charge settled them meanwhile.
+            finally:
+                for lock in held:
+                    lock.release()
+
+    async def _send(self, entries: list[tuple[str, int, dict[str, Any]]]) -> bool:
+        """Settle detached charges with the authority, their keys' locks held; whether all were answered."""
         items = [dict(item) for _, _, item in entries]
         # The authority may have committed a batch whose answer never
         # arrived, so an unanswered item is requeued unchanged: its
         # idempotency key lets the next flush settle it without a second debit.
         # Cancellation counts: ``aclose`` cancels a flush in flight and then
         # flushes again. Requeueing never awaits, so it needs no lock.
-        held: list[asyncio.Lock] = []
         try:
-            try:
-                # Sorted, so two flushes sharing keys cannot deadlock.
-                for owner in sorted({owner for owner, _, _ in entries}):
-                    lock = self._key_lock(owner)
-                    await lock.acquire()
-                    held.append(lock)
-                results = await self._client.consume_batch(items)
-                await self._lock.acquire()
-            except BaseException:
-                self._requeue(entries)
-                raise
-            try:
-                self._settle_batch(entries, results)
-            finally:
-                self._lock.release()
+            results = await self._client.consume_batch(items)
+            await self._lock.acquire()
+        except BaseException:
+            self._requeue(entries)
+            raise
+        try:
+            return self._settle_batch(entries, results)
         finally:
-            for lock in held:
-                lock.release()
-        return [admitted for _, admitted, _ in entries]
+            self._lock.release()
 
-    def _take(
-        self, limit: int, exclude: Container[int],
-    ) -> list[tuple[str, int, dict[str, Any]]]:
-        """Detach up to ``limit`` of the oldest pending charges across keys, oldest first."""
-        def eligible(state: _KeyState, index: int) -> int:
-            while index < len(state.admitted) and state.admitted[index] in exclude:
+    def _choose(
+        self,
+        limit: int,
+        exclude: Container[int] = (),
+        *,
+        owners: Collection[str] | None = None,
+        before: int | None = None,
+    ) -> dict[str, list[int]]:
+        """Queue positions of up to ``limit`` of the oldest pending charges across keys.
+
+        Only ``owners``' charges, when given, and only those admitted before
+        ``before``. A key's queue is in admission order.
+        """
+        def eligible(state: _KeyState, index: int) -> int | None:
+            while index < len(state.admitted):
+                admitted = state.admitted[index]
+                if before is not None and admitted >= before:
+                    return None
+                if admitted not in exclude:
+                    return index
                 index += 1
-            return index
+            return None
 
-        cursors: dict[str, int] = {}
-        heads: list[tuple[int, str]] = []
-        for key_id, state in self._states.items():
-            index = eligible(state, 0)
-            if index < len(state.pending):
-                cursors[key_id] = index
-                heads.append((state.admitted[index], key_id))
+        heads: list[tuple[int, str, int]] = []
+        for key_id in self._states if owners is None else owners:
+            state = self._states.get(key_id)
+            index = None if state is None else eligible(state, 0)
+            if state is not None and index is not None:
+                heads.append((state.admitted[index], key_id, index))
         heapq.heapify(heads)
         chosen: dict[str, list[int]] = {}
-        taken = 0
-        while heads and taken < limit:
-            _, key_id = heapq.heappop(heads)
-            state = self._states[key_id]
-            index = cursors[key_id]
+        while heads and limit:
+            _, key_id, index = heapq.heappop(heads)
             chosen.setdefault(key_id, []).append(index)
-            taken += 1
-            cursors[key_id] = index = eligible(state, index + 1)
-            if index < len(state.pending):
-                heapq.heappush(heads, (state.admitted[index], key_id))
+            limit -= 1
+            state = self._states[key_id]
+            following = eligible(state, index + 1)
+            if following is not None:
+                heapq.heappush(heads, (state.admitted[following], key_id, following))
+        return chosen
 
+    def _take(self, chosen: dict[str, list[int]]) -> list[tuple[str, int, dict[str, Any]]]:
+        """Detach the chosen charges, oldest first."""
         entries: list[tuple[str, int, dict[str, Any]]] = []
         for key_id, indices in chosen.items():
             state = self._states[key_id]
@@ -569,7 +626,7 @@ class TokenGate:
 
     def _settle_batch(
         self, entries: list[tuple[str, int, dict[str, Any]]], results: list[ConsumeResult],
-    ) -> None:
+    ) -> bool:
         unanswered: list[tuple[str, int, dict[str, Any]]] = []
         for entry, result in zip(entries, results):
             owner, _, item = entry
@@ -590,6 +647,7 @@ class TokenGate:
                 self._refuse(state, result.reason)
         unanswered.extend(entries[len(results):])
         self._requeue(unanswered)
+        return not unanswered
 
     def _requeue(self, entries: Iterable[tuple[str, int, dict[str, Any]]]) -> None:
         """Put unsettled items back ahead of their owners' newer pending charges."""

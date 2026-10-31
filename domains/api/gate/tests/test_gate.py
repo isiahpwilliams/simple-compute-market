@@ -1144,5 +1144,97 @@ async def test_a_synchronous_revocation_is_not_followed_by_an_admitted_charge():
     decision = await gate.authorize("Bearer ak_live.s")
 
     assert (decision.status, decision.body["error"]) == (403, "key_revoked")
-    # Only the charge admitted before the revocation is queued.
-    assert len(gate._states["ak_live"].pending) == 1
+    # The charge admitted first reached the authority before the revoking one.
+    assert gate._states["ak_live"].pending == []
+
+
+class CreditClient(AuthorityStateClient):
+    """An authority that refuses a charge its key's balance cannot cover."""
+
+    def _answer(self, amount: int) -> ConsumeResult:
+        if amount > self._balance:
+            return ConsumeResult(ok=False, balance=self._balance, reason="insufficient_credits")
+        return super()._answer(amount)
+
+
+async def test_a_synchronous_charge_settles_the_older_queued_charges_first():
+    client = CreditClient(balance=10)
+    gate = TokenGate(
+        _cfg(amount_per_request=6, flush_interval_seconds=60.0, low_balance_threshold=3), client,
+    )
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    # 4 - 6 falls below the threshold, so this one is consumed synchronously.
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    # The queued charge took the credit first, so the later request is refused.
+    assert (decision.status, decision.body["error"]) == (402, "insufficient_credits")
+    assert (len(client.batch_calls), client._balance) == (1, 4)
+    state = gate._states["ak_live"]
+    assert (state.pending, state.in_flight) == ([], 0)
+
+
+async def test_a_flush_waiting_for_a_key_leaves_its_charges_to_an_earlier_synchronous_one():
+    client = CreditClient(balance=16)
+    gate = TokenGate(
+        _cfg(amount_per_request=6, flush_interval_seconds=60.0, low_balance_threshold=3), client,
+    )
+    client.consume_batch = batch = BlockedBatch(client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    # 4 - 6 falls below the threshold; this charge waits for the key behind
+    # the first flush, and a second flush waits behind it.
+    charging = asyncio.ensure_future(gate.authorize("Bearer ak_live.s"))
+    await _ticks()
+    second = asyncio.ensure_future(gate.flush())
+    await _ticks()
+
+    batch.release.set()
+    decision, _, _ = await _done(charging, flushing, second)
+
+    assert decision.status == 402
+    assert client._balance == 4
+    assert len(client.consume_calls) == 1
+
+
+async def test_a_synchronous_charge_is_refused_unconsumed_when_older_charges_go_unanswered():
+    client = FakeClient(balance=10)
+    gate = TokenGate(
+        _cfg(amount_per_request=3, flush_interval_seconds=60.0, low_balance_threshold=5), client,
+    )
+
+    async def unavailable(items):
+        return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+
+    client.consume_batch = unavailable
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body) == (
+        False, 503, {"error": "batch_unavailable"},
+    )
+    assert client.consume_calls == []
+    assert [item["idempotency_key"] for item in gate._states["ak_live"].pending] == ["idem-1"]
+
+
+async def test_closing_waits_for_a_charge_consumed_synchronously_while_it_drains():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    client.consume_batch = batch = BlockedBatch(client)
+    releases = _hold(client, "consume")
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+    closing = asyncio.ensure_future(gate.aclose())
+    await _ticks()
+    # Arriving while closing, it is consumed synchronously.
+    charging = asyncio.ensure_future(gate.authorize("Bearer ak_live.s"))
+    batch.release.set()
+    await _until(lambda: releases)
+    await _ticks()
+
+    assert not closing.done()
+    releases[0].set()
+    decision, _, _ = await _done(charging, flushing, closing)
+    assert decision.allowed

@@ -625,6 +625,25 @@ steps"; D16's ordering, verification before charge).
       tests for a lapsed window, a lapsed window in batched mode, and a
       batch answered `key_revoked` or `key_not_found` fail against the gate
       before the fix.
+      *Fix (implementation review 15 F1, F2):* a synchronous charge could
+      reach the authority ahead of its key's older queued charges, so a
+      served request could be refused for credit a later one took. Holding
+      the key's lock, a synchronous charge now settles the key's charges
+      admitted before it, in batches of at most `flush_max_batch`, before
+      consuming its own; if they go unanswered it is refused `503
+      batch_unavailable` without being consumed. A flush takes a key's
+      charges off the queue only once it holds the key's lock, so none can
+      be detached out of the synchronous charge's sight. `aclose` waits for
+      synchronous charges as for flushes, before and after its drain. The
+      api-family delta gains the requirement "The gate charges a key in the
+      order it admitted the key's requests". Evidence: `make test-api-gate`
+      (81) passes; the tests for the reviewer's reproduction, a flush
+      waiting behind a synchronous charge, an unanswered drain, and a
+      synchronous charge arriving while closing fail against the gate
+      before the fix. The randomized check outside the suite gained 300
+      runs in which keys run out of credit; every run ends with each key
+      charged for every request admitted, and the gate before the fix
+      fails its second run, one key served 54 credits and charged 30.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

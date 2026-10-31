@@ -72,12 +72,18 @@ async def preflight_credits_service(client: AuthorityClient | None = None) -> No
     answered = False
 
     while True:
+        remaining = deadline - asyncio.get_event_loop().time()
         try:
-            await _probe_authentication(client or get_credits_service_client(), url)
+            # The client's own request timeout may outlast the preflight, so
+            # the remaining budget bounds each attempt.
+            async with asyncio.timeout(max(remaining, 0)):
+                await _probe_authentication(client or get_credits_service_client(), url)
             logger.info("[STARTUP] Inference authority reachable at %s", url)
             return
         except AuthorityAuthenticationRefused:
             raise
+        except TimeoutError:
+            last_error = "no answer before the preflight deadline"
         except httpx.TransportError as exc:
             last_error = f"{type(exc).__name__}: {exc}"
         except Exception as exc:

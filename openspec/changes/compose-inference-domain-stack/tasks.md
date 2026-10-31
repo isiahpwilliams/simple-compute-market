@@ -1296,6 +1296,12 @@ cards are publishable without metered consumption").
       startup. Evidence: the storefront suite passes (48), with tests that a
       signed 503 until the timeout stops startup despite
       `fail_on_unreachable = false` and that only a transport outage is excused.
+      *Fix (implementation review 12 F4):* each probe attempt is bounded by
+      the preflight's remaining budget, so the client's own request timeout
+      cannot carry startup past `credits.preflight_timeout`; an attempt cut
+      off at the deadline counts as unreachable. Evidence: the storefront
+      suite passes (49), with a test that a probe which never answers ends
+      within the configured one-second deadline; it fails before the fix.
 
 ## 6. Inference service root `arkhai-inference-service`
 

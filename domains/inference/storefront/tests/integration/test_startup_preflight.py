@@ -7,6 +7,7 @@ deterministic development value, never used on a public network.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -149,3 +150,16 @@ async def test_only_a_transport_outage_is_excused_by_fail_on_unreachable(storefr
     with replaced(credits={"service_url": AUTHORITY_URL, "preflight_timeout": 1}):
         with pytest.raises(RuntimeError, match="unreachable"):
             await _preflight_over(httpx.MockTransport(unreachable))
+
+
+async def test_a_probe_that_never_answers_ends_at_the_preflight_deadline(storefront):
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+
+    started = time.monotonic()
+    with replaced(credits={"service_url": AUTHORITY_URL, "preflight_timeout": 1}):
+        with pytest.raises(RuntimeError, match="unreachable"):
+            # A bound well under the client's own ten-second request timeout.
+            await asyncio.wait_for(_preflight_over(httpx.MockTransport(hang)), 5)
+
+    assert time.monotonic() - started < 3

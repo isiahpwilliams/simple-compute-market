@@ -71,6 +71,7 @@ from inference_storefront.utils.config import (
     CHAINS,
     capacity_sites,
     resolve_admin_identities,
+    resolve_evm_wallet,
     resolve_identity_signer,
     resolve_registry_authorities,
     round_settings,
@@ -101,6 +102,7 @@ class InferenceStorefrontServices:
     domain: MarketDomainContract
     sqlite_client: Any
     marketplace_signer: Any
+    seller_wallet: str | None
     alkahest_clients: dict[str, Any]
     settlement_repository: Any
     settlement_runtime: Any
@@ -224,9 +226,7 @@ async def _startup_tasks(
     )
 
 
-def _build_alkahest_clients() -> dict[str, Any]:
-    private_key = (settings.wallet.private_key or "").strip()
-    missing = () if private_key else ("wallet.private_key",)
+def _build_alkahest_clients(private_key: str) -> dict[str, Any]:
     return build_alkahest_clients(
         AlkahestClientPolicy(
             private_key=private_key,
@@ -238,7 +238,6 @@ def _build_alkahest_clients() -> dict[str, Any]:
                 )
                 for name, chain in CHAINS.items()
             ),
-            missing_requirements=missing,
             warn_if_no_chains=True,
         ),
         logger=logger,
@@ -261,11 +260,13 @@ def _build_inference_services(
         role="seller",
     )
     # A configured section services the deals accepted under it whether or not
-    # it publishes, so its chain clients are built either way.
+    # it publishes, so its chain clients are built either way. The chain
+    # clients sign with, and escrows release to, the one resolved wallet.
+    seller_wallet: str | None = None
+    alkahest_clients: dict[str, Any] = {}
     if settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY) is not None:
-        alkahest_clients = _build_alkahest_clients()
-    else:
-        alkahest_clients = {}
+        seller_wallet, private_key = resolve_evm_wallet()
+        alkahest_clients = _build_alkahest_clients(private_key)
     sqlite_client = get_sqlite_client(
         local_listing_principal=marketplace_signer.identity,
         expected_legacy_sellers=(BASE_URL_OVERRIDE,),
@@ -315,6 +316,7 @@ def _build_inference_services(
         domain=domain,
         sqlite_client=sqlite_client,
         marketplace_signer=marketplace_signer,
+        seller_wallet=seller_wallet,
         alkahest_clients=alkahest_clients,
         settlement_repository=settlement_repository,
         settlement_runtime=settlement_runtime,
@@ -354,6 +356,7 @@ async def _start_inference_services(
     _container.resolved_issuance_evidence_service = services.issuance_evidence_service
     _container.resolved_private_result_repository = services.private_result_repository
     _container.resolved_marketplace_signer = services.marketplace_signer
+    _container.resolved_seller_wallet = services.seller_wallet
     _container.resolved_failure_policy = services.failure_policy
     _container.resolved_listing_service = services.listing_service
     _container.resolved_negotiation_runtime = services.negotiation_runtime

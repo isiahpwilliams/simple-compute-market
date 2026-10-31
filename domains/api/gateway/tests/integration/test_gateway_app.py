@@ -13,7 +13,7 @@ import httpx
 import pytest
 import uvicorn
 
-from arkhai_api_gate import GateConfig, PurchasePointer, TokenGate, TokensClient
+from arkhai_api_gate import GateConfig, PurchasePointer, TokensClient
 from arkhai_api_gateway import GatewayOffering, create_gateway_app
 
 SERVICE = "served-model"
@@ -71,15 +71,19 @@ def _offering() -> GatewayOffering:
     )
 
 
-def _gate(offering: GatewayOffering, authority: ScriptedAuthority) -> TokenGate:
-    config = offering.gate_config(
-        GateConfig(service_url="http://authority", authority_label="authority"),
-    )
+def _app(
+    offering: GatewayOffering, authority: ScriptedAuthority, upstream: httpx.MockTransport,
+) -> Any:
     client = TokensClient(
-        service_url=config.service_url,
+        service_url="http://authority",
         http=httpx.AsyncClient(transport=httpx.MockTransport(authority.handle)),
     )
-    return TokenGate(config, client)
+    return create_gateway_app(
+        offering,
+        GateConfig(service_url="http://authority", authority_label="authority"),
+        authority=client,
+        http=httpx.AsyncClient(transport=upstream),
+    )
 
 
 def _completion_upstream(request: httpx.Request) -> httpx.Response:
@@ -107,11 +111,7 @@ async def test_an_admitted_request_is_relayed_and_charged_once(
 ) -> None:
     offering = _offering()
     authority = ScriptedAuthority(balance=10, request_charge=request_charge)
-    app = create_gateway_app(
-        offering,
-        _gate(offering, authority),
-        http=httpx.AsyncClient(transport=httpx.MockTransport(_completion_upstream)),
-    )
+    app = _app(offering, authority, httpx.MockTransport(_completion_upstream))
 
     response = await _chat(app, {"model": SERVICE, "messages": []})
 
@@ -130,11 +130,7 @@ async def test_an_unlisted_model_reaches_neither_the_authority_nor_the_model() -
     offering = _offering()
     authority = ScriptedAuthority(balance=10, request_charge=None)
     forwarded: list[httpx.Request] = []
-    app = create_gateway_app(
-        offering,
-        _gate(offering, authority),
-        http=httpx.AsyncClient(transport=httpx.MockTransport(forwarded.append)),
-    )
+    app = _app(offering, authority, httpx.MockTransport(forwarded.append))
 
     response = await _chat(app, {"model": "other", "messages": []})
 
@@ -147,11 +143,7 @@ async def test_an_exhausted_key_is_refused_with_the_purchase_pointer() -> None:
     offering = _offering()
     authority = ScriptedAuthority(balance=1, request_charge=PINNED_CHARGE)
     forwarded: list[httpx.Request] = []
-    app = create_gateway_app(
-        offering,
-        _gate(offering, authority),
-        http=httpx.AsyncClient(transport=httpx.MockTransport(forwarded.append)),
-    )
+    app = _app(offering, authority, httpx.MockTransport(forwarded.append))
 
     response = await _chat(app, {"model": SERVICE, "messages": []})
 
@@ -190,11 +182,7 @@ def served_gateway() -> Iterator[tuple[str, ControlledStream, ScriptedAuthority]
     offering = _offering()
     authority = ScriptedAuthority(balance=10, request_charge=None)
     upstream = ControlledStream()
-    app = create_gateway_app(
-        offering,
-        _gate(offering, authority),
-        http=httpx.AsyncClient(transport=httpx.MockTransport(upstream.handle)),
-    )
+    app = _app(offering, authority, httpx.MockTransport(upstream.handle))
     # Listening before the server starts queues early connections instead of refusing them.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))

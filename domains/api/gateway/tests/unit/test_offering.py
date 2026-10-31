@@ -28,10 +28,52 @@ def test_an_offering_names_a_service() -> None:
         _offering(service="")
 
 
+@pytest.mark.parametrize("scope", [{"scope_service": ""}, {"scope_resource_id": ""}])
+def test_an_offerings_scope_is_never_empty(scope: dict) -> None:
+    with pytest.raises(ValueError, match="scope"):
+        _offering(**scope)
+    assert _offering(scope_resource_id=None).scope_resource_id is None
+
+
 def test_an_offerings_default_charge_is_non_negative() -> None:
     with pytest.raises(ValueError, match="non-negative"):
         _offering(default_charge=-1)
     assert _offering(default_charge=0).default_charge == 0
+
+
+@pytest.mark.parametrize(
+    ("url", "match"),
+    [
+        ("model/v1", "absolute"),
+        ("//model/v1", "absolute"),
+        ("ftp://model/v1", "absolute"),
+        ("http:///v1", "absolute"),
+        ("http://model:port/v1", "malformed"),
+        ("http://user:pass@model/v1", "credentials"),
+        ("http://token@model/v1", "credentials"),
+        ("http://model/v1?key=value", "query or fragment"),
+        ("http://model/v1?", "query or fragment"),
+        ("http://model/v1#part", "query or fragment"),
+    ],
+)
+def test_an_unusable_upstream_base_url_is_refused(url: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _offering(upstream_base_url=url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://model",
+        "http://model/",
+        "http://model/v1",
+        "http://model/v1/",
+        "https://model.example:8443/v1",
+        "http://127.0.0.1:8000/v1",
+    ],
+)
+def test_an_absolute_http_upstream_base_url_is_accepted(url: str) -> None:
+    assert _offering(upstream_base_url=url).upstream_base_url == url
 
 
 def test_the_gate_is_configured_from_the_offering() -> None:

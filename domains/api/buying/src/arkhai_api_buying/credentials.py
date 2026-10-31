@@ -337,7 +337,7 @@ UNSAVED_EXIT = 8
 UNRECORDED_EXIT = 9
 """The exit status of a run whose key was saved but whose run log could not record it."""
 
-_RECORDED = ("key_id", "base_url", "balance")
+_RECORDED = ("key_id", "base_url", "service_name", "balance")
 
 
 @dataclass(frozen=True)
@@ -351,16 +351,35 @@ class Delivery:
     unrecorded: bool = False
 
 
+def _service_name(connection_details: Any) -> str | None:
+    if isinstance(connection_details, str):
+        try:
+            connection_details = json.loads(connection_details)
+        except ValueError:
+            return None
+    if not isinstance(connection_details, Mapping):
+        return None
+    name = connection_details.get("service_name")
+    return name if isinstance(name, str) and name.strip() else None
+
+
 def record_delivery(
-    log: RunLog, credentials: Any, store: CredentialStore,
+    log: RunLog, credentials: Any, store: CredentialStore, *, connection_details: Any = None,
 ) -> Delivery | None:
     """Save a delivered secret and record its non-secret fields and reference.
+
+    The seller names the served service in its public ``connection_details``
+    rather than in the credential, so the name is carried onto the credential
+    the buyer keeps and is shown.
 
     A run-log write that fails here never hides the key: the disk that refused
     one write may refuse the next, and the key must still reach the terminal.
     """
     if not isinstance(credentials, Mapping) or not credentials:
         return None
+    service_name = _service_name(connection_details)
+    if service_name and not credentials.get("service_name"):
+        credentials = {**credentials, "service_name": service_name}
     fields = {key: credentials[key] for key in _RECORDED if credentials.get(key) is not None}
     if not credentials.get("secret"):
         log.event("credentials_delivered", **fields)

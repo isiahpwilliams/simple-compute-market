@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -61,15 +60,17 @@ def _build_settings() -> Dynaconf:
 
 def resolve_evm_wallet() -> tuple[str, str]:
     """Resolve explicit, matching Alkahest mechanism credentials."""
-    address = str(settings.get("wallet.address", "") or "")
-    private_key = str(settings.get("wallet.private_key", "") or "")
+    address = str(settings.get("wallet.address", "") or "").strip()
+    private_key = str(settings.get("wallet.private_key", "") or "").strip()
     if not address or not private_key:
         raise RuntimeError(
             "inference Alkahest settlement requires wallet.address and "
             "wallet.private_key",
         )
     derived = derive_wallet_address(private_key)
-    if not derived or derived.lower() != address.lower():
+    if not derived:
+        raise RuntimeError("configured Alkahest wallet private key is not a valid key")
+    if derived.lower() != address.lower():
         raise RuntimeError("configured Alkahest wallet address/private key mismatch")
     return address, private_key
 
@@ -256,37 +257,12 @@ def credits_service_url() -> str:
     return str(settings.get("credits.service_url", "") or "").rstrip("/")
 
 
-def credits_admin_key() -> str:
-    """Resolve one exact credits-service mechanism credential."""
-    inline = str(settings.get("credits.admin_key", "") or "")
-    file_name = str(settings.get("credits.admin_key_file", "") or "")
-    if inline and file_name:
-        raise RuntimeError(
-            "credits.admin_key and credits.admin_key_file are mutually exclusive"
-        )
-    if inline:
-        return inline
-    if not file_name:
-        return ""
-    path = Path(file_name)
-    try:
-        metadata = path.lstat()
-        if not stat.S_ISREG(metadata.st_mode):
-            raise RuntimeError("credits.admin_key_file must be a regular file")
-        value = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise RuntimeError("credits.admin_key_file cannot be read") from exc
-    if not value:
-        raise RuntimeError("credits.admin_key_file is empty")
-    return value
-
-
 def credits_expected_authorities() -> TrustedIdentitySet | None:
     """The authority principals whose signed responses this storefront accepts.
 
-    ``None`` when unset, leaving the client on the shared-secret gate. Kept
-    apart from the capacity site's authorities: that dynaconf list is merged,
-    so anything appended there would silently widen what issuance trusts.
+    ``None`` when unset, which startup refuses. Kept apart from the capacity
+    site's authorities: that dynaconf list is merged, so anything appended
+    there would silently widen what issuance trusts.
     """
     raw = settings.get("credits.expected_authorities.identities", None)
     if not raw:

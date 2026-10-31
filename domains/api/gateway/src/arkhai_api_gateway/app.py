@@ -16,7 +16,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from arkhai_api_gate import GateDecision, TokenGate
+from arkhai_api_gate import GateConfig, GateDecision, TokenGate, TokensClient
 
 from .offering import GatewayOffering, read_upstream_credential
 from .proxy import forward
@@ -32,15 +32,31 @@ _UPSTREAM_TIMEOUT = httpx.Timeout(10.0, read=300.0)
 
 def create_gateway_app(
     offering: GatewayOffering,
-    gate: TokenGate,
+    gate_config: GateConfig,
     *,
+    authority: TokensClient | None = None,
     verification: VerificationHook = admit_all,
     http: httpx.AsyncClient | None = None,
 ) -> FastAPI:
-    """The gateway for ``offering``; ``gate`` should come from ``offering.gate_config(...)``.
+    """The gateway for ``offering``, gated at the authority ``gate_config`` names.
 
-    The upstream credential is read here, so a missing secret fails at startup.
+    The gate is built here from ``offering.gate_config(gate_config)``, so its
+    scope, default charge, and purchase pointer are always the offering's.
+    ``authority`` defaults to a signed client built from that configuration.
+    The upstream credential and the signing context are resolved here, so a
+    missing secret or a missing or unusable signing credential fails at startup.
     """
+    config = offering.gate_config(gate_config)
+    if authority is None:
+        if not config.signing_enabled:
+            raise ValueError("a gateway signs toward its authority: no signing credential is configured")
+        authority = TokensClient(
+            service_url=config.service_url,
+            admin_key=config.admin_key,
+            timeout=config.request_timeout_seconds,
+            signing=config.build_signing(),
+        )
+    gate = TokenGate(config, authority)
     credential = (
         read_upstream_credential(offering.upstream_credential_file)
         if offering.upstream_credential_file is not None

@@ -58,7 +58,6 @@ identities = []
 # The inference authority this storefront sells for; it also hosts the quota
 # ledger selected below.
 service_url         = "http://inference-service:8086"
-admin_key_file      = "/run/secrets/arkhai/inference-admin-key"
 preflight_timeout   = 60
 fail_on_unreachable = true
 

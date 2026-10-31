@@ -222,7 +222,8 @@ lane-only compute and API-credits registries; the root `docker-compose.yml`
 includes the domain file. Identities: `inference-registry.ed25519`,
 `inference-service.ed25519`, `inference-gateway.ed25519`, an
 `inference.identity.env` and `inference.wallet.env` on an Anvil account no
-other storefront uses, `inference-admin-key`, and a buyer configuration pinning
+other storefront uses (the storefront signs toward the authority, which has
+no admin key), and a buyer configuration pinning
 the inference registry, all derived by the identities README's rule and pinned
 where they are consumed. Root targets `e2e-inference-stack-env` and
 `e2e-inference-dev-env` print them; `e2e-dev-identities-env` gains the stack.
@@ -254,11 +255,12 @@ the purchase-time hook (D16), with a subclass of its buy session, because the
 buying library proposes from both: `buy` through the session's `propose`,
 `negotiate` through the stage's `prepare_selection`. The subclasses rely on the
 Alkahest stage's constructor and `propose` signature, which that library does
-not declare as an extension contract (implementation, section 7). The kit's
-credential panel shows the key, secret, base URL, and balance; the served model
-name travels only in the delivery's `connection_details`, which no buyer
-command renders, so the delta's "A buyer completes a purchase" is not met by
-the plugin alone and is open for review: showing it is a buying-library change.
+not declare as an extension contract (implementation, section 7). The served
+model name reaches the buyer in the delivery's `connection_details`; the
+buying library copies its `service_name` onto the delivered credential and the
+credential panel shows it under the domain's `summary_header`, so a completed
+purchase shows the key, the base URL, and the model name (implementation
+review 08 F6).
 
 ### D13. The withdrawn modules are recovered, not rewritten
 

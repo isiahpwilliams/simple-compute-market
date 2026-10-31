@@ -1,7 +1,8 @@
 """Keys API bindings: issuance, consume/verify, and the admin/guard surface.
 
 Each binding maps its route to the authority's route service and a refusal to
-its response, and makes no decision of its own.
+its response; the only decision of its own is refusing key access that names
+no scope.
 """
 
 from __future__ import annotations
@@ -30,8 +31,20 @@ IssuanceRequest = issuance_request_model(authority_config.label)
 IssuanceResponse = issuance_response_model(authority_config.label)
 
 
+SCOPE_REQUIRED = "scope_required"
+
+
 def _refused(refusal: RouteRefusal) -> JSONResponse:
     return JSONResponse(status_code=refusal.status_code, content=refusal.body)
+
+
+# Every inference key is scoped to the model it was bought for, so a caller
+# naming no scope could verify or debit any key; the family authority keeps
+# scope optional only for API credits' recorded unscoped surface.
+def _unscoped(*requests: object) -> JSONResponse | None:
+    if any(r.service is None or r.resource_id is None for r in requests):
+        return JSONResponse(status_code=422, content={"error": SCOPE_REQUIRED})
+    return None
 
 
 def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRouter:
@@ -83,6 +96,8 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
         body: ConsumeRequest,
         service: AuthorityRouteService = Depends(get_service),
     ):
+        if (refused := _unscoped(body)) is not None:
+            return refused
         try:
             return service.consume(
                 key_id,
@@ -105,9 +120,14 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
     ) -> ConsumeBatchResponse:
         """Items are independent; per-item outcomes return in order with
         a 200 overall (a failed item is not an HTTP failure)."""
-        return ConsumeBatchResponse(
-            **service.consume_batch([item.model_dump() for item in body.items])
-        )
+        scoped = [_unscoped(item) is None for item in body.items]
+        applied = iter(service.consume_batch(
+            [item.model_dump() for item, ok in zip(body.items, scoped) if ok]
+        )["results"])
+        return ConsumeBatchResponse(results=[
+            next(applied) if ok else {"ok": False, "reason": SCOPE_REQUIRED, "balance": 0}
+            for ok in scoped
+        ])
 
     @router.post(
         "/keys/{key_id}/verify",
@@ -117,8 +137,10 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
         key_id: str,
         body: VerifyRequest,
         service: AuthorityRouteService = Depends(get_service),
-    ) -> dict:
+    ):
         """POST (not GET) so the secret rides the body, never a URL."""
+        if (refused := _unscoped(body)) is not None:
+            return refused
         return service.verify(
             key_id, secret=body.secret, service=body.service, resource_id=body.resource_id
         )

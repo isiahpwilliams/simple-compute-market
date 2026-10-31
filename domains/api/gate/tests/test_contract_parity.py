@@ -59,6 +59,7 @@ def test_the_refusal_reasons_are_the_declared_ones():
         client.KEY_NOT_FOUND,
         client.KEY_REVOKED,
         client.INSUFFICIENT_CREDITS,
+        client.KEY_OUT_OF_SCOPE,
     ) == refusals.CONSUME_REFUSALS, "[consume] refusal reasons"
 
 
@@ -131,17 +132,20 @@ async def test_requests_are_the_declared_bodies_and_responses_parse_from_the_dec
     for name, _operation, _path, _resource in GATE_ROUTES:
         assert authority.methods[name] == route(_operation)["method"], f"[{name}] method sent"
 
-    assert models.VerifyRequest.model_validate(authority.sent["verify"])
-    assert set(authority.sent["verify"]) == set(models.VerifyRequest.model_fields), "[verify] request fields"
-    assert models.ConsumeRequest.model_validate(authority.sent["consume"])
-    assert set(authority.sent["consume"]) == set(models.ConsumeRequest.model_fields), "[consume] request fields"
+    # An unscoped client sends every required field and no optional one it was not given.
+    for name, model in (("verify", models.VerifyRequest), ("consume", models.ConsumeRequest)):
+        assert model.model_validate(authority.sent[name])
+        required = {field for field, info in model.model_fields.items() if info.is_required()}
+        assert required <= set(authority.sent[name]) <= set(model.model_fields), f"[{name}] request fields"
+    assert not {"service", "resource_id"} & set(authority.sent["verify"]), "[verify] unscoped body"
+    assert not {"service", "resource_id"} & set(authority.sent["consume"]), "[consume] unscoped body"
     batch = models.ConsumeBatchRequest.model_validate(authority.sent["consume-batch"])
     assert set(authority.sent["consume-batch"]) == set(models.ConsumeBatchRequest.model_fields), (
         "[consume-batch] request fields"
     )
     assert [set(item) for item in authority.sent["consume-batch"]["items"]] == [
-        set(models.ConsumeBatchItem.model_fields)
-    ] * len(batch.items), "[consume-batch] item fields"
+        set(models.ConsumeBatchItem.model_fields) - {"service", "resource_id"}
+    ] * len(batch.items), "[consume-batch] unscoped item fields"
 
     assert verified == client.VerifyResult(valid=True, status="active", balance=9)
     assert consumed == client.ConsumeResult(ok=True, balance=8, consumed=1, duplicate=True)
@@ -162,3 +166,58 @@ def test_the_runtime_dependencies_are_httpx_alone():
     assert {extra: names(reqs) for extra, reqs in project["optional-dependencies"].items()} == {
         "signed": {"arkhai-kit-identity"}
     }
+
+
+async def test_a_scoped_client_sends_its_scope_and_parses_a_pinned_keys_terms():
+    sent: dict[str, dict] = {}
+    pinned = {"accepted_terms": {"rate_card": {}}, "terms_digest": "sha256:" + "a" * 64, "request_charge": 3}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        name = request.url.path.rsplit("/", 1)[-1]
+        sent[name] = json.loads(request.content)
+        if name == "verify":
+            answer = models.VerifyResponse(valid=True, status="active", balance=9, **pinned)
+        else:
+            answer = models.ConsumeOutcome(ok=True, consumed=3, balance=6)
+        return httpx.Response(200, json=answer.model_dump())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        tokens = client.TokensClient(service_url="http://authority", http=http)
+        verified = await tokens.verify(key_id="ak_x", secret="ak_x.s", service="svc", resource_id="quota")
+        await tokens.consume(key_id="ak_x", amount=3, service="svc", resource_id="quota")
+
+    for name, model in (("verify", models.VerifyRequest), ("consume", models.ConsumeRequest)):
+        assert model.model_validate(sent[name])
+        assert (sent[name]["service"], sent[name]["resource_id"]) == ("svc", "quota"), f"[{name}] scope"
+    assert (verified.accepted_terms, verified.terms_digest, verified.request_charge) == tuple(pinned.values())
+
+
+async def test_a_scoped_gate_sends_its_scope_on_every_batched_item():
+    sent: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/verify"):
+            return httpx.Response(200, json=models.VerifyResponse(valid=True, status="active", balance=9).model_dump())
+        sent.append(json.loads(request.content))
+        results = [models.ConsumeOutcome(ok=True, consumed=1, balance=8).model_dump()] * len(sent[-1]["items"])
+        return httpx.Response(200, json=models.ConsumeBatchResponse(results=results).model_dump())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        gate = TokenGate(
+            GateConfig(
+                service_url="http://authority",
+                authority_label="test-authority",
+                flush_interval_seconds=60.0,
+                low_balance_threshold=1,
+                scope_service="svc",
+                scope_resource_id="quota",
+            ),
+            client.TokensClient(service_url="http://authority", http=http),
+        )
+        for _ in range(2):
+            assert (await gate.authorize("Bearer ak_y.s")).allowed
+        await gate.flush()
+
+    (batch,) = sent
+    assert len(models.ConsumeBatchRequest.model_validate(batch).items) == 2
+    assert [(item["service"], item["resource_id"]) for item in batch["items"]] == [("svc", "quota")] * 2

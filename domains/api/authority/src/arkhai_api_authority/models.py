@@ -2,7 +2,9 @@
 
 Bearer secrets are hashed on key rows. Issuance grants snapshot every
 mutation-relevant public input under a unique fulfillment identity and digest;
-operator adjustments remain distinguishable by a null fulfillment identity.
+operator adjustments remain distinguishable by a null fulfillment identity. A
+grant issued with accepted terms has one ``grant_terms`` row beside it, so the
+grant table's columns stay those every authority image checks.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base
@@ -65,6 +68,17 @@ class CreditGrant(Base):
         String, nullable=False, default="issuance"
     )  # issuance | admin_adjustment
     granted_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class GrantTerms(Base):
+    """The accepted terms a grant was issued under; a key pins its first grant's row."""
+
+    __tablename__ = "grant_terms"
+
+    grant_id = Column(Integer, ForeignKey("credit_grants.id"), primary_key=True)
+    accepted_terms = Column(Text, nullable=False)
+    terms_digest = Column(String, nullable=False)
+    request_charge = Column(Integer, nullable=False)
 
 
 class ConsumptionEvent(Base):

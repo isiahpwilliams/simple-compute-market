@@ -44,3 +44,14 @@ def test_gate_config_rejects_non_regular_admin_key_file(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="regular file"):
         GateConfig.from_env(PREFIX, authority_label="test-authority")
+
+
+def test_the_key_scope_is_read_under_the_prefix_and_unset_by_default(monkeypatch):
+    for name in ("SCOPE_SERVICE", "SCOPE_RESOURCE_ID"):
+        monkeypatch.delenv("T_" + name, raising=False)
+    unset = GateConfig.from_env("T_", authority_label="a")
+    assert (unset.scope_service, unset.scope_resource_id) == (None, None)
+    monkeypatch.setenv("T_SCOPE_SERVICE", "svc")
+    monkeypatch.setenv("T_SCOPE_RESOURCE_ID", "quota")
+    config = GateConfig.from_env("T_", authority_label="a")
+    assert (config.scope_service, config.scope_resource_id) == ("svc", "quota")

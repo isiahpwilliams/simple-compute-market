@@ -87,7 +87,13 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
         service: AuthorityRouteService = Depends(get_service),
     ):
         try:
-            return service.consume(key_id, amount=body.amount, idempotency_key=body.idempotency_key)
+            return service.consume(
+                key_id,
+                amount=body.amount,
+                idempotency_key=body.idempotency_key,
+                service=body.service,
+                resource_id=body.resource_id,
+            )
         except RouteRefusal as refusal:
             return _refused(refusal)
 
@@ -116,7 +122,9 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
         service: AuthorityRouteService = Depends(get_service),
     ) -> dict:
         """POST (not GET) so the secret rides the body, never a URL."""
-        return service.verify(key_id, secret=body.secret)
+        return service.verify(
+            key_id, secret=body.secret, service=body.service, resource_id=body.resource_id
+        )
 
     # ------------------------------------------------------------------
     # Admin + the seller guards' key→owner lookup

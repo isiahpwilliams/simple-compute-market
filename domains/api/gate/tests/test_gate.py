@@ -16,7 +16,7 @@ import pytest
 
 from arkhai_api_gate.client import ConsumeResult, TokensClient, VerifyResult
 from arkhai_api_gate.config import GateConfig, PurchasePointer
-from arkhai_api_gate.gate import TokenGate
+from arkhai_api_gate.gate import TokenGate, VerifiedKey
 from arkhai_api_gate.asgi import TokenGateMiddleware
 
 
@@ -29,11 +29,11 @@ class FakeClient:
         self.consume_calls: list[dict] = []
         self.batch_calls: list[list[dict]] = []
 
-    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
         self.verify_calls += 1
         return VerifyResult(valid=True, status="active", balance=self._balance)
 
-    async def consume(self, *, key_id, amount, idempotency_key=None) -> ConsumeResult:
+    async def consume(self, *, key_id, amount, idempotency_key=None, service=None, resource_id=None) -> ConsumeResult:
         self.consume_calls.append({"key_id": key_id, "amount": amount})
         self._balance = max(0, self._balance - amount)
         if self._balance < 0:
@@ -164,13 +164,13 @@ class SecretCheckingClient:
         self.verified: list[str] = []
         self.consumed = 0
 
-    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
         self.verified.append(secret)
         if secret in self.accepted:
             return VerifyResult(valid=True, status="active", balance=10)
         return VerifyResult(valid=False, status=None, balance=0)
 
-    async def consume(self, *, key_id, amount, idempotency_key=None) -> ConsumeResult:
+    async def consume(self, *, key_id, amount, idempotency_key=None, service=None, resource_id=None) -> ConsumeResult:
         self.consumed += 1
         return ConsumeResult(ok=True, balance=10 - self.consumed, consumed=amount)
 
@@ -219,7 +219,7 @@ class HeldVerificationClient(SecretCheckingClient):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def verify(self, *, key_id: str, secret: str) -> VerifyResult:
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
         if secret != self.held or self.started.is_set():
             return await super().verify(key_id=key_id, secret=secret)
         self.verified.append(secret)
@@ -242,7 +242,9 @@ async def test_a_late_answer_for_an_older_secret_does_not_replace_a_newer_one(cl
     old = await _hold_old_secret(gate, client)
     assert (await gate.authorize("Bearer ak_k.new")).allowed
     client.release.set()
-    assert (await asyncio.wait_for(old, timeout=5)).allowed
+    # The gate now holds the newer secret's verification, so the late one is not charged.
+    late = await asyncio.wait_for(old, timeout=5)
+    assert (late.allowed, late.status) == (False, 401)
 
     again = await gate.authorize("Bearer ak_k.old")
 
@@ -265,3 +267,490 @@ async def test_a_late_answer_does_not_outlast_a_newer_refusal_of_the_same_secret
 
     assert (again.allowed, again.status) == (False, 401)
     assert client.verified == ["ak_k.new", "ak_k.old", "ak_k.old", "ak_k.old"]
+
+
+# Verification and charge as separable steps
+
+
+class ScriptedClient:
+    """Answers verify with a scripted result and records every call with its arguments."""
+
+    def __init__(self, verify: VerifyResult, *, consume: ConsumeResult | None = None) -> None:
+        self._verify = verify
+        self._consume = consume
+        self.calls: list[tuple[str, dict]] = []
+
+    async def verify(self, **kwargs) -> VerifyResult:
+        self.calls.append(("verify", kwargs))
+        return self._verify
+
+    async def consume(self, **kwargs) -> ConsumeResult:
+        self.calls.append(("consume", kwargs))
+        return self._consume or ConsumeResult(ok=True, balance=self._verify.balance - kwargs["amount"], consumed=kwargs["amount"])
+
+    async def consume_batch(self, items) -> list[ConsumeResult]:
+        self.calls.append(("consume_batch", {"items": list(items)}))
+        return [ConsumeResult(ok=True, balance=0, consumed=item["amount"]) for item in items]
+
+
+PINNED = VerifyResult(
+    valid=True, status="active", balance=50,
+    accepted_terms={"rate_card": {}}, terms_digest="sha256:" + "a" * 64, request_charge=3,
+)
+
+
+async def test_verification_alone_makes_no_charge():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(), client)
+
+    verified = await gate.verify("Bearer ak_live.s")
+
+    assert verified.key_id == "ak_live"
+    assert (verified.accepted_terms, verified.terms_digest, verified.request_charge) == (
+        PINNED.accepted_terms, PINNED.terms_digest, 3,
+    )
+    assert [name for name, _ in client.calls] == ["verify"]
+
+
+@pytest.mark.parametrize("batched", [False, True], ids=["synchronous", "batched"])
+async def test_verify_then_charge_makes_the_same_exchanges_and_state_as_authorize(batched):
+    config = _cfg(flush_interval_seconds=60.0, low_balance_threshold=1) if batched else _cfg()
+    separate, together = ScriptedClient(PINNED), ScriptedClient(PINNED)
+    gate_a, gate_b = TokenGate(config, separate), TokenGate(config, together)
+
+    for idem in ("idem-1", "idem-2"):
+        decision_a = await gate_a.charge(await gate_a.verify("Bearer ak_live.s"), idempotency_key=idem)
+        decision_b = await gate_b.authorize("Bearer ak_live.s", idempotency_key=idem)
+        assert decision_a == decision_b
+    await gate_a.flush()
+    await gate_b.flush()
+
+    # The second request is answered from the cached verification in both.
+    assert separate.calls == together.calls
+    assert [name for name, _ in separate.calls].count("verify") == 1
+
+
+@pytest.mark.parametrize(
+    ("verified", "charged"),
+    [(PINNED, 3), (VerifyResult(valid=True, status="active", balance=50), 2)],
+    ids=["pinned-charge", "configured-default"],
+)
+async def test_the_charge_is_the_verified_one_and_the_configured_amount_otherwise(verified, charged):
+    client = ScriptedClient(verified)
+    gate = TokenGate(_cfg(amount_per_request=2), client)
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    assert client.calls[-1][1]["amount"] == charged
+
+
+@pytest.mark.parametrize(
+    ("scope", "sent"),
+    [
+        ({"scope_service": "svc", "scope_resource_id": "quota"}, {"service": "svc", "resource_id": "quota"}),
+        ({}, {"service": None, "resource_id": None}),
+    ],
+    ids=["scoped", "unscoped"],
+)
+async def test_the_configured_scope_is_sent_on_verify_and_consume(scope, sent):
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(**scope), client)
+
+    await gate.authorize("Bearer ak_live.s")
+
+    for name, kwargs in client.calls:
+        assert {key: kwargs[key] for key in ("service", "resource_id")} == sent, name
+
+
+async def test_a_pinned_charge_is_batched_and_requeued_at_its_own_amount():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0, low_balance_threshold=1, scope_service="svc"), client)
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    async def unavailable(items):
+        client.calls.append(("consume_batch", {"items": list(items)}))
+        return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+
+    client.consume_batch = unavailable
+    await gate.flush()
+    await gate.flush()
+    batches = [kwargs["items"] for name, kwargs in client.calls if name == "consume_batch"]
+    assert [[item["amount"] for item in batch] for batch in batches] == [[3], [3]]
+
+
+async def test_charging_a_key_the_gate_never_verified_is_an_invalid_key():
+    decision = await TokenGate(_cfg(), ScriptedClient(PINNED)).charge(VerifiedKey(key_id="ak_other"))
+    assert (decision.allowed, decision.status) == (False, 401)
+
+
+async def test_a_key_out_of_scope_is_403_and_never_charged():
+    client = ScriptedClient(VerifyResult(valid=False, status="key_out_of_scope", balance=0))
+    gate = TokenGate(_cfg(scope_service="svc"), client)
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body["error"]) == (False, 403, "key_out_of_scope")
+    assert [name for name, _ in client.calls] == ["verify"]
+
+
+async def test_a_consume_refused_out_of_scope_is_403():
+    client = ScriptedClient(PINNED, consume=ConsumeResult(ok=False, balance=0, reason="key_out_of_scope"))
+    gate = TokenGate(_cfg(scope_service="svc"), client)
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body["error"]) == (False, 403, "key_out_of_scope")
+
+
+async def test_a_batched_item_carries_the_configured_scope():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(
+        _cfg(flush_interval_seconds=60.0, low_balance_threshold=1, scope_service="svc", scope_resource_id="quota"),
+        client,
+    )
+
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    await gate.flush()
+
+    assert client.calls[-1] == ("consume_batch", {"items": [
+        {"key_id": "ak_live", "amount": 3, "idempotency_key": "idem-1", "service": "svc", "resource_id": "quota"},
+    ]})
+
+
+async def test_a_batched_item_refused_out_of_scope_denies_the_key_from_then_on():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0, low_balance_threshold=1, scope_service="svc"), client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    verified = await gate.verify("Bearer ak_live.s")
+
+    async def out_of_scope(items):
+        return [ConsumeResult(ok=False, balance=0, reason="key_out_of_scope") for _ in items]
+
+    client.consume_batch = out_of_scope
+    await gate.flush()
+    decision = await gate.charge(verified)
+
+    assert (decision.allowed, decision.status, decision.body["error"]) == (False, 403, "key_out_of_scope")
+    assert [name for name, _ in client.calls] == ["verify"]
+
+
+# A verified key is charged only while the gate's verification still admits it
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _batched_gate(client, clock: Clock) -> TokenGate:
+    return TokenGate(_cfg(flush_interval_seconds=60.0, low_balance_threshold=1, verify_ttl_seconds=30.0), client, clock=clock)
+
+
+async def test_a_key_revoked_between_verify_and_charge_is_refused_and_never_charged():
+    clock, client = Clock(), ScriptedClient(PINNED)
+    gate = _batched_gate(client, clock)
+    verified = await gate.verify("Bearer ak_live.s")
+
+    # Another request re-verifies the key after its verification expired and finds it revoked.
+    clock.now += 31
+    client._verify = VerifyResult(valid=False, status="revoked", balance=50)
+    assert (await gate.verify("Bearer ak_live.s")).status == 403
+    decision = await gate.charge(verified)
+    await gate.flush()
+
+    assert (decision.allowed, decision.status, decision.body["error"]) == (False, 403, "key_revoked")
+    assert [name for name, _ in client.calls] == ["verify", "verify"]
+
+
+async def test_a_charge_after_the_verification_expired_verifies_the_secret_again():
+    clock, client = Clock(), ScriptedClient(PINNED)
+    gate = _batched_gate(client, clock)
+    verified = await gate.verify("Bearer ak_live.s")
+
+    clock.now += 31
+    assert (await gate.charge(verified)).allowed
+    await gate.flush()
+
+    assert [(name, kwargs.get("secret")) for name, kwargs in client.calls] == [
+        ("verify", "ak_live.s"), ("verify", "ak_live.s"), ("consume_batch", None),
+    ]
+
+
+async def test_a_handle_whose_secret_was_rotated_away_after_expiry_is_refused_and_never_charged():
+    clock, client = Clock(), SecretCheckingClient("ak_k.first")
+    gate = TokenGate(_cfg(verify_ttl_seconds=30.0), client, clock=clock)
+    verified = await gate.verify("Bearer ak_k.first")
+
+    clock.now += 31
+    client.accepted = {"ak_k.rotated"}
+    decision = await gate.charge(verified)
+
+    assert (decision.allowed, decision.status, decision.body) == (False, 401, {"error": "invalid_api_key"})
+    assert client.verified == ["ak_k.first", "ak_k.first"]
+    assert client.consumed == 0
+
+
+async def test_the_presented_secret_stays_out_of_a_verified_key_repr():
+    verified = await TokenGate(_cfg(), ScriptedClient(PINNED)).verify("Bearer ak_live.s")
+    assert "ak_live.s" not in repr(verified)
+
+
+async def test_a_newer_valid_verification_of_the_same_secret_keeps_the_handle():
+    clock, client = Clock(), ScriptedClient(PINNED)
+    gate = _batched_gate(client, clock)
+    verified = await gate.verify("Bearer ak_live.s")
+
+    clock.now += 31
+    assert (await gate.verify("Bearer ak_live.s")).key_id == "ak_live"
+    assert (await gate.charge(verified)).allowed
+    await gate.flush()
+
+    assert [name for name, _ in client.calls] == ["verify", "verify", "consume_batch"]
+
+
+async def test_a_handle_for_a_secret_the_gate_no_longer_holds_is_refused():
+    client = SecretCheckingClient("ak_k.first", "ak_k.rotated")
+    gate = TokenGate(_cfg(), client)
+    verified = await gate.verify("Bearer ak_k.first")
+
+    assert (await gate.authorize("Bearer ak_k.rotated")).allowed
+    decision = await gate.charge(verified)
+
+    assert (decision.allowed, decision.status, decision.body) == (False, 401, {"error": "invalid_api_key"})
+    assert client.consumed == 1
+
+
+# A batch whose outcome is unknown stays pending with its items unchanged
+
+
+def _pending_gate(client) -> TokenGate:
+    return TokenGate(_cfg(flush_interval_seconds=60.0, low_balance_threshold=1, scope_service="svc"), client)
+
+
+def _sent_batches(client) -> list[list[dict]]:
+    return [kwargs["items"] for name, kwargs in client.calls if name == "consume_batch"]
+
+
+async def test_a_flush_that_raises_keeps_every_item_pending_and_resends_it_unchanged():
+    client = ScriptedClient(PINNED)
+    gate = _pending_gate(client)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-2")).allowed
+    settle = client.consume_batch
+
+    async def lost(items):
+        client.calls.append(("consume_batch", {"items": [dict(item) for item in items]}))
+        raise httpx.ReadTimeout("response lost")
+
+    client.consume_batch = lost
+    with pytest.raises(httpx.ReadTimeout):
+        await gate.flush()
+    assert [item["idempotency_key"] for item in gate._states["ak_live"].pending] == ["idem-1", "idem-2"]
+
+    client.consume_batch = settle
+    await gate.flush()
+    first, second = _sent_batches(client)
+    assert first == second
+    assert [item["idempotency_key"] for item in second] == ["idem-1", "idem-2"]
+    assert gate._states["ak_live"].pending == []
+
+
+@pytest.mark.parametrize("reason", ["batch_unavailable", "unauthenticated_service"])
+async def test_an_unavailable_batch_requeues_the_identical_item(reason):
+    client = ScriptedClient(PINNED)
+    gate = _pending_gate(client)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+
+    async def unavailable(items):
+        client.calls.append(("consume_batch", {"items": [dict(item) for item in items]}))
+        return [ConsumeResult(ok=False, balance=0, reason=reason) for _ in items]
+
+    client.consume_batch = unavailable
+    await gate.flush()
+    await gate.flush()
+
+    first, second = _sent_batches(client)
+    assert first == second == [
+        {"key_id": "ak_live", "amount": 3, "idempotency_key": "idem-1", "service": "svc"},
+    ]
+
+
+async def test_a_short_batch_answer_requeues_the_unanswered_items():
+    client = ScriptedClient(PINNED)
+    gate = _pending_gate(client)
+    for idem in ("idem-1", "idem-2", "idem-3"):
+        assert (await gate.authorize("Bearer ak_live.s", idempotency_key=idem)).allowed
+    settle = client.consume_batch
+
+    async def short(items):
+        client.calls.append(("consume_batch", {"items": [dict(item) for item in items]}))
+        return [ConsumeResult(ok=True, balance=47, consumed=3)]
+
+    client.consume_batch = short
+    await gate.flush()
+    client.consume_batch = settle
+    await gate.flush()
+
+    first, second = _sent_batches(client)
+    assert second == first[1:]
+    assert [item["idempotency_key"] for item in second] == ["idem-2", "idem-3"]
+
+
+async def test_closing_during_a_flush_in_flight_resends_its_items_unchanged():
+    client = ScriptedClient(PINNED)
+    gate = TokenGate(_cfg(flush_interval_seconds=0.01, low_balance_threshold=1, scope_service="svc"), client)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    settle, in_flight = client.consume_batch, asyncio.Event()
+
+    async def hang(items):
+        client.calls.append(("consume_batch", {"items": [dict(item) for item in items]}))
+        client.consume_batch = settle
+        in_flight.set()
+        await asyncio.Event().wait()
+
+    client.consume_batch = hang
+    gate.start()
+    await in_flight.wait()
+    await gate.aclose()
+
+    first, second = _sent_batches(client)
+    assert first == second
+    assert gate._states["ak_live"].pending == []
+
+
+async def test_a_flush_cancelled_before_it_processes_its_answer_requeues_every_item():
+    client = ScriptedClient(PINNED)
+    gate = _pending_gate(client)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    answered = asyncio.Event()
+
+    async def unavailable(items):
+        client.calls.append(("consume_batch", {"items": [dict(item) for item in items]}))
+        # Taking the lock parks the flush between its answer and its processing.
+        await gate._lock.acquire()
+        answered.set()
+        return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+
+    client.consume_batch = unavailable
+    flushing = asyncio.ensure_future(gate.flush())
+    await answered.wait()
+    await asyncio.sleep(0)
+    flushing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await flushing
+    gate._lock.release()
+
+    assert gate._states["ak_live"].pending == [
+        {"key_id": "ak_live", "amount": 3, "idempotency_key": "idem-1", "service": "svc"},
+    ]
+
+
+async def test_an_unverifiable_consume_answer_is_a_502_that_leaves_the_key_untouched():
+    client = FakeClient(balance=10)
+    gate = TokenGate(_cfg(), client)
+
+    async def unverifiable(**_):
+        return ConsumeResult(ok=False, balance=0, reason="unauthenticated_service")
+
+    client.consume = unverifiable
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body) == (
+        False, 502, {"error": "unauthenticated_service"},
+    )
+    state = gate._states["ak_live"]
+    assert (state.exhausted, state.estimated_balance) == (False, 10)
+
+
+class BlockedBatch:
+    """Holds each batch at the authority until released, then answers it as ``client`` would."""
+
+    def __init__(self, client: FakeClient, *, fail_first: bool = False) -> None:
+        self._answer = client.consume_batch
+        self.items: list[list[dict]] = []
+        self.arrived = asyncio.Event()
+        self.release = asyncio.Event()
+        self._fail_first = fail_first
+
+    async def __call__(self, items):
+        self.items.append([dict(item) for item in items])
+        if len(self.items) == 1:
+            self.arrived.set()
+            await self.release.wait()
+            if self._fail_first:
+                raise httpx.ConnectError("connection reset")
+        return await self._answer(items)
+
+
+async def test_a_charge_admitted_while_a_flush_waits_keeps_its_deduction():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(amount_per_request=3, flush_interval_seconds=60.0), client)
+    client.consume_batch = batch = BlockedBatch(client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    batch.release.set()
+    await flushing
+
+    state = gate._states["ak_live"]
+    assert (state.estimated_balance, state.in_flight, len(state.pending)) == (44, 0, 1)
+
+
+async def test_a_synchronous_charge_keeps_the_deduction_of_a_queued_one():
+    client = FakeClient(balance=10)
+    gate = TokenGate(
+        _cfg(amount_per_request=3, flush_interval_seconds=60.0, low_balance_threshold=5), client,
+    )
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    # 7 - 3 falls to the threshold, so this one is consumed synchronously.
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    assert len(client.consume_calls) == 1
+    assert gate._states["ak_live"].estimated_balance == 4
+
+
+async def test_a_verification_answered_while_a_batch_is_in_flight_keeps_its_deduction():
+    now = [0.0]
+    client = FakeClient(balance=50)
+    gate = TokenGate(
+        _cfg(amount_per_request=3, flush_interval_seconds=60.0, verify_ttl_seconds=10.0),
+        client, clock=lambda: now[0],
+    )
+    client.consume_batch = batch = BlockedBatch(client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+
+    now[0] = 20.0
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    assert client.verify_calls == 2
+    assert gate._states["ak_live"].estimated_balance == 44
+    batch.release.set()
+    await flushing
+
+    assert gate._states["ak_live"].estimated_balance == 44
+
+
+async def test_closing_waits_for_a_flush_called_directly_and_resends_its_items():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    client.consume_batch = batch = BlockedBatch(client, fail_first=True)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    flushing = asyncio.ensure_future(gate.flush())
+    await batch.arrived.wait()
+
+    closing = asyncio.ensure_future(gate.aclose())
+    await asyncio.sleep(0)
+    assert not closing.done()
+    batch.release.set()
+    with pytest.raises(httpx.ConnectError):
+        await flushing
+    await closing
+
+    assert [item["idempotency_key"] for call in batch.items for item in call] == ["idem-1", "idem-1"]
+    assert gate._states["ak_live"].pending == []

@@ -6,15 +6,26 @@ from functools import cache
 from typing import Any, Literal
 
 from market_identity import Identity
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    create_model,
+    model_serializer,
+)
 
 from arkhai_api.issuance import (
+    ACCEPTED_TERMS_FIELDS,
+    DIGEST_PATTERN,
     RESULT_SCHEMA_PATTERN,
+    RequestCharge,
     IssuanceRequest,
     IssuanceResult,
     KeyDisposition,
     issuance_request_model,
     issuance_result_model,
+    omit_unset,
 )
 from arkhai_api.labels import IssuanceLabel
 
@@ -73,15 +84,35 @@ def issuance_response_model(label: IssuanceLabel) -> type[IssuanceResponse]:
     )
 
 
+# A caller's expected key scope, sent with verify, consume, and each batched
+# consume; a request that names neither is the unscoped request and is
+# answered as one.
+_SCOPE_FIELDS = ("service", "resource_id")
+
+
 class ConsumeRequest(BaseModel):
     amount: int = Field(ge=1)
     idempotency_key: str | None = None
+    service: str | None = Field(default=None, min_length=1, max_length=255)
+    resource_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+    # Unannotated: a return annotation would replace the published serialisation schema.
+    @model_serializer(mode="wrap")
+    def _omit_unset_scope(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), _SCOPE_FIELDS)
 
 
 class ConsumeBatchItem(BaseModel):
     key_id: str = Field(min_length=1)
     amount: int = Field(ge=1)
     idempotency_key: str | None = None
+    service: str | None = Field(default=None, min_length=1, max_length=255)
+    resource_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+    # Unannotated: a return annotation would replace the published serialisation schema.
+    @model_serializer(mode="wrap")
+    def _omit_unset_scope(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), _SCOPE_FIELDS)
 
 
 class ConsumeBatchRequest(BaseModel):
@@ -115,14 +146,31 @@ class ConsumeRefusal(BaseModel):
 
 class VerifyRequest(BaseModel):
     secret: str = Field(min_length=1)
+    service: str | None = Field(default=None, min_length=1, max_length=255)
+    resource_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+    # Unannotated: a return annotation would replace the published serialisation schema.
+    @model_serializer(mode="wrap")
+    def _omit_unset_scope(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), _SCOPE_FIELDS)
 
 
 class VerifyResponse(BaseModel):
+    """A key's verification; a pinned key's accepted terms, digest, and charge, omitted when unpinned."""
+
     model_config = ConfigDict(extra="forbid")
 
     valid: bool
     status: str | None
     balance: int
+    accepted_terms: dict[str, Any] | None = None
+    terms_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
+    request_charge: RequestCharge | None = None
+
+    # Unannotated: a return annotation would replace the published serialisation schema.
+    @model_serializer(mode="wrap")
+    def _omit_unset_terms(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), ACCEPTED_TERMS_FIELDS)
 
 
 class AdjustRequest(BaseModel):

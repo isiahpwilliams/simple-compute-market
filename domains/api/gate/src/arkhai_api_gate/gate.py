@@ -5,7 +5,9 @@ middleware in ``asgi.py`` is the first). It owns the verify cache, the
 per-key balance estimate, the batched-charge accumulator, and the
 background flush loop; an adapter only translates a request's
 ``Authorization`` header into ``authorize(...)`` and a ``GateDecision``
-back into an HTTP response.
+back into an HTTP response. ``authorize`` is ``verify`` then ``charge``; a
+composition that must check a verified key before charging it calls the two
+itself.
 
 Decision vocabulary (status + machine-readable body) is identical
 across languages — it is the behavioral contract the conformance
@@ -15,21 +17,26 @@ fixtures pin (``domains/apicredits/middleware/conformance``).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import hmac
 import itertools
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from .client import (
+    BATCH_UNAVAILABLE,
     INSUFFICIENT_CREDITS,
     KEY_NOT_FOUND,
+    KEY_OUT_OF_SCOPE,
     KEY_REVOKED,
+    UNAUTHENTICATED_SERVICE,
     TokensClient,
     VerifyResult,
+    scope_fields,
 )
 from .config import GateConfig
 
@@ -54,6 +61,23 @@ class GateDecision:
     body: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class VerifiedKey:
+    """A key the authority verified, with the terms its first grant pinned, if any.
+
+    Bound to the secret and the verification that produced it, so a charge
+    can tell whether the gate's current knowledge of the key still admits it.
+    """
+
+    key_id: str
+    accepted_terms: dict[str, Any] | None = None
+    terms_digest: str | None = None
+    request_charge: int | None = None
+    secret_fingerprint: bytes = field(default=b"", repr=False, compare=False)
+    verified_ticket: int = field(default=0, repr=False, compare=False)
+    _secret: str = field(default="", repr=False, compare=False)
+
+
 @dataclass
 class _KeyState:
     verify: VerifyResult
@@ -62,7 +86,13 @@ class _KeyState:
     secret_fingerprint: bytes
     verified_ticket: int
     pending: list[dict[str, Any]] = field(default_factory=list)
+    # Credits sent in a batch whose answer has not been processed.
+    in_flight: int = 0
     exhausted: bool = False
+
+    def settled_estimate(self, balance: int) -> int:
+        """An authority-reported balance less the charges it has not yet settled."""
+        return balance - self.in_flight - sum(item["amount"] for item in self.pending)
 
 
 def _fingerprint(secret: str) -> bytes:
@@ -110,6 +140,11 @@ class TokenGate:
         self._lock = asyncio.Lock()
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
+        # A flush called directly holds detached charges no queue shows, so
+        # ``aclose`` waits until no flush is in progress.
+        self._flushes = 0
+        self._no_flush = asyncio.Event()
+        self._no_flush.set()
 
     # -- lifecycle ----------------------------------------------------
 
@@ -132,6 +167,7 @@ class TokenGate:
             except asyncio.CancelledError:
                 pass
             self._flush_task = None
+        await self._no_flush.wait()
         await self.flush()
 
     # -- request path -------------------------------------------------
@@ -139,6 +175,13 @@ class TokenGate:
     async def authorize(
         self, authorization: str | None, *, idempotency_key: str | None = None,
     ) -> GateDecision:
+        verified = await self.verify(authorization)
+        if isinstance(verified, GateDecision):
+            return verified
+        return await self.charge(verified, idempotency_key=idempotency_key)
+
+    async def verify(self, authorization: str | None) -> GateDecision | VerifiedKey:
+        """Verify the presented key without charging it: a denial, or the verified key."""
         secret = parse_bearer(authorization)
         if secret is None:
             return GateDecision(
@@ -152,18 +195,66 @@ class TokenGate:
                 body={"error": INVALID_API_KEY},
             )
 
-        verify = await self._verified_state(key_id, secret)
+        verify, ticket = await self._verified_state(key_id, secret)
         if not verify.valid:
-            if verify.status == "revoked":
-                return self._deny(403, KEY_REVOKED, key_id)
-            return GateDecision(
-                allowed=False, status=401, key_id=key_id,
-                body={"error": INVALID_API_KEY},
+            return self._verify_denial(verify, key_id)
+        return VerifiedKey(
+            key_id=key_id,
+            accepted_terms=verify.accepted_terms,
+            terms_digest=verify.terms_digest,
+            request_charge=verify.request_charge,
+            secret_fingerprint=_fingerprint(secret),
+            verified_ticket=ticket,
+            _secret=secret,
+        )
+
+    async def charge(
+        self, verified: VerifiedKey, *, idempotency_key: str | None = None,
+    ) -> GateDecision:
+        """Charge a verified key its pinned charge, else the configured amount.
+
+        A key this gate has not verified, or verified for another secret, is
+        answered as invalid; one whose cached verification has since been
+        refused is denied as that refusal. A handle whose verification no
+        longer vouches for it is verified again with its secret first, since
+        the authority's consume never sees the secret and so cannot tell a
+        secret rotated away meanwhile.
+        """
+        amount = (
+            verified.request_charge
+            if verified.request_charge is not None
+            else self._cfg.amount_per_request
+        )
+        async with self._lock:
+            state = self._states.get(verified.key_id)
+            stale = (
+                state is not None
+                and state.verify.valid
+                and hmac.compare_digest(state.secret_fingerprint, verified.secret_fingerprint)
+                and not self._vouches(state, verified)
             )
+        if stale:
+            if not hmac.compare_digest(_fingerprint(verified._secret), verified.secret_fingerprint):
+                return GateDecision(
+                    allowed=False, status=401, key_id=verified.key_id,
+                    body={"error": INVALID_API_KEY},
+                )
+            verify, ticket = await self._verified_state(verified.key_id, verified._secret)
+            if not verify.valid:
+                return self._verify_denial(verify, verified.key_id)
+            verified = dataclasses.replace(verified, verified_ticket=ticket)
+        return await self._charge(verified, amount, idempotency_key)
 
-        return await self._charge(key_id, idempotency_key)
+    def _vouches(self, state: _KeyState, verified: VerifiedKey) -> bool:
+        # An expired verification, or one older than the handle's, no longer
+        # vouches for the key.
+        return (
+            state.verify_expires > self._clock()
+            and state.verified_ticket >= verified.verified_ticket
+        )
 
-    async def _verified_state(self, key_id: str, secret: str) -> VerifyResult:
+    async def _verified_state(self, key_id: str, secret: str) -> tuple[VerifyResult, int]:
+        """The verification answering for ``secret`` and the ticket it was issued under."""
         # The key id is public, read off any bearer header, so a cached
         # verification answers only for the exact secret that earned it.
         now = self._clock()
@@ -177,16 +268,21 @@ class TokenGate:
                 and state.verify.valid
                 and hmac.compare_digest(state.secret_fingerprint, fingerprint)
             ):
-                return state.verify
+                return state.verify, state.verified_ticket
 
-        verify = await self._client.verify(key_id=key_id, secret=secret)
+        verify = await self._client.verify(
+            key_id=key_id,
+            secret=secret,
+            service=self._cfg.scope_service,
+            resource_id=self._cfg.scope_resource_id,
+        )
 
         async with self._lock:
             existing = self._states.get(key_id)
             if existing is not None and existing.verified_ticket > ticket:
                 # A verification that started after this one has already
                 # answered; an older answer must not replace what it knew.
-                return verify
+                return verify, ticket
             if (
                 existing is not None
                 and not verify.valid
@@ -196,13 +292,10 @@ class TokenGate:
                 # about the cached credential, so it must not evict it; but
                 # an older answer for this secret must not be cached over it.
                 existing.verified_ticket = max(existing.verified_ticket, ticket)
-                return verify
+                return verify, ticket
             estimated = verify.balance
             if existing is not None:
-                # Keep the running estimate (it may be ahead of the
-                # verify-reported balance because of un-flushed charges).
-                estimated = min(existing.estimated_balance, verify.balance) \
-                    if existing.pending else verify.balance
+                estimated = existing.settled_estimate(verify.balance)
                 existing.verify = verify
                 existing.verify_expires = now + self._cfg.verify_ttl_seconds
                 existing.secret_fingerprint = fingerprint
@@ -218,42 +311,71 @@ class TokenGate:
                     secret_fingerprint=fingerprint,
                     verified_ticket=ticket,
                 )
-        return verify
+        return verify, ticket
 
     async def _charge(
-        self, key_id: str, idempotency_key: str | None,
+        self, verified: VerifiedKey, amount: int, idempotency_key: str | None,
     ) -> GateDecision:
-        amount = self._cfg.amount_per_request
+        key_id = verified.key_id
         idem = idempotency_key or uuid.uuid4().hex
         batching = self._cfg.flush_interval_seconds > 0
 
         async with self._lock:
-            state = self._states[key_id]
+            state = self._states.get(key_id)
+            # The handle may be stale: another request can have refreshed the
+            # state while this one awaited between verify and charge. A newer
+            # valid verification of the same secret still admits it.
+            if state is None or not hmac.compare_digest(
+                state.secret_fingerprint, verified.secret_fingerprint,
+            ):
+                return GateDecision(
+                    allowed=False, status=401, key_id=key_id,
+                    body={"error": INVALID_API_KEY},
+                )
+            if not state.verify.valid:
+                return self._verify_denial(state.verify, key_id)
             if state.exhausted:
                 return self._deny(402, INSUFFICIENT_CREDITS, key_id)
             estimated_after = state.estimated_balance - amount
-            go_sync = (not batching) or estimated_after <= self._cfg.low_balance_threshold
+            # A verification that stopped vouching after the charge's own
+            # re-verification leaves the authority to decide the charge.
+            go_sync = (
+                not batching
+                or not self._vouches(state, verified)
+                or estimated_after <= self._cfg.low_balance_threshold
+            )
             if not go_sync:
                 # Optimistic batched charge: let the request through now,
                 # settle it with the authority on the next flush.
-                state.pending.append({
-                    "key_id": key_id, "amount": amount, "idempotency_key": idem,
-                })
+                state.pending.append(self._batch_item(key_id, amount, idem))
                 state.estimated_balance = estimated_after
                 return GateDecision(allowed=True, status=200, key_id=key_id)
 
         # Synchronous charge — outside the lock (network call).
         result = await self._client.consume(
-            key_id=key_id, amount=amount, idempotency_key=idem,
+            key_id=key_id,
+            amount=amount,
+            idempotency_key=idem,
+            service=self._cfg.scope_service,
+            resource_id=self._cfg.scope_resource_id,
         )
+        if result.reason == UNAUTHENTICATED_SERVICE:
+            # Nothing is known about the key, so neither its balance nor its
+            # credit is touched, and the buyer is not told to buy more.
+            return GateDecision(
+                allowed=False, status=502, key_id=key_id,
+                body={"error": UNAUTHENTICATED_SERVICE},
+            )
         async with self._lock:
             state = self._states.get(key_id)
             if state is not None:
-                state.estimated_balance = result.balance
+                state.estimated_balance = state.settled_estimate(result.balance)
         if result.ok:
             return GateDecision(allowed=True, status=200, key_id=key_id)
         if result.reason == KEY_REVOKED:
             return self._deny(403, KEY_REVOKED, key_id)
+        if result.reason == KEY_OUT_OF_SCOPE:
+            return self._deny(403, KEY_OUT_OF_SCOPE, key_id)
         if result.reason == KEY_NOT_FOUND:
             return GateDecision(
                 allowed=False, status=401, key_id=key_id,
@@ -279,6 +401,16 @@ class TokenGate:
 
     async def flush(self) -> None:
         """Settle all accumulated batched charges with the authority."""
+        self._flushes += 1
+        self._no_flush.clear()
+        try:
+            await self._flush_once()
+        finally:
+            self._flushes -= 1
+            if not self._flushes:
+                self._no_flush.set()
+
+    async def _flush_once(self) -> None:
         async with self._lock:
             items: list[dict[str, Any]] = []
             owners: list[str] = []
@@ -286,30 +418,89 @@ class TokenGate:
                 for item in state.pending:
                     items.append(dict(item))
                     owners.append(key_id)
+                    state.in_flight += item["amount"]
                 state.pending.clear()
                 if len(items) >= self._cfg.flush_max_batch:
                     break
         if not items:
             return
-        results = await self._client.consume_batch(items)
-        async with self._lock:
-            for owner, result in zip(owners, results):
+        # The authority may have committed a batch whose answer never
+        # arrived, so an unanswered item is requeued unchanged: its
+        # idempotency key lets the next flush settle it without a second debit.
+        # Cancellation counts: ``aclose`` cancels a flush in flight and then
+        # flushes again.
+        try:
+            results = await self._client.consume_batch(items)
+        except BaseException:
+            async with self._lock:
+                self._requeue(zip(owners, items))
+            raise
+        unanswered: list[tuple[str, dict[str, Any]]] = []
+        # No lock-held block awaits, so processing below runs whole or not at
+        # all; a cancellation while waiting for the lock leaves every item
+        # unsettled, and requeueing without the lock is equally atomic.
+        try:
+            await self._lock.acquire()
+        except BaseException:
+            self._requeue(zip(owners, items))
+            raise
+        try:
+            for owner, item, result in zip(owners, items, results):
                 state = self._states.get(owner)
                 if state is None:
                     continue
+                if result.reason in (BATCH_UNAVAILABLE, UNAUTHENTICATED_SERVICE):
+                    # Whether the authority applied it is unknown.
+                    unanswered.append((owner, item))
+                    continue
+                state.in_flight -= item["amount"]
                 if result.ok:
-                    state.estimated_balance = result.balance
-                elif result.reason == "batch_unavailable":
-                    # Transport hiccup — requeue so the charge isn't lost.
-                    state.pending.append(
-                        {"key_id": owner, "amount": self._cfg.amount_per_request,
-                         "idempotency_key": uuid.uuid4().hex}
+                    state.estimated_balance = state.settled_estimate(result.balance)
+                elif result.reason == KEY_OUT_OF_SCOPE:
+                    # The key is not this gateway's: deny it as verify would
+                    # until a fresh verification answers for it.
+                    state.verify = VerifyResult(
+                        valid=False, status=KEY_OUT_OF_SCOPE, balance=0,
                     )
+                    state.verified_ticket = next(self._tickets)
                 else:
-                    state.estimated_balance = result.balance
+                    state.estimated_balance = state.settled_estimate(result.balance)
                     state.exhausted = True
+            unanswered.extend(zip(owners[len(results):], items[len(results):]))
+            self._requeue(unanswered)
+        finally:
+            self._lock.release()
+
+    def _requeue(self, entries: Iterable[tuple[str, dict[str, Any]]]) -> None:
+        """Put unsettled items back ahead of their owners' newer pending charges."""
+        by_owner: dict[str, list[dict[str, Any]]] = {}
+        for owner, item in entries:
+            by_owner.setdefault(owner, []).append(item)
+        for owner, owned in by_owner.items():
+            state = self._states.get(owner)
+            if state is not None:
+                state.in_flight -= sum(item["amount"] for item in owned)
+                state.pending[:0] = owned
 
     # -- helpers ------------------------------------------------------
+
+    def _batch_item(self, key_id: str, amount: int, idempotency_key: str) -> dict[str, Any]:
+        return {
+            "key_id": key_id,
+            "amount": amount,
+            "idempotency_key": idempotency_key,
+            **scope_fields(self._cfg.scope_service, self._cfg.scope_resource_id),
+        }
+
+    def _verify_denial(self, verify: VerifyResult, key_id: str) -> GateDecision:
+        if verify.status == "revoked":
+            return self._deny(403, KEY_REVOKED, key_id)
+        if verify.status == KEY_OUT_OF_SCOPE:
+            return self._deny(403, KEY_OUT_OF_SCOPE, key_id)
+        return GateDecision(
+            allowed=False, status=401, key_id=key_id,
+            body={"error": INVALID_API_KEY},
+        )
 
     def _deny(self, status: int, error: str, key_id: str) -> GateDecision:
         body: dict[str, Any] = {"error": error}

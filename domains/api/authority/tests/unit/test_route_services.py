@@ -134,3 +134,16 @@ def test_the_version_route_reports_the_configured_distribution_and_its_installed
         "version": installed_version("pytest"),
     }
     assert SystemRouteService("no-such-distribution").version()["version"] == "dev"
+
+
+@pytest.mark.parametrize(("reason", "status"), [("key_out_of_scope", 409), ("terms_digest_mismatch", 422)])
+def test_a_scope_or_terms_refusal_of_issuance_names_its_reason(reason, status):
+    routes = AuthorityRouteService(_Keys(issue=IssuanceError(reason, "refused")))
+    assert _refusal(lambda: routes.issue(_request())) == (status, {"error": reason, "detail": "refused"})
+
+
+def test_a_consumption_outside_the_keys_scope_is_a_403():
+    routes = AuthorityRouteService(_Keys(consume={"ok": False, "reason": "key_out_of_scope", "balance": 0}))
+    assert _refusal(lambda: routes.consume("ak_1", amount=1, idempotency_key=None, service="svc")) == (
+        403, {"error": "key_out_of_scope", "balance": 0},
+    )

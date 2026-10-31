@@ -1,6 +1,6 @@
 [project]
 name = "arkhai-api-gate"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 description = "The api family's bearer gate: ASGI middleware gating a downstream app on prepaid credits verified and consumed at the family authority."
 requires-python = ">=3.12,<3.14"
@@ -24,7 +24,7 @@ dev = [
   "pytest-asyncio>=0.23.0",
   # The parity test holds the gate's local spelling of the routes it calls
   # equal to the contracts' declarations; the gate itself never imports them.
-  "arkhai-api-contracts>=0.4.0",
+  "arkhai-api-contracts>=0.5.0",
   # The signing tests build responses with the identity kit directly.
   "arkhai-kit-identity",
 ]

@@ -25,11 +25,24 @@ class IssuanceSubject:
     """What a listing sells, as the authority's issuance command names it.
 
     ``endpoint`` is delivery metadata returned beside the key and never digested.
+    ``accepted_terms``, ``terms_digest``, and ``request_charge`` are the accepted
+    listing's terms for the authority to pin on the key; unset, nothing is pinned.
     """
 
     service: str
     resource_id: str | None
     endpoint: str | None = None
+    accepted_terms: Mapping[str, Any] | None = None
+    terms_digest: str | None = None
+    request_charge: int | None = None
+
+
+@dataclass(frozen=True)
+class DeliveryContext:
+    """The settlement a delivery issues from: the agreed mechanism and its stage's reference."""
+
+    mechanism: str
+    settlement_ref: str | None
 
 
 @dataclass(frozen=True)
@@ -53,7 +66,9 @@ PublicationGuard = Callable[[Mapping[str, Any]], str | None]
 AcceptanceHook = Callable[[Any, Acceptance], Awaitable[None]]
 """Runs with the storefront's repository before an acceptance is recorded."""
 
-PublicResultExtension = Callable[[Mapping[str, Any], IssuanceResult], Mapping[str, Any]]
+PublicResultExtension = Callable[
+    [Mapping[str, Any], IssuanceResult, DeliveryContext], Mapping[str, Any]
+]
 """Public fields a delivery carries beside its connection payload; never the secret."""
 
 

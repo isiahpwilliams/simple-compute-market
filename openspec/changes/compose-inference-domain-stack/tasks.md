@@ -36,7 +36,7 @@ may carry accepted terms" and "The public-result extension receives the
 delivery's settlement context"; the deltas' "API credits issues without terms"
 and "API credits delivers without an extension" scenarios).
 
-- [ ] 1.1 Confirm by inspection, before writing anything, that the design's
+- [x] 1.1 Confirm by inspection, before writing anything, that the design's
       "What exists" still holds on the target branch: `IssuanceSubject`
       (`domains/api/selling/src/arkhai_api_selling/contributions.py`) has
       `service`, `resource_id`, `endpoint` only; `_request_digest` in
@@ -47,7 +47,11 @@ and "API credits delivers without an extension" scenarios).
       `status`, `balance`; and `domains/apicredits/tests/fixtures/pins/issuance_pins.json`
       holds only API-credits cases. Record drift in `design.md` rather than
       working around it (`AGENTS.md`, "Discuss").
-- [ ] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
+      *Note:* confirmed on the branch at 9f21a6c9e: the subject, the eight-key
+      digest, the evidence body, `VerifyResponse`, and the API-credits-only pins were
+      as described. Drift found later: `IssuanceRequest` is also a component of the
+      API-credits service's recorded OpenAPI baseline (re-recorded in 1.8).
+- [x] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
       optional `accepted_terms` (a JSON object, canonical on the wire),
       `terms_digest` (`DIGEST_PATTERN`), and `request_charge` (`ge=1`,
       `le=2**53 - 1`, the canonical JSON integer domain; plan review 06 F3 as
@@ -60,14 +64,27 @@ and "API credits delivers without an extension" scenarios).
       same eight keys as today (review 03 F3 "Wire bytes": the digest carries
       the digest, not the payload). `issuance_request(...)` takes the three as
       keyword arguments.
-- [ ] 1.3 `domains/api/src/arkhai_api/evidence.py`: `IssuanceEvidenceBodyV1`
+      *Note:* `accepted_terms_digest`, `MAX_REQUEST_CHARGE`, and the
+      `RequestCharge` type are exported beside the request. Omission is a wrap
+      `model_serializer` (`omit_unset`) rather than pydantic's `exclude_if`, which
+      needs pydantic 2.11 while the package declares `pydantic>=2`; the serializer
+      carries no return annotation, which would replace the model's published
+      serialisation schema. `issuance_request` validates the charge against the
+      same `RequestCharge` bound before computing a digest, so `2**53` is refused
+      as a validation error rather than by canonical JSON; a wire request with `0`
+      or `2**53` is refused by the label-bound model.
+- [x] 1.3 `domains/api/src/arkhai_api/evidence.py`: `IssuanceEvidenceBodyV1`
       and `ExpectedIssuanceEvidenceV1` gain optional `terms_digest` and
       `request_charge`, omitted when unset, so `_signing_bytes` and
       `issuance_evidence_digest` are unchanged for a body without them;
       `verify_issuance_evidence` binds them to the expected values when the
       expectation carries them (review 03 F3; api-family delta "the digest and
       charge MUST enter ... the signed evidence").
-- [ ] 1.4 `domains/api/selling/src/arkhai_api_selling/contributions.py`:
+      *Note:* the body requires `terms_digest` and `request_charge` together;
+      verification binds each only when the expectation carries it, and the
+      request digest already binds both. `IssuanceEvidenceService`'s self-consistency
+      check now carries them into its expectation.
+- [x] 1.4 `domains/api/selling/src/arkhai_api_selling/contributions.py`:
       `IssuanceSubject` gains optional `accepted_terms`, `terms_digest`, and
       `request_charge`, documented as what the domain's projection reads from
       the accepted listing. `domains/api/selling/src/arkhai_api_selling/issuance.py`:
@@ -76,7 +93,12 @@ and "API credits delivers without an extension" scenarios).
       and charge when the subject has them (review 02 F1, as amended by review
       04 F1 and F2). `connection_payload` is unchanged: the terms are not
       delivery metadata.
-- [ ] 1.5 `domains/api/selling/src/arkhai_api_selling/contributions.py`: a
+      *Note:* the body the storefront signs is built in the Alkahest selling
+      stage (`selling-alkahest/.../stage.py`), not in `issuance.py`. `fulfill` now
+      returns the issued request beside the result (`issuance_request`), and the
+      stage spreads `evidence_terms(request)` into the body, so the signed terms are
+      the ones the answered request digest covers. No other stage signs evidence.
+- [x] 1.5 `domains/api/selling/src/arkhai_api_selling/contributions.py`: a
       frozen `DeliveryContext(mechanism: str, settlement_ref: str | None)`,
       and `PublicResultExtension` becomes
       `Callable[[Mapping[str, Any], IssuanceResult, DeliveryContext], Mapping[str, Any]]`.
@@ -87,7 +109,10 @@ and "API credits delivers without an extension" scenarios).
       public-result extension receives the delivery's settlement context").
       The selling library's `bundles.py` `with_extension` helper and the
       existing extension test take the third parameter.
-- [ ] 1.6 Unit tests, vocabulary (`domains/api/tests/unit/test_issuance_pins.py`,
+      *Note:* `bundles.py`'s `with_extension` only replaces the bundle's
+      extension, so the change there is its docstring; the existing extension tests'
+      lambdas take the third parameter. `with_terms` was added beside it.
+- [x] 1.6 Unit tests, vocabulary (`domains/api/tests/unit/test_issuance_pins.py`,
       `test_evidence.py`): a request without terms digests and signs to the
       same bytes as before the fields existed; a request with terms digests
       the digest and charge and not the payload; a digest that does not match
@@ -101,7 +126,22 @@ and "API credits delivers without an extension" scenarios).
       bundle without an extension saves the same public-result keys as before
       (api-family delta scenarios "A domain builds its materialization in the
       extension", "API credits delivers without an extension").
-- [ ] 1.7 `domains/apicredits/tests/fixtures/pins/issuance_pins.json` and
+      *Note:* vocabulary unit level — `test_issuance_pins.py` (unset terms
+      serialise nothing; the digest covers the terms digest and charge, not the
+      payload; mismatch and partial sets refused; `2**53 - 1` accepted, `0` and
+      `2**53` refused through `issuance_request` and on the wire) and
+      `test_evidence.py` (an unpinned body carries no terms keys — byte equality
+      with the recorded pins is `test_every_pin_matches_byte_for_byte_under_api_credits`;
+      set terms are signed and paired; verification binds them). Selling unit
+      level — `test_issuance.py` (subject terms reach the request and its
+      `evidence_terms`; an unpinned subject produces an unpinned request; an
+      extension receives the mechanism and a `settlement_ref` distinct from the
+      negotiation id). Selling-Alkahest library integration —
+      `test_delivery.py` (a delivery under a pinning bundle publishes evidence
+      whose body carries the terms digest and charge beside the answered request
+      digest, and an unpinned one publishes none) against real storefront
+      persistence and the settlement journal.
+- [x] 1.7 `domains/apicredits/tests/fixtures/pins/issuance_pins.json` and
       `domains/apicredits/tests/test_issuance_pins.py`: the recorded API-credits
       cases are unchanged byte for byte, and the fixture gains one inference
       case under `IssuanceLabel("inference")` with the three fields present,
@@ -111,7 +151,13 @@ and "API credits delivers without an extension" scenarios).
       sides", whose two-label difference the case records against the
       equivalent API-credits case). The fixture's generator (`main`) writes the
       new case; the test refuses an input set the fixture does not record.
-- [ ] 1.8 **Verification.** `make test-api` (the vocabulary's unit level and its
+      *Note:* the API-credits cases stay under `cases`, byte for byte; the
+      inference case is under a separate `inference_cases` key and pins the fulfillment
+      identity, request digest, canonical issuance request, evidence digest, signed
+      evidence, portable reference, and the API-credits request digest of the same
+      inputs. The generator now adds an absent case set and still never rewrites a
+      recorded one; the fixture diff is additions only.
+- [x] 1.8 **Verification.** `make test-api` (the vocabulary's unit level and its
       `tests/integration/test_distribution.py`, and the selling library's unit
       and library-integration levels); `make test-apicredits` (the domain's
       unit-level pins and distribution tests). `make test`. No dependency or
@@ -119,6 +165,46 @@ and "API credits delivers without an extension" scenarios).
       `e2e_credits_deal` exercises the unchanged API-credits path and
       `e2e_inference_deal` (section 11) the fields present; none is owed
       beyond those.
+      *Note:* `make test-api` passed (the vocabulary 78, contracts 43, client 25,
+      authority 69, selling 214, selling-Alkahest 34, and the other family
+      suites); `make test-apicredits` passed (domain pins and distribution, the
+      service with its compatibility baselines, storefront, buyer, sample app,
+      and the TypeScript and Rust middleware conformance). `make -k test`: every
+      target passed but two. `test-storefront` failed only in
+      `tests/integration/test_alkahest.py`, which needs `anvil` on `PATH`, and
+      passed in full (1103 and 448) once `$HOME/.foundry/bin` was on it.
+      `test-provisioning` fails one unit test,
+      `test_provisioning_bootstrap_dotenv_uses_environment_layer_without_dotenv_local`,
+      only when run in the suite (it passes alone and with its module); the
+      provisioning service installs no api-family distribution, so this section
+      cannot reach it, and it is left as found. `make check-change` passed.
+      **Baseline re-record:** the three optional `IssuanceRequest` properties
+      (`accepted_terms`, `terms_digest`, `request_charge`, each nullable) are
+      new in the API-credits service's served OpenAPI, so
+      `domains/apicredits/service/tests/fixtures/baseline/openapi.json` was
+      re-recorded once, in place, from the running service; its diff is those
+      three properties alone, and every other baseline record is unchanged (the
+      owner's decision, `interventions.jsonl`). The compliance check's findings
+      were fixed — the serializers carry no return annotation, the evidence's
+      terms come from the issued request rather than a second projection, the
+      context test distinguishes `settlement_ref` from the negotiation id, the
+      signed body's terms are tested through a delivery, history-worded
+      comments and test names were restated — except one declined: `omit_unset`
+      stays a public helper of `arkhai_api.issuance`, since `evidence` in the
+      same package imports it.
+      **Versions, against the plan:** the plan owed no version change, but the
+      Alkahest stage now reads `fulfill`'s new `issuance_request` key and the
+      vocabulary's new fields cross distributions, so `arkhai-api` 0.2.0,
+      `arkhai-api-selling` 0.5.0 (requiring `arkhai-api>=0.2.0`), and
+      `arkhai-api-selling-alkahest` 0.2.0 (requiring the new selling), with the
+      API-credits storefront's floors raised; `make lock` relocked the 17
+      projects that record them (version lines only) and `make check-packaging`
+      passed; the focused suites of every relocked project passed after it.
+      *Handoff:* section 2 re-records the same baseline for its verify and
+      consume fields. A wrap `model_serializer` with a return annotation silently
+      replaces the model's serialisation schema; keep new ones unannotated.
+      `sed -i ''` fails in this shell (GNU sed); the Alkahest library tests need
+      `$HOME/.foundry/bin` on `PATH`.
 
 ## 2. Family contracts and authority: pinned terms and key scope
 
@@ -128,7 +214,7 @@ refusals (review 01 F4; review 03 F1; review 03 F3 as amended by review 04 F1
 and F2; api-family delta "The issuance subject may carry accepted terms" and
 "A key is scoped to its first grant").
 
-- [ ] 2.1 `domains/api/contracts/src/arkhai_api_contracts/models.py`:
+- [x] 2.1 `domains/api/contracts/src/arkhai_api_contracts/models.py`:
       `VerifyRequest` and `ConsumeRequest` gain optional `service` and
       `resource_id`; `VerifyResponse` gains optional `accepted_terms`,
       `terms_digest`, and `request_charge`, serialised only when set (the
@@ -140,19 +226,34 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       `declarations.py` are unchanged: no new route (api-family delta "when
       absent ... byte-identical"; review 03 F1 "The fields are optional on
       both requests").
-- [ ] 2.2 `domains/api/authority/src/arkhai_api_authority/models.py`: a
+      *Note:* the scope fields and the response's terms are omitted when unset
+      through the same unannotated wrap serializer section 1 uses. `VerifyResponse`
+      is not a component of the served OpenAPI (the verify route returns a mapping),
+      so only `VerifyRequest` and `ConsumeRequest` changed the baseline (2.8).
+      `ConsumeBatchItem` carries no scope: the batch path is unscoped. The
+      contracts' `CONSUME_REFUSALS` gains `key_out_of_scope`; the refusal baseline
+      records only what an unscoped caller can receive, and `test_refusals.py`
+      says so.
+- [x] 2.2 `domains/api/authority/src/arkhai_api_authority/models.py`: a
       `GrantTerms` model on table `grant_terms` — `grant_id` (foreign key to
       `credit_grants.id`, primary key), `accepted_terms` (canonical JSON text),
       `terms_digest`, `request_charge` — and `CreditGrant` untouched, so
       `_validate_grant_schema`'s exact column set still passes against a
       migrated database (review 03 F3 "A separate table"). No key column: a
       key's pinned values are its first grant's row.
-- [ ] 2.3 `domains/api/authority/src/arkhai_api_authority/migrations.py`: one
+      *Note:* `grant_terms.request_charge` is an integer column; the charge's
+      `2**53 - 1` bound is the request model's, checked before anything is written.
+- [x] 2.3 `domains/api/authority/src/arkhai_api_authority/migrations.py`: one
       new `Migration` at the end of `_MIGRATIONS`, in the chain's identifier
       pattern, creating `grant_terms` when absent; `_validate_grant_schema` and
       every earlier step unchanged (review 03 F3 "Validation ordering"; D15 —
       the inference database runs this chain from its first step).
-- [ ] 2.4 `domains/api/authority/src/arkhai_api_authority/keys_service.py`:
+      *Note:* step `20261030_006_grant_terms` creates the table in explicit DDL,
+      as the chain's other steps write theirs, so it does not follow later edits
+      to the model; `run_migrations`' `create_all` creates the table first on a
+      fresh or upgraded database, and the step creates it where the chain runs
+      alone (`apply_schema_migrations`), which the migration test exercises.
+- [x] 2.4 `domains/api/authority/src/arkhai_api_authority/keys_service.py`:
       `issue` takes `accepted_terms`, `terms_digest`, `request_charge`,
       verifies the digest against the canonical payload before writing (a
       mismatch is an `IssuanceError`), records a `GrantTerms` row with the
@@ -167,7 +268,18 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       review 02 F1; api-family delta scenario "A key is topped up from another
       listing"). The replay check (`_assert_replay`) treats the three as part
       of the immutable request.
-- [ ] 2.5 `keys_service.py`: `verify` returns the key's pinned
+      *Note:* a digest mismatch is `IssuanceError("terms_digest_mismatch")`, raised
+      before the request model or any query, answered `422` by the route service;
+      `key_out_of_scope` on issuance is `409`. The scope check runs after the
+      existence, revocation, and ownership checks and before quota is touched, and
+      its refusal names the first grant's service and resource. It compares the
+      terms digest *and* the request charge, stricter than the task's
+      `(service, resource_id, terms_digest)`, so one balance never carries two
+      charges. The terms row is flushed and added inside the same `try` as the
+      commit, so by construction a duplicate fulfillment still reaches the replay
+      path; no test reaches that handler with terms, since the service's mutation
+      lock serialises in-process issuance.
+- [x] 2.5 `keys_service.py`: `verify` returns the key's pinned
       `accepted_terms`, `terms_digest`, and `request_charge` from its first
       grant's row, omitted for an unpinned key; `verify` and `consume` take
       optional `service` and `resource_id` and, when either is present, refuse
@@ -179,7 +291,16 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       accepted terms, verified against its digest, is available through
       `list_grants`, for the later consumer the delta's "Metering reads the
       accepted card" scenario names.
-- [ ] 2.6 `domains/api/authority/src/arkhai_api_authority/route_services.py`:
+      *Note:* a scoped `verify` checks the secret first, so a wrong secret answers
+      as it always did; an out-of-scope key answers `valid=False`,
+      `status="key_out_of_scope"`, `balance=0`, revealing neither balance nor terms. A
+      scope names `service`, `resource_id`, or both, and only the named ones are
+      compared. A key with no issuance grant matches no named scope; an unscoped
+      `consume` does not query the grant. `list_grants` carries each pinned grant's
+      terms, read in one query and re-verified against their digest. A terms row
+      that no longer matches its digest fails the read (an internal error), since
+      it is a corrupt store rather than a refusal.
+- [x] 2.6 `domains/api/authority/src/arkhai_api_authority/route_services.py`:
       `AuthorityRouteService.issue` accepts the three request fields and
       returns the unchanged response, `verify` and `consume` carry the new
       fields; `_ISSUANCE_STATUS` and `_CONSUME_STATUS` map `key_out_of_scope`
@@ -189,7 +310,10 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       byte-identical when none does (api-family delta "when present, the
       authority MUST refuse"; its "The API-credits pins are replayed"
       requirement holds, proven in section 1).
-- [ ] 2.7 Library-integration tests
+      *Note:* `consume`'s `key_out_of_scope` is `403`. The API-credits
+      controller forwards the optional fields; forwarding is proven through the
+      typed clients in 2.8.
+- [x] 2.7 Library-integration tests
       (`domains/api/authority/tests/integration/test_keys_service.py`): a
       pinned issuance stores the three values and its result carries none of
       them, so the strict issuance response still parses; a digest mismatch is
@@ -203,14 +327,46 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       passes `_validate_grant_schema`; the previous chain's validation against
       the migrated schema is the in-process half of the delta's "The authority
       is upgraded and rolled back" scenario (review 04 F1: no down-migration).
-- [ ] 2.8 Application-integration tests through the typed client
+      *Note:* library integration (`test_keys_service.py`, real SQLite and the
+      real site ledger): pinned issuance stores and lists the terms with an
+      unchanged result; verify returns them, and nothing for an unpinned key; a
+      mismatched digest refuses with quota untouched; a top-up under another service,
+      resource, terms, or none refuses `key_out_of_scope` with no grant, balance
+      unchanged, quota untouched; an in-scope top-up grants; an unpinned key admits
+      only unpinned top-ups; a replay under other terms conflicts; verify and consume
+      out of scope refuse uncharged with no usage event, and in scope or unscoped
+      admit and charge. `test_migrations.py`: a database built at the previous chain
+      head, holding a grant, gains `grant_terms` from the step itself, with no row
+      for the grant, and passes `check_schema_version` under the new chain and
+      under the previous chain's list — the previous image's code is not run here;
+      its grant-schema check is the same unchanged function, and the live half is
+      `e2e_credits_service_rollback`. The previous chain is substituted by patching
+      the module's `_MIGRATIONS`, as the file's existing failed-migration test does.
+      Unit (`test_route_services.py`): the new reasons' statuses.
+- [x] 2.8 Application-integration tests through the typed client
       (`domains/apicredits/service/tests/integration/test_credits_signed_roundtrip.py`
       and `test_compat_baseline.py`): an API-credits issuance, verify, and
       consume without the fields match the recorded baseline bodies; a verify
       with a scope the key's grant matches admits and with one it does not
       refuses `key_out_of_scope` without consuming (api-family delta "A key is
       scoped to its first grant").
-- [ ] 2.9 **Verification.** `make test-api-authority` (library integration),
+      *Note:* application integration through the typed clients, against the
+      real credits service over ASGI with real signing
+      (`tests/integration/test_pinned_terms_and_scope.py`): a pinned issuance
+      through `AuthorityClient` verifies through `TokensClient` with its terms,
+      digest, and charge; a top-up under other terms is refused `key_out_of_scope`
+      with the balance unchanged; a key verified or consumed under another service
+      or resource is refused uncharged, and in scope or unscoped admits and charges.
+      The unscoped bodies are the compatibility baseline's recorded ones
+      (`test_compat_baseline.py`, unchanged refusals and routes). The scoped calls
+      needed `TokensClient`'s scope parameters, so task 3.1 was done here (see its
+      note). **Baseline re-records:** the served OpenAPI gained the optional `service`
+      and `resource_id` on `VerifyRequest` and `ConsumeRequest`, and the schema
+      baseline (`schema.json`) gained the `grant_terms` table and migration
+      `20261030_006_grant_terms`; both were re-recorded once, in place, from the
+      running service, each diff additions only, on the owner's section 1 decision
+      for additive changes.
+- [x] 2.9 **Verification.** `make test-api-authority` (library integration),
       `make test-api` (the contracts' unit level), `make test-apicredits`
       (the service's application integration through `AuthorityClient` and
       the gate's `TokensClient`, and its compatibility baselines). `make test`.
@@ -224,6 +380,22 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       image migrated, because `credit_grants` is unchanged; record its run at
       closeout. `e2e_inference_deal` exercises the pinned charge and the scope
       refusal.
+      *Note:* versions: `arkhai-api-contracts` 0.5.0, `arkhai-api-authority`
+      0.2.0, `arkhai-api-gate` 0.2.0 (3.1's client), `arkhai-apicredits-service`
+      0.9.0, with floors raised where the new fields are imported; `make lock`
+      relocked every project recording them. `make test-api` passed (contracts 47,
+      authority 88, gate 27 with the parity suite, and the rest); `make
+      test-apicredits` passed after the schema re-record (service integration 40);
+      `make check-packaging` passed. `make -k test`: every target passed but the
+      provisioning unit test that fails only in its suite (section 1's note), and
+      `scripts/tests/test_validate_slice.py`'s 0.2-second credential-helper case,
+      which timed out under the full run's load and passed in `make
+      test-release-tooling` alone (1136 passed). The rollback scenario and the
+      inference deal are owed once deployed, as planned.
+      *Handoff:* the gate's parity test now holds a sent body between the model's
+      required and declared fields, since an unscoped body omits the optional scope;
+      `ConsumeBatchItem` and the gate's batch flush carry no scope, so section 3's
+      scoped charge must not batch, or must consume singly.
 
 ## 3. Family gate: a separable verify step and the key's charge
 
@@ -232,19 +404,29 @@ the scope the gate sends, with the conformance trace unchanged (review 01 F3;
 review 03 F1; api-family delta "The gate verifies and charges in separable
 steps"; D16's ordering, verification before charge).
 
-- [ ] 3.1 `domains/api/gate/src/arkhai_api_gate/client.py`: `VerifyResult`
+- [x] 3.1 `domains/api/gate/src/arkhai_api_gate/client.py`: `VerifyResult`
       gains optional `accepted_terms`, `terms_digest`, and `request_charge`
       read from the response when present; `TokensClient.verify` and
       `consume` take optional `service` and `resource_id` and send them only
       when set, so an unscoped client's request bodies are byte-identical
       (review 03 F1). The parity test (`tests/test_contract_parity.py`) keeps
       the local spelling equal to `contracts`' declarations.
-- [ ] 3.2 `domains/api/gate/src/arkhai_api_gate/config.py`: `GateConfig`
+      *Note:* done in section 2's commit, because relocking the gate onto
+      contracts 0.5.0 broke its parity test against the new `VerifyResponse` fields
+      and the plan's 2.8 needed scoped calls through `TokensClient`. `VerifyResult`
+      gains the three terms fields; `verify` and `consume` take optional `service` and
+      `resource_id`, sent only when set. The parity test now requires an unscoped
+      body to hold every required field and no unset optional one, and a scoped
+      client to send its scope and parse a pinned key's terms;
+      `KEY_OUT_OF_SCOPE` joins the declared consume refusals.
+- [x] 3.2 `domains/api/gate/src/arkhai_api_gate/config.py`: `GateConfig`
       gains optional `scope_service` and `scope_resource_id`, read by
       `from_env` as `SCOPE_SERVICE` and `SCOPE_RESOURCE_ID` under the
       deployment's prefix, unset by default (the sample app and every
       API-credits deployment set neither).
-- [ ] 3.3 `domains/api/gate/src/arkhai_api_gate/gate.py`: `TokenGate.verify(authorization)`
+      *Note:* unit (`tests/test_config.py`): both unset by default, read under
+      the prefix when set.
+- [x] 3.3 `domains/api/gate/src/arkhai_api_gate/gate.py`: `TokenGate.verify(authorization)`
       returns either a deny `GateDecision` (401 missing or invalid, 403
       revoked, 403 `key_out_of_scope` when the authority refuses by scope) or
       a verified key value carrying `key_id`, the cached `VerifyResult`'s
@@ -258,9 +440,21 @@ steps"; D16's ordering, verification before charge).
       the offering's default only when verification returns none"; D4: no
       idempotency key is introduced). The cached `_KeyState` holds the verified
       terms for the verify TTL (review 01 F2: the gate is otherwise unchanged).
-- [ ] 3.4 `domains/api/gate/src/arkhai_api_gate/asgi.py`: `TokenGateMiddleware`
+      *Note:* `TokenGate.verify` returns a `GateDecision` denial or a
+      `VerifiedKey` (exported); `charge(verified, idempotency_key=None)` falls back
+      to the configured amount only when verification returned no charge, and
+      answers a key it never verified as invalid (`401`). Charges keep today's
+      path, batching included, for scoped and unscoped gates alike: a batch item
+      carries no scope, and need not, since a key's scope is fixed by its first
+      grant and was checked at verification. (This corrects section 2's handoff,
+      which proposed that a scoped gate not batch.) The flush's requeue of an
+      unavailable batch keeps each item's own amount rather than the configured
+      one, the same value whenever no charge is pinned. A consume refused
+      `key_out_of_scope` is answered `403` like the verify refusal.
+- [x] 3.4 `domains/api/gate/src/arkhai_api_gate/asgi.py`: `TokenGateMiddleware`
       keeps calling `authorize`; its behaviour is unchanged.
-- [ ] 3.5 Unit tests (`domains/api/gate/tests/test_gate.py`): verify then
+      *Note:* `asgi.py` is untouched.
+- [x] 3.5 Unit tests (`domains/api/gate/tests/test_gate.py`): verify then
       refuse leaves the balance unchanged and the fake authority saw only the
       verification; verify then charge equals `authorize` call for call; a
       verified `request_charge` is the amount consumed and its absence falls
@@ -272,7 +466,17 @@ steps"; D16's ordering, verification before charge).
       the TypeScript and Rust gates and the trace are not edited (api-family
       delta "with the same authority exchanges and cached state"; the
       `api-family` capability's "The conformance trace is replayed" scenario).
-- [ ] 3.6 **Verification.** `make test-api-gate` (unit, the conformance
+      *Note:* unit (`tests/test_gate.py`, a scripted client recording each call):
+      verify alone calls only verify and returns the pinned terms; the pinned charge is consumed and the configured amount otherwise; a scoped
+      configuration sends its scope on verify and consume and an unscoped one sends
+      none; a pinned charge is batched and requeued at its own amount; charging a
+      key never verified is `401`; verify then charge equals `authorize` in
+      decisions, calls, and cache use, synchronous and batched; an out-of-scope
+      verify is `403` uncharged and an out-of-scope consume is `403`. `tests/test_conformance.py`
+      replays `session.json` unchanged; the trace and the TypeScript and Rust gates
+      are not edited. The scoped exchanges against the real authority are
+      section 2's application-integration test.
+- [x] 3.6 **Verification.** `make test-api-gate` (unit, the conformance
       replay, and the contract parity); `make test-apicredits` for the sample
       app's unit tests (`domains/apicredits/sample-app/tests/test_sample_app.py`),
       which must pass unchanged. `make test`. `domains/api/gate` bumps for the
@@ -281,6 +485,79 @@ steps"; D16's ordering, verification before charge).
       check-packaging`. Once deployed, `e2e_credits_deal` exercises the
       unchanged `authorize` path through the sample app and
       `e2e_inference_deal` the separable steps through the gateway.
+      *Note:* `make test-api-gate` passed (39, the conformance replay and the
+      parity suite included); `make test-apicredits` passed, the sample app's
+      unit tests unchanged; `make check-packaging` passed; `make -k test` passed
+      every target but the provisioning unit test that fails only in its suite
+      (section 1's note). No version bump or relock here: the gate went to 0.2.0
+      in section 2, for 3.1's client, and has not been released since, so its new
+      public `verify`, `charge`, and `VerifiedKey` ship in that same version and no
+      requirement or lock changed. The compliance check's findings were fixed
+      except the batching restriction, which was dropped instead of recorded as a
+      decision (3.3's note).
+      *Handoff:* the family gateway (section 4) calls `gate.verify`, then its
+      hook, then `gate.charge`, with the gate's `scope_service` and
+      `scope_resource_id` set from the offering; a hook refusal never reaches
+      `charge`.
+      *Fix (implementation review 08 F1, F3, F13):* batched consumes now carry
+      scope, superseding 3.3's note that a batch item needs none:
+      `ConsumeBatchItem` gains optional `service` and `resource_id`, omitted
+      when unset (the API-credits OpenAPI baseline re-recorded in place,
+      additions only), the authority refuses an out-of-scope item uncharged as
+      `key_out_of_scope`, and the gate stamps its scope on every queued item and
+      denies a key 403 once a flush reports it out of scope. A `VerifiedKey`
+      now carries the fingerprint and ticket of the verification that issued
+      it: `charge` refuses when the cached verification is gone, no longer
+      valid (the denial `verify` would give), or for another secret, and takes
+      the synchronous consume when it has expired, so a key revoked while the
+      hook runs is never admitted optimistically. A late-verified request for
+      an older secret is now refused at charge (`test_gate.py`'s late-answer
+      test changed accordingly). F13 removed a trailing blank line. Evidence:
+      `make test-api`, `test-api-authority`, `test-api-gate` (unit, the
+      parity suite, the conformance replay) and `test-apicredits` (Python, the
+      TypeScript and Rust conformance) pass, with new unit tests for the batch
+      scope, the revocation race, expiry, and fingerprint mismatch, and an
+      authority integration test for per-item batch scope;
+      `make check-architecture` and `make check-comment-hygiene` pass. No
+      version changes: contracts 0.5.0, authority 0.2.0 and gate 0.2.0 are
+      unreleased.
+      *Fix (implementation review 09 F1, F2):* a synchronous consume never
+      sees the secret, so it does not re-authenticate: a `VerifiedKey` also
+      keeps the presented secret (out of its repr and equality), and once the
+      cached verification has expired `charge` verifies that secret again and
+      denies as `verify` would when the authority no longer accepts it — a
+      secret rotated away by an issuance replay is refused 401 and never
+      charged. A flush whose outcome is unknown — `consume_batch` raising
+      (cancellation included), an item answered `batch_unavailable` or
+      `unauthenticated_service`, or a short answer — puts the exact items back
+      ahead of newer pending charges, idempotency key and scope unchanged, so
+      no charge is lost and a committed batch is never debited twice.
+      Evidence: `make test-api-gate` (unit, parity, conformance replay; 53)
+      and `make test-apicredits` pass, with unit tests for the rotation, a
+      re-verified expired handle, a raising flush, an unavailable or
+      unauthenticated batch, a short answer, and a close during a flush.
+      *Fix (implementation review 10 F1, F2):* a flush cancelled while it
+      waits to process its answer requeues every detached item unchanged:
+      no lock-held block awaits, so processing runs whole or not at all, and
+      requeueing without the lock is equally atomic. A synchronous consume
+      whose answer cannot be authenticated is denied `502
+      unauthenticated_service`, leaving the key's balance estimate and credit
+      untouched and offering no purchase pointer. Evidence: `make
+      test-api-gate` (55) and `make test-apicredits` pass, with unit tests for
+      a flush cancelled between its answer and its processing and for an
+      unverifiable consume answer.
+      *Fix (implementation review 11 F1, F2):* the gate tracks each key's
+      credits in flight — sent in a batch whose answer is not yet processed —
+      and every balance the authority reports, from a batch, a synchronous
+      consume, or a verification, becomes the estimate less the charges still
+      queued and in flight, so a charge admitted while a flush waits keeps its
+      deduction and a top-up still raises the estimate. `aclose` waits until
+      no flush is in progress, a flush called directly included, before its
+      final flush, so charges such a flush puts back are resent. Evidence:
+      `make test-api-gate` (59) passes, with unit tests for a charge admitted
+      during a flush, a synchronous charge beside a queued one, a
+      verification answered during a flush, and a close during a direct
+      flush; each fails against the gate before the fix.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

@@ -9,10 +9,19 @@ from __future__ import annotations
 import hashlib
 import re
 from functools import cache
-from typing import Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from market_identity import Identity, canonical_json
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    create_model,
+    model_serializer,
+    model_validator,
+)
 
 from arkhai_api.labels import IssuanceLabel
 
@@ -20,6 +29,24 @@ _SAFE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 REQUEST_SCHEMA_PATTERN = r"^arkhai\.[a-z0-9-]+\.issuance-request\.v1$"
 RESULT_SCHEMA_PATTERN = r"^arkhai\.[a-z0-9-]+\.issuance-result\.v1$"
 DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+# The canonical JSON integer domain (RFC 8785), which the request digest
+# carries the charge in; the authority's ledger admits it as well.
+MAX_REQUEST_CHARGE = 2**53 - 1
+# Optional terms fields are omitted when unset, never serialised as null, so an
+# unpinned request serialises and digests exactly its base fields.
+ACCEPTED_TERMS_FIELDS = ("accepted_terms", "terms_digest", "request_charge")
+RequestCharge = Annotated[int, Field(strict=True, ge=1, le=MAX_REQUEST_CHARGE)]
+_REQUEST_CHARGE = TypeAdapter(RequestCharge)
+
+
+def accepted_terms_digest(accepted_terms: dict[str, Any]) -> str:
+    """The digest that binds a grant to the canonical JSON of its accepted terms."""
+
+    return "sha256:" + hashlib.sha256(canonical_json(accepted_terms)).hexdigest()
+
+
+def omit_unset(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if key not in fields or value is not None}
 
 
 class _IssuanceContract(BaseModel):
@@ -63,6 +90,25 @@ class IssuanceRequest(_IssuanceContract):
     key: KeyDisposition
     request_digest: str = Field(pattern=DIGEST_PATTERN)
     capacity_reservation_id: str | None = Field(default=None, min_length=1, max_length=255)
+    accepted_terms: dict[str, Any] | None = None
+    terms_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
+    request_charge: RequestCharge | None = None
+
+    @model_validator(mode="after")
+    def validate_accepted_terms(self) -> Self:
+        present = [getattr(self, name) is not None for name in ACCEPTED_TERMS_FIELDS]
+        if any(present) and not all(present):
+            raise ValueError("accepted_terms, terms_digest, and request_charge are set together")
+        if self.accepted_terms is not None and self.terms_digest != accepted_terms_digest(
+            self.accepted_terms
+        ):
+            raise ValueError("terms_digest does not match accepted_terms")
+        return self
+
+    # Unannotated: a return annotation would replace the published serialisation schema.
+    @model_serializer(mode="wrap")
+    def _omit_unset_terms(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), ACCEPTED_TERMS_FIELDS)
 
 
 class IssuanceResult(_IssuanceContract):
@@ -106,8 +152,10 @@ def _request_digest(
     resource_id: str,
     quantity: int,
     key: KeyDisposition,
+    terms_digest: str | None = None,
+    request_charge: int | None = None,
 ) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "fulfillment_id": fulfillment_id,
         "key": key.model_dump(mode="json"),
         "negotiation_id": negotiation_id,
@@ -117,6 +165,12 @@ def _request_digest(
         "schema": label.issuance_request_schema,
         "service": service,
     }
+    # The digest, not the payload, enters the request digest, so it does not
+    # grow with the terms; an unpinned request digests the eight base keys.
+    if terms_digest is not None:
+        payload["terms_digest"] = terms_digest
+    if request_charge is not None:
+        payload["request_charge"] = request_charge
     return "sha256:" + hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
@@ -132,6 +186,8 @@ def issuance_request_digest(label: IssuanceLabel, request: IssuanceRequest) -> s
         resource_id=request.resource_id,
         quantity=request.quantity,
         key=request.key,
+        terms_digest=request.terms_digest,
+        request_charge=request.request_charge,
     )
 
 
@@ -184,9 +240,15 @@ def issuance_request(
     quantity: int,
     key: KeyDisposition,
     capacity_reservation_id: str | None = None,
+    accepted_terms: dict[str, Any] | None = None,
+    terms_digest: str | None = None,
+    request_charge: int | None = None,
 ) -> IssuanceRequest:
     """One grant's command under ``label``, its identity and digest computed from the inputs."""
 
+    if request_charge is not None:
+        # Refuse an out-of-domain charge before it reaches canonical JSON.
+        _REQUEST_CHARGE.validate_python(request_charge)
     identity = fulfillment_id(label, negotiation_id)
     return issuance_request_model(label)(
         fulfillment_id=identity,
@@ -205,6 +267,11 @@ def issuance_request(
             resource_id=resource_id,
             quantity=quantity,
             key=key,
+            terms_digest=terms_digest,
+            request_charge=request_charge,
         ),
         capacity_reservation_id=capacity_reservation_id,
+        accepted_terms=accepted_terms,
+        terms_digest=terms_digest,
+        request_charge=request_charge,
     )

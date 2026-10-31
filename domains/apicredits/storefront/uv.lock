@@ -114,14 +114,14 @@ wheels = [
 
 [[package]]
 name = "arkhai-api"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "../../../.dist" }
 dependencies = [
     { name = "arkhai-kit-identity", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "pydantic", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { path = "arkhai_api-0.1.0-py3-none-any.whl" },
+    { path = "arkhai_api-0.2.0-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -195,7 +195,7 @@ wheels = [
 
 [[package]]
 name = "arkhai-api-contracts"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "../../../.dist" }
 dependencies = [
     { name = "arkhai-api", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -204,12 +204,12 @@ dependencies = [
     { name = "pydantic", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { path = "arkhai_api_contracts-0.4.0-py3-none-any.whl" },
+    { path = "arkhai_api_contracts-0.5.0-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "arkhai-api-selling"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "../../../.dist" }
 dependencies = [
     { name = "arkhai-api", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -230,12 +230,12 @@ dependencies = [
     { name = "pydantic", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { path = "arkhai_api_selling-0.4.0-py3-none-any.whl" },
+    { path = "arkhai_api_selling-0.5.0-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "arkhai-api-selling-alkahest"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "../../../.dist" }
 dependencies = [
     { name = "arkhai-api-selling", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -246,7 +246,7 @@ dependencies = [
     { name = "arkhai-kit-settlement-runtime", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { path = "arkhai_api_selling_alkahest-0.1.0-py3-none-any.whl" },
+    { path = "arkhai_api_selling_alkahest-0.2.0-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -348,8 +348,8 @@ dev = [
 requires-dist = [
     { name = "alkahest-py", specifier = "==1.1.2" },
     { name = "arkhai-api-client", specifier = ">=0.1.0" },
-    { name = "arkhai-api-selling", specifier = ">=0.4.0" },
-    { name = "arkhai-api-selling-alkahest", specifier = ">=0.1.0" },
+    { name = "arkhai-api-selling", specifier = ">=0.5.0" },
+    { name = "arkhai-api-selling-alkahest", specifier = ">=0.2.0" },
     { name = "arkhai-api-selling-arkhai-payments", specifier = ">=0.1.0" },
     { name = "arkhai-apicredits-domain", specifier = ">=0.11.0" },
     { name = "arkhai-core", specifier = ">=0.4.0" },

@@ -1,11 +1,11 @@
 [project]
 name = "arkhai-api-selling-alkahest"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 description = "The api family's selling-side Alkahest library: the seller's escrow stage, the accepted escrow artifacts and negotiation step, publication's release conditions, and the escrow lifecycle contributions."
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "arkhai-api-selling>=0.4.0",
+    "arkhai-api-selling>=0.5.0",
     "arkhai-core>=0.4.0",
     "arkhai-kit-alkahest>=0.8.0",
     "arkhai-kit-identity>=0.4.0",
@@ -39,7 +39,7 @@ dev = [
     "pytest-asyncio>=0.23.8,<1.0.0",
     # The vocabulary's issuance and purchase models, the authority client's
     # error, and the transport errors the stage tests build. Test-only.
-    "arkhai-api>=0.1.0",
+    "arkhai-api>=0.2.0",
     "arkhai-api-client>=0.1.0",
     "httpx>=0.27",
     "pydantic>=2",

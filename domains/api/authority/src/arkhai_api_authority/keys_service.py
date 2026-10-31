@@ -10,19 +10,21 @@ configuration the service root passes.
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets as _secrets
 import threading
 from datetime import timezone
 from typing import Any, Mapping, Optional
 
-from market_identity import Identity, IdentityScheme
+from arkhai_api.issuance import accepted_terms_digest
+from market_identity import Identity, IdentityScheme, canonical_json
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from arkhai_api_contracts.models import KeyDisposition, issuance_request_model
 from market_site.ledger import CapacityConflictError, CapacityLedgerService
 
-from arkhai_api_authority.models import ApiKey, ConsumptionEvent, CreditGrant
+from arkhai_api_authority.models import ApiKey, ConsumptionEvent, CreditGrant, GrantTerms
 from arkhai_api_authority.profile import AuthorityConfig
 
 KEY_NOT_FOUND = "key_not_found"
@@ -31,6 +33,8 @@ KEY_REVOKED = "key_revoked"
 QUOTA_EXHAUSTED = "quota_exhausted"
 FULFILLMENT_CONFLICT = "fulfillment_conflict"
 INSUFFICIENT_CREDITS = "insufficient_credits"
+KEY_OUT_OF_SCOPE = "key_out_of_scope"
+TERMS_DIGEST_MISMATCH = "terms_digest_mismatch"
 
 _GLOBAL_MUTATION_LOCK = threading.RLock()
 
@@ -87,6 +91,49 @@ def _owner_admits(
     return False, "key is bound to a different marketplace principal"
 
 
+def _first_grant(db: Session, key_id: str) -> tuple[CreditGrant | None, GrantTerms | None]:
+    """The issuance grant that created ``key_id``, which scopes the key, and its terms row."""
+    grant = (
+        db.query(CreditGrant)
+        .filter(CreditGrant.key_id == key_id, CreditGrant.fulfillment_id.isnot(None))
+        .order_by(CreditGrant.id.asc())
+        .first()
+    )
+    if grant is None:
+        return None, None
+    return grant, db.get(GrantTerms, grant.id)
+
+
+def _in_scope(
+    grant: CreditGrant | None, *, service: str | None, resource_id: str | None
+) -> bool:
+    """Whether a key's first grant names the service and resource a caller expects."""
+    if service is None and resource_id is None:
+        return True
+    if grant is None:
+        return False
+    return (service is None or grant.service == service) and (
+        resource_id is None or grant.resource_id == resource_id
+    )
+
+
+def _pinned_terms(row: GrantTerms | None) -> dict[str, Any]:
+    """A terms row as the wire carries it, empty when unpinned.
+
+    A payload that no longer matches its digest is a corrupt store, so the read fails.
+    """
+    if row is None:
+        return {}
+    accepted_terms = json.loads(row.accepted_terms)
+    if accepted_terms_digest(accepted_terms) != row.terms_digest:
+        raise RuntimeError(f"grant {row.grant_id} terms do not match their digest")
+    return {
+        "accepted_terms": accepted_terms,
+        "terms_digest": row.terms_digest,
+        "request_charge": int(row.request_charge),
+    }
+
+
 class KeysService:
     """Key/grant/consumption operations over the credits tables."""
 
@@ -123,12 +170,24 @@ class KeysService:
         request_digest: str,
         key_id: str | None = None,
         capacity_reservation_id: str | None = None,
+        accepted_terms: Mapping[str, Any] | None = None,
+        terms_digest: str | None = None,
+        request_charge: int | None = None,
     ) -> dict[str, Any]:
-        """Atomically commit one immutable grant under ``fulfillment_id``."""
+        """Atomically commit one immutable grant under ``fulfillment_id``.
+
+        Accepted terms are stored beside the grant and read back only through
+        ``verify`` and ``list_grants``; the result is the same with or without them.
+        """
 
         owner = _principal(owner_scheme, owner_id, field="owner")
         if owner is None:
             raise ValueError("owner is required")
+        terms = None if accepted_terms is None else dict(accepted_terms)
+        if terms is not None and terms_digest != accepted_terms_digest(terms):
+            raise IssuanceError(
+                TERMS_DIGEST_MISMATCH, "terms_digest does not match accepted_terms"
+            )
         key_target = KeyDisposition(mode=key_mode, key_id=key_id)
         self._request_model(
             negotiation_id=negotiation_id,
@@ -140,7 +199,11 @@ class KeysService:
             key=key_target,
             request_digest=request_digest,
             capacity_reservation_id=capacity_reservation_id,
+            accepted_terms=terms,
+            terms_digest=terms_digest,
+            request_charge=request_charge,
         )
+        pinned = (terms_digest, request_charge)
 
         with self._lock, self._session_factory() as db:
             prior = (
@@ -158,6 +221,8 @@ class KeysService:
                     quantity=quantity,
                     key=key_target,
                     request_digest=request_digest,
+                    pinned=pinned,
+                    prior_terms=db.get(GrantTerms, prior.id),
                 )
                 return self._reissue(db, prior)
 
@@ -177,6 +242,23 @@ class KeysService:
                 admitted, why = _owner_admits(key, owner)
                 if not admitted:
                     raise IssuanceError(KEY_NOT_OWNED, why)
+                # One balance is spent on what every grant bought, at one charge,
+                # so a top-up must match the first grant's scope and terms.
+                first, first_terms = _first_grant(db, key.key_id)
+                first_pinned = (
+                    None if first_terms is None else first_terms.terms_digest,
+                    None if first_terms is None else int(first_terms.request_charge),
+                )
+                if first is None:
+                    raise IssuanceError(
+                        KEY_OUT_OF_SCOPE, f"key {key.key_id!r} has no issuance grant to scope it"
+                    )
+                if (first.service, first.resource_id) != (service, resource_id) or first_pinned != pinned:
+                    raise IssuanceError(
+                        KEY_OUT_OF_SCOPE,
+                        f"key {key.key_id!r} is scoped to service {first.service!r}, "
+                        f"resource {first.resource_id!r}, and the terms of its first grant",
+                    )
             else:
                 new_id = derive_key_id(self._key_prefix, fulfillment_id)
                 key = db.get(ApiKey, new_id)
@@ -237,6 +319,16 @@ class KeysService:
             db.add(grant)
             key.balance = new_balance
             try:
+                if terms is not None:
+                    db.flush()
+                    db.add(
+                        GrantTerms(
+                            grant_id=grant.id,
+                            accepted_terms=canonical_json(terms).decode("utf-8"),
+                            terms_digest=terms_digest,
+                            request_charge=int(request_charge),
+                        )
+                    )
                 db.commit()
             except IntegrityError:
                 db.rollback()
@@ -256,6 +348,8 @@ class KeysService:
                     quantity=quantity,
                     key=key_target,
                     request_digest=request_digest,
+                    pinned=pinned,
+                    prior_terms=db.get(GrantTerms, prior.id),
                 )
                 return self._reissue(db, prior)
             db.refresh(grant)
@@ -277,7 +371,13 @@ class KeysService:
         quantity: int,
         key: KeyDisposition,
         request_digest: str,
+        pinned: tuple[str | None, int | None],
+        prior_terms: GrantTerms | None,
     ) -> None:
+        stored_pinned = (
+            None if prior_terms is None else prior_terms.terms_digest,
+            None if prior_terms is None else int(prior_terms.request_charge),
+        )
         expected = (
             negotiation_id,
             owner.scheme.value,
@@ -288,6 +388,7 @@ class KeysService:
             key.mode,
             key.key_id,
             request_digest,
+            pinned,
         )
         stored = (
             prior.negotiation_id,
@@ -299,6 +400,7 @@ class KeysService:
             prior.key_mode,
             prior.key_target_id,
             prior.request_digest,
+            stored_pinned,
         )
         if stored != expected:
             raise IssuanceError(
@@ -468,15 +570,20 @@ class KeysService:
         key_id: str,
         amount: int,
         idempotency_key: str | None = None,
+        service: str | None = None,
+        resource_id: str | None = None,
     ) -> dict[str, Any]:
         """Decrement ``amount`` credits. Outcome dict, never raises for
-        market-state conditions:
+        market-state conditions; a named ``service`` or ``resource_id`` the
+        key's first grant does not match refuses as ``key_out_of_scope``
+        before any balance change:
 
         - ``{"ok": True, "consumed": N, "balance": B}``
         - ``{"ok": True, "consumed": 0, "balance": B, "duplicate": True}``
           — the idempotency key was already applied
         - ``{"ok": False, "reason": ..., "balance": B}`` — not found /
           revoked / insufficient credits
+        - ``{"ok": False, "reason": "key_out_of_scope", "balance": 0}``
         """
         if amount < 1:
             raise ValueError(f"amount must be >= 1, got {amount}")
@@ -490,6 +597,10 @@ class KeysService:
                     "reason": KEY_REVOKED,
                     "balance": int(key.balance or 0),
                 }
+            if (service is not None or resource_id is not None) and not _in_scope(
+                _first_grant(db, key_id)[0], service=service, resource_id=resource_id
+            ):
+                return {"ok": False, "reason": KEY_OUT_OF_SCOPE, "balance": 0}
             if idempotency_key is not None:
                 seen = (
                     db.query(ConsumptionEvent)
@@ -525,19 +636,34 @@ class KeysService:
             return {"ok": True, "consumed": int(amount), "balance": int(key.balance)}
 
     def consume_batch(self, items: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        """Apply a middleware flush; items are independent, order kept."""
+        """Apply a middleware flush; items are independent, order kept, and
+        each is scoped and refused exactly as a single ``consume``."""
         return [
             self.consume(
                 key_id=str(item["key_id"]),
                 amount=int(item["amount"]),
                 idempotency_key=item.get("idempotency_key"),
+                service=item.get("service"),
+                resource_id=item.get("resource_id"),
             )
             for item in items
         ]
 
-    def verify(self, *, key_id: str, secret: str) -> dict[str, Any]:
+    def verify(
+        self,
+        *,
+        key_id: str,
+        secret: str,
+        service: str | None = None,
+        resource_id: str | None = None,
+    ) -> dict[str, Any]:
         """Check a presented bearer secret. Constant-time hash compare;
-        ``valid`` only for an active key with a matching secret."""
+        ``valid`` only for an active key with a matching secret.
+
+        A valid key carries its pinned terms, omitted when unpinned. A named
+        ``service`` or ``resource_id`` its first grant does not match answers
+        ``key_out_of_scope``, with no balance and no terms.
+        """
         with self._lock, self._session_factory() as db:
             key = db.get(ApiKey, key_id)
             if key is None:
@@ -546,10 +672,17 @@ class KeysService:
                 _hash_secret(secret),
                 str(key.secret_hash),
             )
+            valid = bool(matches and key.status == "active")
+            if not valid:
+                return {"valid": False, "status": key.status, "balance": int(key.balance or 0)}
+            first, first_terms = _first_grant(db, key_id)
+            if not _in_scope(first, service=service, resource_id=resource_id):
+                return {"valid": False, "status": KEY_OUT_OF_SCOPE, "balance": 0}
             return {
-                "valid": bool(matches and key.status == "active"),
+                "valid": True,
                 "status": key.status,
                 "balance": int(key.balance or 0),
+                **_pinned_terms(first_terms),
             }
 
     # ------------------------------------------------------------------
@@ -624,6 +757,12 @@ class KeysService:
                 .order_by(CreditGrant.id.asc())
                 .all()
             )
+            terms = {
+                row.grant_id: row
+                for row in db.query(GrantTerms).filter(
+                    GrantTerms.grant_id.in_([grant.id for grant in rows])
+                )
+            }
             return [
                 {
                     "id": row.id,
@@ -642,6 +781,7 @@ class KeysService:
                     "granted_at": row.granted_at.isoformat()
                     if row.granted_at
                     else None,
+                    **_pinned_terms(terms.get(row.id)),
                 }
                 for row in rows
             ]

@@ -997,3 +997,49 @@ async def test_a_requeued_key_keeps_its_age_and_does_not_starve_an_older_charge(
     assert [[item["idempotency_key"] for item in call] for call in client.batch_calls] == [
         ["hot-0", "hot-1"], ["hot-0", "hot-1"], ["cold-0", "hot-2"],
     ]
+
+
+async def test_closing_offers_every_charge_once_when_a_batch_answer_is_lost():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0, flush_max_batch=2), client)
+    real = client.consume_batch
+    lost = [True]
+
+    async def lose_first(items):
+        if lost:
+            lost.pop()
+            client.batch_calls.append(list(items))
+            return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+        return await real(items)
+
+    client.consume_batch = lose_first
+    for n in range(5):
+        assert (await gate.authorize("Bearer ak_live.s", idempotency_key=f"idem-{n}")).allowed
+
+    await asyncio.wait_for(gate.aclose(), 5)
+
+    assert [[item["idempotency_key"] for item in call] for call in client.batch_calls] == [
+        ["idem-0", "idem-1"], ["idem-2", "idem-3"], ["idem-4"],
+    ]
+    # The lost batch stays queued rather than crowding out the untried charges.
+    state = gate._states["ak_live"]
+    assert [item["idempotency_key"] for item in state.pending] == ["idem-0", "idem-1"]
+    assert (state.queued, state.in_flight) == (2, 0)
+
+
+async def test_a_batch_keeps_each_key_s_charges_in_order_and_the_rest_queued():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0, flush_max_batch=4), client)
+    for n in range(3):
+        assert (await gate.authorize("Bearer ak_a.s", idempotency_key=f"a-{n}")).allowed
+        assert (await gate.authorize("Bearer ak_b.s", idempotency_key=f"b-{n}")).allowed
+
+    await gate.flush()
+
+    assert [item["idempotency_key"] for item in client.batch_calls[0]] == [
+        "a-0", "b-0", "a-1", "b-1",
+    ]
+    for key_id, left in (("ak_a", "a-2"), ("ak_b", "b-2")):
+        state = gate._states[key_id]
+        assert [item["idempotency_key"] for item in state.pending] == [left]
+        assert (len(state.admitted), state.queued) == (1, 1)

@@ -24,7 +24,7 @@ import hmac
 import itertools
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Container, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -90,6 +90,8 @@ class _KeyState:
     pending: list[dict[str, Any]] = field(default_factory=list)
     # The admission order of each pending item, in step with ``pending``.
     admitted: list[int] = field(default_factory=list)
+    # The credits in ``pending``, kept so settling is not a scan of the queue.
+    queued: int = 0
     # Credits detached for a batch whose answer has not been processed.
     in_flight: int = 0
     exhausted: bool = False
@@ -101,9 +103,7 @@ class _KeyState:
         earlier one; it lacks only the charges still queued or detached for a
         batch not yet answered.
         """
-        self.estimated_balance = (
-            balance - self.in_flight - sum(item["amount"] for item in self.pending)
-        )
+        self.estimated_balance = balance - self.in_flight - self.queued
 
 
 def _fingerprint(secret: str) -> bytes:
@@ -176,7 +176,12 @@ class TokenGate:
             self._flush_task = asyncio.ensure_future(self._flush_loop())
 
     async def aclose(self) -> None:
-        """Stop the flush loop and offer every pending charge to the authority once more."""
+        """Stop the flush loop and offer every pending charge to the authority once more.
+
+        A batch whose answer is lost is requeued but not retried here, so
+        a charge further back is never crowded out by retries; a transport
+        error ends the drain and propagates.
+        """
         self._closing = True
         if self._flush_task is not None:
             self._flush_task.cancel()
@@ -189,14 +194,11 @@ class TokenGate:
         # zero at some point.
         while self._flushes:
             await self._no_flush.wait()
-        async with self._lock:
-            queued = sum(len(state.pending) for state in self._states.values())
-        offered = 0
-        while offered < queued:
-            sent = await self._flush_once()
-            if not sent:
-                break
-            offered += sent
+        # Nothing is queued once closing, so the drain ends when every
+        # charge queued before it has been offered.
+        offered: set[int] = set()
+        while sent := await self._flush_once(exclude=offered):
+            offered.update(sent)
 
     # -- request path -------------------------------------------------
 
@@ -401,6 +403,7 @@ class TokenGate:
                 # settle it with the authority on the next flush.
                 state.pending.append(self._batch_item(key_id, amount, idem))
                 state.admitted.append(next(self._admissions))
+                state.queued += amount
                 state.estimated_balance = estimated_after
                 return GateDecision(allowed=True, status=200, key_id=key_id)
 
@@ -468,26 +471,12 @@ class TokenGate:
             if not self._flushes:
                 self._no_flush.set()
 
-    async def _flush_once(self) -> int:
-        """Send one batch, oldest charges first across keys; the number of items sent."""
-        limit = max(self._cfg.flush_max_batch, 1)
-        entries: list[tuple[str, int, dict[str, Any]]] = []
+    async def _flush_once(self, *, exclude: Container[int] = ()) -> list[int]:
+        """Send one batch of the oldest charges not in ``exclude``; their admission numbers."""
         async with self._lock:
-            heads = [
-                (state.admitted[0], key_id)
-                for key_id, state in self._states.items() if state.pending
-            ]
-            heapq.heapify(heads)
-            while heads and len(entries) < limit:
-                _, key_id = heapq.heappop(heads)
-                state = self._states[key_id]
-                item, admitted = state.pending.pop(0), state.admitted.pop(0)
-                entries.append((key_id, admitted, item))
-                state.in_flight += item["amount"]
-                if state.pending:
-                    heapq.heappush(heads, (state.admitted[0], key_id))
+            entries = self._take(max(self._cfg.flush_max_batch, 1), exclude)
         if not entries:
-            return 0
+            return []
         items = [dict(item) for _, _, item in entries]
         # The authority may have committed a batch whose answer never
         # arrived, so an unanswered item is requeued unchanged: its
@@ -514,7 +503,54 @@ class TokenGate:
         finally:
             for lock in held:
                 lock.release()
-        return len(entries)
+        return [admitted for _, admitted, _ in entries]
+
+    def _take(
+        self, limit: int, exclude: Container[int],
+    ) -> list[tuple[str, int, dict[str, Any]]]:
+        """Detach up to ``limit`` of the oldest pending charges across keys, oldest first."""
+        def eligible(state: _KeyState, index: int) -> int:
+            while index < len(state.admitted) and state.admitted[index] in exclude:
+                index += 1
+            return index
+
+        cursors: dict[str, int] = {}
+        heads: list[tuple[int, str]] = []
+        for key_id, state in self._states.items():
+            index = eligible(state, 0)
+            if index < len(state.pending):
+                cursors[key_id] = index
+                heads.append((state.admitted[index], key_id))
+        heapq.heapify(heads)
+        chosen: dict[str, list[int]] = {}
+        taken = 0
+        while heads and taken < limit:
+            _, key_id = heapq.heappop(heads)
+            state = self._states[key_id]
+            index = cursors[key_id]
+            chosen.setdefault(key_id, []).append(index)
+            taken += 1
+            cursors[key_id] = index = eligible(state, index + 1)
+            if index < len(state.pending):
+                heapq.heappush(heads, (state.admitted[index], key_id))
+
+        entries: list[tuple[str, int, dict[str, Any]]] = []
+        for key_id, indices in chosen.items():
+            state = self._states[key_id]
+            for index in indices:
+                entries.append((key_id, state.admitted[index], state.pending[index]))
+                state.in_flight += state.pending[index]["amount"]
+                state.queued -= state.pending[index]["amount"]
+            # Each key's share leaves its queue in one pass, not item by item.
+            if indices[-1] == len(indices) - 1:
+                del state.pending[:len(indices)]
+                del state.admitted[:len(indices)]
+            else:
+                drop = set(indices)
+                state.pending[:] = [p for i, p in enumerate(state.pending) if i not in drop]
+                state.admitted[:] = [a for i, a in enumerate(state.admitted) if i not in drop]
+        entries.sort(key=lambda entry: entry[1])
+        return entries
 
     def _settle_batch(
         self, entries: list[tuple[str, int, dict[str, Any]]], results: list[ConsumeResult],
@@ -554,7 +590,9 @@ class TokenGate:
         for owner, owned in by_owner.items():
             state = self._states.get(owner)
             if state is not None:
-                state.in_flight -= sum(item["amount"] for _, item in owned)
+                credits = sum(item["amount"] for _, item in owned)
+                state.in_flight -= credits
+                state.queued += credits
                 state.pending[:0] = [item for _, item in owned]
                 state.admitted[:0] = [admitted for admitted, _ in owned]
 

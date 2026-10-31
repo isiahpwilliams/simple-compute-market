@@ -591,6 +591,22 @@ steps"; D16's ordering, verification before charge).
       charge after a refused batch, a guessed secret behind a held key lock,
       a charge while closing, age order across keys, and a requeued key's
       age) each fail against the gate before the fix.
+      *Fix (review 13 follow-up):* an edge-case pass found two defects in
+      these fixes. The close drain counted batches sent, so retries of a
+      batch whose answer was lost could crowd out charges never offered; it
+      now offers each charge queued before closing exactly once, leaving a
+      lost batch queued rather than retrying it at close. Settling an answer
+      summed the whole queue, costing 213 ms under the gate's lock for one
+      256-item batch from a 50,000-item queue; each key now keeps its queued
+      credits as a running total and a batch leaves each key's queue in one
+      pass, 0.35 ms for the same batch. Evidence: `make test-api-gate` (72)
+      passes, with tests for a close after a lost batch and for per-key
+      order within a batch; the first fails against the gate before the
+      fix. A randomized check outside the suite — 300 runs of concurrent
+      charges, flushes and re-verifications across four keys against an
+      authority answering out of order — ended every run with each key's
+      estimate equal to the authority's balance and every admitted charge
+      debited once.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

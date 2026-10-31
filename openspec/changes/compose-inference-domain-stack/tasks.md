@@ -499,6 +499,28 @@ steps"; D16's ordering, verification before charge).
       hook, then `gate.charge`, with the gate's `scope_service` and
       `scope_resource_id` set from the offering; a hook refusal never reaches
       `charge`.
+      *Fix (implementation review 08 F1, F3, F13):* batched consumes now carry
+      scope, superseding 3.3's note that a batch item needs none:
+      `ConsumeBatchItem` gains optional `service` and `resource_id`, omitted
+      when unset (the API-credits OpenAPI baseline re-recorded in place,
+      additions only), the authority refuses an out-of-scope item uncharged as
+      `key_out_of_scope`, and the gate stamps its scope on every queued item and
+      denies a key 403 once a flush reports it out of scope. A `VerifiedKey`
+      now carries the fingerprint and ticket of the verification that issued
+      it: `charge` refuses when the cached verification is gone, no longer
+      valid (the denial `verify` would give), or for another secret, and takes
+      the synchronous consume when it has expired, so a key revoked while the
+      hook runs is never admitted optimistically. A late-verified request for
+      an older secret is now refused at charge (`test_gate.py`'s late-answer
+      test changed accordingly). F13 removed a trailing blank line. Evidence:
+      `make test-api`, `test-api-authority`, `test-api-gate` (unit, the
+      parity suite, the conformance replay) and `test-apicredits` (Python, the
+      TypeScript and Rust conformance) pass, with new unit tests for the batch
+      scope, the revocation race, expiry, and fingerprint mismatch, and an
+      authority integration test for per-item batch scope;
+      `make check-architecture` and `make check-comment-hygiene` pass. No
+      version changes: contracts 0.5.0, authority 0.2.0 and gate 0.2.0 are
+      unreleased.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

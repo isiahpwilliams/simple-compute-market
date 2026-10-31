@@ -62,8 +62,8 @@ class VerifyResult:
     request_charge: int | None = None
 
 
-def _scope(service: str | None, resource_id: str | None) -> dict[str, str]:
-    """The expected key scope a request carries; nothing, so the body is unchanged, when unset."""
+def scope_fields(service: str | None, resource_id: str | None) -> dict[str, str]:
+    """The expected key scope a request or batch item carries; nothing when unset."""
     scope = {}
     if service is not None:
         scope["service"] = service
@@ -160,7 +160,7 @@ class TokensClient:
         try:
             resp = await self._post(
                 VERIFY_PATH.format(key_id=key_id),
-                {"secret": secret, **_scope(service, resource_id)},
+                {"secret": secret, **scope_fields(service, resource_id)},
                 operation=VERIFY_OPERATION,
                 resource=key_id,
             )
@@ -195,7 +195,7 @@ class TokensClient:
         body: dict[str, Any] = {"amount": int(amount)}
         if idempotency_key is not None:
             body["idempotency_key"] = idempotency_key
-        body.update(_scope(service, resource_id))
+        body.update(scope_fields(service, resource_id))
         try:
             resp = await self._post(
                 CONSUME_PATH.format(key_id=key_id),
@@ -228,6 +228,7 @@ class TokensClient:
     async def consume_batch(
         self, items: list[dict[str, Any]],
     ) -> list[ConsumeResult]:
+        """Settle ``items`` as given; each carries its own key, amount, idempotency key, and scope."""
         try:
             resp = await self._post(
                 CONSUME_BATCH_PATH,

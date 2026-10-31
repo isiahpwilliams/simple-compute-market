@@ -101,6 +101,9 @@ def test_a_gate_facing_response_refuses_a_body_it_does_not_declare(model, body):
 def test_unset_scope_and_terms_are_omitted_from_the_bodies():
     assert models.VerifyRequest(secret="s").model_dump(mode="json") == {"secret": "s"}
     assert models.ConsumeRequest(amount=1).model_dump(mode="json") == {"amount": 1, "idempotency_key": None}
+    assert models.ConsumeBatchItem(key_id="k", amount=1).model_dump(mode="json") == {
+        "key_id": "k", "amount": 1, "idempotency_key": None,
+    }
     assert models.VerifyResponse(valid=True, status="active", balance=3).model_dump(mode="json") == {
         "valid": True, "status": "active", "balance": 3,
     }
@@ -110,6 +113,8 @@ def test_set_scope_and_terms_are_carried():
     scoped = {"service": "svc", "resource_id": "quota"}
     assert models.VerifyRequest(secret="s", **scoped).model_dump(mode="json") == {"secret": "s", **scoped}
     assert models.ConsumeRequest(amount=1, **scoped).model_dump(mode="json")["service"] == "svc"
+    batch = models.ConsumeBatchRequest(items=[models.ConsumeBatchItem(key_id="k", amount=1, **scoped)])
+    assert batch.model_dump(mode="json")["items"][0] == {"key_id": "k", "amount": 1, "idempotency_key": None, **scoped}
     pinned = {"accepted_terms": {"rate_card": {}}, "terms_digest": "sha256:" + "a" * 64, "request_charge": 1}
     response = models.VerifyResponse.model_validate({"valid": True, "status": "active", "balance": 3, **pinned})
     assert response.model_dump(mode="json") == {"valid": True, "status": "active", "balance": 3, **pinned}

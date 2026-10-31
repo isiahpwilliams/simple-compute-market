@@ -636,12 +636,15 @@ class KeysService:
             return {"ok": True, "consumed": int(amount), "balance": int(key.balance)}
 
     def consume_batch(self, items: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        """Apply a middleware flush; items are independent, order kept."""
+        """Apply a middleware flush; items are independent, order kept, and
+        each is scoped and refused exactly as a single ``consume``."""
         return [
             self.consume(
                 key_id=str(item["key_id"]),
                 amount=int(item["amount"]),
                 idempotency_key=item.get("idempotency_key"),
+                service=item.get("service"),
+                resource_id=item.get("resource_id"),
             )
             for item in items
         ]

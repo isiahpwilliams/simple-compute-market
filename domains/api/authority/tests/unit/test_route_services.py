@@ -147,4 +147,3 @@ def test_a_consumption_outside_the_keys_scope_is_a_403():
     assert _refusal(lambda: routes.consume("ak_1", amount=1, idempotency_key=None, service="svc")) == (
         403, {"error": "key_out_of_scope", "balance": 0},
     )
-

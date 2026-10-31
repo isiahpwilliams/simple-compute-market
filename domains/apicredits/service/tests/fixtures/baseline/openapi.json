@@ -155,6 +155,32 @@
             "minLength": 1,
             "title": "Key Id",
             "type": "string"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
           }
         },
         "required": [

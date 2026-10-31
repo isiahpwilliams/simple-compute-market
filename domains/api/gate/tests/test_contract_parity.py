@@ -144,8 +144,8 @@ async def test_requests_are_the_declared_bodies_and_responses_parse_from_the_dec
         "[consume-batch] request fields"
     )
     assert [set(item) for item in authority.sent["consume-batch"]["items"]] == [
-        set(models.ConsumeBatchItem.model_fields)
-    ] * len(batch.items), "[consume-batch] item fields"
+        set(models.ConsumeBatchItem.model_fields) - {"service", "resource_id"}
+    ] * len(batch.items), "[consume-batch] unscoped item fields"
 
     assert verified == client.VerifyResult(valid=True, status="active", balance=9)
     assert consumed == client.ConsumeResult(ok=True, balance=8, consumed=1, duplicate=True)
@@ -190,3 +190,34 @@ async def test_a_scoped_client_sends_its_scope_and_parses_a_pinned_keys_terms():
         assert model.model_validate(sent[name])
         assert (sent[name]["service"], sent[name]["resource_id"]) == ("svc", "quota"), f"[{name}] scope"
     assert (verified.accepted_terms, verified.terms_digest, verified.request_charge) == tuple(pinned.values())
+
+
+async def test_a_scoped_gate_sends_its_scope_on_every_batched_item():
+    sent: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/verify"):
+            return httpx.Response(200, json=models.VerifyResponse(valid=True, status="active", balance=9).model_dump())
+        sent.append(json.loads(request.content))
+        results = [models.ConsumeOutcome(ok=True, consumed=1, balance=8).model_dump()] * len(sent[-1]["items"])
+        return httpx.Response(200, json=models.ConsumeBatchResponse(results=results).model_dump())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        gate = TokenGate(
+            GateConfig(
+                service_url="http://authority",
+                authority_label="test-authority",
+                flush_interval_seconds=60.0,
+                low_balance_threshold=1,
+                scope_service="svc",
+                scope_resource_id="quota",
+            ),
+            client.TokensClient(service_url="http://authority", http=http),
+        )
+        for _ in range(2):
+            assert (await gate.authorize("Bearer ak_y.s")).allowed
+        await gate.flush()
+
+    (batch,) = sent
+    assert len(models.ConsumeBatchRequest.model_validate(batch).items) == 2
+    assert [(item["service"], item["resource_id"]) for item in batch["items"]] == [("svc", "quota")] * 2

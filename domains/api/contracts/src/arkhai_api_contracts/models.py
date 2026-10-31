@@ -84,8 +84,9 @@ def issuance_response_model(label: IssuanceLabel) -> type[IssuanceResponse]:
     )
 
 
-# A caller's expected key scope, sent with verify and consume; a request that
-# names neither is the unscoped request and is answered as one.
+# A caller's expected key scope, sent with verify, consume, and each batched
+# consume; a request that names neither is the unscoped request and is
+# answered as one.
 _SCOPE_FIELDS = ("service", "resource_id")
 
 
@@ -105,6 +106,13 @@ class ConsumeBatchItem(BaseModel):
     key_id: str = Field(min_length=1)
     amount: int = Field(ge=1)
     idempotency_key: str | None = None
+    service: str | None = Field(default=None, min_length=1, max_length=255)
+    resource_id: str | None = Field(default=None, min_length=1, max_length=255)
+
+    # Unannotated: a return annotation would replace the published serialisation schema.
+    @model_serializer(mode="wrap")
+    def _omit_unset_scope(self, handler: SerializerFunctionWrapHandler):
+        return omit_unset(handler(self), _SCOPE_FIELDS)
 
 
 class ConsumeBatchRequest(BaseModel):

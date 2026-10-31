@@ -644,6 +644,28 @@ def test_verify_and_consume_outside_the_keys_scope_refuse_uncharged(service, sco
     assert service.list_usage(key["key_id"]) == []
 
 
+def test_a_batched_consume_is_scoped_per_item(service):
+    key = _pinned_key(service)
+    inside = {"service": "test-service", "resource_id": "svc-quota"}
+
+    results = service.consume_batch(
+        [
+            {"key_id": key["key_id"], "amount": 1, "idempotency_key": "b1", "service": "other-service"},
+            {"key_id": key["key_id"], "amount": 1, "idempotency_key": "b2", **inside},
+            {"key_id": key["key_id"], "amount": 1, "idempotency_key": "b3", "resource_id": "other-quota"},
+            {"key_id": key["key_id"], "amount": 1, "idempotency_key": "b4"},
+        ]
+    )
+
+    assert results == [
+        {"ok": False, "reason": "key_out_of_scope", "balance": 0},
+        {"ok": True, "consumed": 1, "balance": 9},
+        {"ok": False, "reason": "key_out_of_scope", "balance": 0},
+        {"ok": True, "consumed": 1, "balance": 8},
+    ]
+    assert len(service.list_usage(key["key_id"])) == 2
+
+
 def test_verify_and_consume_inside_or_without_a_scope_admit_and_charge(service):
     key = _pinned_key(service)
     scope = {"service": "test-service", "resource_id": "svc-quota"}

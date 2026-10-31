@@ -88,11 +88,24 @@ class _KeyState:
     pending: list[dict[str, Any]] = field(default_factory=list)
     # Credits sent in a batch whose answer has not been processed.
     in_flight: int = 0
+    # The ticket of the authority call whose balance the estimate rests on.
+    balance_ticket: int = 0
     exhausted: bool = False
 
-    def settled_estimate(self, balance: int) -> int:
-        """An authority-reported balance less the charges it has not yet settled."""
-        return balance - self.in_flight - sum(item["amount"] for item in self.pending)
+    def settle_balance(self, balance: int, ticket: int) -> None:
+        """Rest the estimate on an authority-reported balance unless a later call's already does.
+
+        The balance less the charges still queued and in flight. An older
+        call's answer, processed late, leaves the estimate alone: it was
+        computed while that call's own charge was still counted outstanding.
+        Calls in one batch share a ticket and answer in the batch's order.
+        """
+        if ticket < self.balance_ticket:
+            return
+        self.balance_ticket = ticket
+        self.estimated_balance = (
+            balance - self.in_flight - sum(item["amount"] for item in self.pending)
+        )
 
 
 def _fingerprint(secret: str) -> bytes:
@@ -141,7 +154,8 @@ class TokenGate:
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
         # A flush called directly holds detached charges no queue shows, so
-        # ``aclose`` waits until no flush is in progress.
+        # ``aclose`` waits until no flush is in progress. Once closing, a
+        # direct flush takes nothing and ``aclose`` drains the queue itself.
         self._flushes = 0
         self._no_flush = asyncio.Event()
         self._no_flush.set()
@@ -158,7 +172,7 @@ class TokenGate:
             self._flush_task = asyncio.ensure_future(self._flush_loop())
 
     async def aclose(self) -> None:
-        """Stop the flush loop and drain any pending charges once more."""
+        """Stop the flush loop and offer every pending charge to the authority once more."""
         self._closing = True
         if self._flush_task is not None:
             self._flush_task.cancel()
@@ -167,8 +181,18 @@ class TokenGate:
             except asyncio.CancelledError:
                 pass
             self._flush_task = None
-        await self._no_flush.wait()
-        await self.flush()
+        # Re-checked on every wake: the event says only that the count was
+        # zero at some point.
+        while self._flushes:
+            await self._no_flush.wait()
+        async with self._lock:
+            queued = sum(len(state.pending) for state in self._states.values())
+        offered = 0
+        while offered < queued:
+            sent = await self._flush_once()
+            if not sent:
+                break
+            offered += sent
 
     # -- request path -------------------------------------------------
 
@@ -293,23 +317,22 @@ class TokenGate:
                 # an older answer for this secret must not be cached over it.
                 existing.verified_ticket = max(existing.verified_ticket, ticket)
                 return verify, ticket
-            estimated = verify.balance
             if existing is not None:
-                estimated = existing.settled_estimate(verify.balance)
+                existing.settle_balance(verify.balance, ticket)
                 existing.verify = verify
                 existing.verify_expires = now + self._cfg.verify_ttl_seconds
                 existing.secret_fingerprint = fingerprint
                 existing.verified_ticket = ticket
-                existing.estimated_balance = estimated
                 if verify.valid:
                     existing.exhausted = False
             else:
                 self._states[key_id] = _KeyState(
                     verify=verify,
                     verify_expires=now + self._cfg.verify_ttl_seconds,
-                    estimated_balance=estimated,
+                    estimated_balance=verify.balance,
                     secret_fingerprint=fingerprint,
                     verified_ticket=ticket,
+                    balance_ticket=ticket,
                 )
         return verify, ticket
 
@@ -352,6 +375,7 @@ class TokenGate:
                 return GateDecision(allowed=True, status=200, key_id=key_id)
 
         # Synchronous charge — outside the lock (network call).
+        ticket = next(self._tickets)
         result = await self._client.consume(
             key_id=key_id,
             amount=amount,
@@ -369,7 +393,7 @@ class TokenGate:
         async with self._lock:
             state = self._states.get(key_id)
             if state is not None:
-                state.estimated_balance = state.settled_estimate(result.balance)
+                state.settle_balance(result.balance, ticket)
         if result.ok:
             return GateDecision(allowed=True, status=200, key_id=key_id)
         if result.reason == KEY_REVOKED:
@@ -400,7 +424,9 @@ class TokenGate:
                 continue
 
     async def flush(self) -> None:
-        """Settle all accumulated batched charges with the authority."""
+        """Settle up to one batch of accumulated charges with the authority."""
+        if self._closing:
+            return
         self._flushes += 1
         self._no_flush.clear()
         try:
@@ -410,20 +436,25 @@ class TokenGate:
             if not self._flushes:
                 self._no_flush.set()
 
-    async def _flush_once(self) -> None:
+    async def _flush_once(self) -> int:
+        """Send one batch, oldest charges first; the number of items sent."""
+        limit = max(self._cfg.flush_max_batch, 1)
         async with self._lock:
+            ticket = next(self._tickets)
             items: list[dict[str, Any]] = []
             owners: list[str] = []
             for key_id, state in self._states.items():
-                for item in state.pending:
+                room = limit - len(items)
+                taken = state.pending[:room]
+                del state.pending[:room]
+                for item in taken:
                     items.append(dict(item))
                     owners.append(key_id)
                     state.in_flight += item["amount"]
-                state.pending.clear()
-                if len(items) >= self._cfg.flush_max_batch:
+                if len(items) >= limit:
                     break
         if not items:
-            return
+            return 0
         # The authority may have committed a batch whose answer never
         # arrived, so an unanswered item is requeued unchanged: its
         # idempotency key lets the next flush settle it without a second debit.
@@ -455,7 +486,7 @@ class TokenGate:
                     continue
                 state.in_flight -= item["amount"]
                 if result.ok:
-                    state.estimated_balance = state.settled_estimate(result.balance)
+                    state.settle_balance(result.balance, ticket)
                 elif result.reason == KEY_OUT_OF_SCOPE:
                     # The key is not this gateway's: deny it as verify would
                     # until a fresh verification answers for it.
@@ -464,12 +495,13 @@ class TokenGate:
                     )
                     state.verified_ticket = next(self._tickets)
                 else:
-                    state.estimated_balance = state.settled_estimate(result.balance)
+                    state.settle_balance(result.balance, ticket)
                     state.exhausted = True
             unanswered.extend(zip(owners[len(results):], items[len(results):]))
             self._requeue(unanswered)
         finally:
             self._lock.release()
+        return len(items)
 
     def _requeue(self, entries: Iterable[tuple[str, dict[str, Any]]]) -> None:
         """Put unsettled items back ahead of their owners' newer pending charges."""

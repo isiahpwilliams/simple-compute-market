@@ -558,6 +558,20 @@ steps"; D16's ordering, verification before charge).
       during a flush, a synchronous charge beside a queued one, a
       verification answered during a flush, and a close during a direct
       flush; each fails against the gate before the fix.
+      *Fix (implementation review 12 F1–F3):* every call to the authority
+      takes a ticket when it is sent, and a key's estimate rests only on an
+      answer at least as new as the one it rests on; an older answer
+      processed late still settles its charge, a refusal still exhausts the
+      key, but its balance is ignored, so the estimate can err low and never
+      high. Once closing, a direct flush takes nothing; `aclose` waits,
+      re-checking after every wake, until no flush is in progress, then
+      offers every queued charge in batches. A flush takes no more of one
+      key's queue than the batch has room for, leaving the rest queued.
+      Evidence: `make test-api-gate` (66) passes; the seven new tests (a
+      batch, a synchronous charge, and a verification each answered out of
+      order, a stale refusal, the per-key batch limit, a long queue on close,
+      and a flush started while closing) each fail against the gate before
+      the fix.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

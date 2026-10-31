@@ -38,7 +38,7 @@ PROBE_PATH = f"/api/v1/keys/{PREFLIGHT_PROBE_KEY_ID}"
 
 
 class Authority:
-    """Answers /health, and the key probe with a scripted status, signed unless told otherwise."""
+    """Answers the key probe with a scripted status, signed unless told otherwise."""
 
     def __init__(self, probe_status: int, *, signed: bool = True) -> None:
         self.probe_status = probe_status
@@ -46,8 +46,6 @@ class Authority:
         self.probes = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
         assert (request.method, request.url.path) == ("GET", PROBE_PATH)
         self.probes += 1
         payload = {"error": "unknown_key" if self.probe_status == 404 else "refused"}
@@ -83,7 +81,10 @@ class Authority:
 
 
 async def _preflight(authority: Authority) -> None:
-    transport = httpx.MockTransport(authority.handler)
+    await _preflight_over(httpx.MockTransport(authority.handler))
+
+
+async def _preflight_over(transport: httpx.AsyncBaseTransport) -> None:
     client = AuthorityClient(
         AUTHORITY_URL,
         label=INFERENCE_LABEL,
@@ -92,7 +93,7 @@ async def _preflight(authority: Authority) -> None:
         expected_authorities=TrustedIdentitySet(identities=(AUTHORITY_SIGNER.identity,)),
     )
     try:
-        await preflight_credits_service(client, transport=transport)
+        await preflight_credits_service(client)
     finally:
         await client.close()
 
@@ -123,3 +124,28 @@ async def test_an_unverifiable_answer_stops_startup_at_once(storefront):
         await _preflight(authority)
 
     assert authority.probes == 1
+
+
+async def test_an_authority_answering_but_never_accepting_the_probe_stops_startup(storefront):
+    authority = Authority(503)
+    # A signed answer is not an outage, so fail_on_unreachable does not excuse it.
+    with replaced(
+        credits={"service_url": AUTHORITY_URL, "fail_on_unreachable": False, "preflight_timeout": 1}
+    ):
+        with pytest.raises(RuntimeError, match="did not accept the signed probe"):
+            await _preflight(authority)
+
+    assert authority.probes >= 1
+
+
+async def test_only_a_transport_outage_is_excused_by_fail_on_unreachable(storefront):
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with replaced(
+        credits={"service_url": AUTHORITY_URL, "fail_on_unreachable": False, "preflight_timeout": 1}
+    ):
+        await _preflight_over(httpx.MockTransport(unreachable))
+    with replaced(credits={"service_url": AUTHORITY_URL, "preflight_timeout": 1}):
+        with pytest.raises(RuntimeError, match="unreachable"):
+            await _preflight_over(httpx.MockTransport(unreachable))

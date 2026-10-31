@@ -32,7 +32,8 @@ async def _probe_authentication(client: AuthorityClient, url: str) -> None:
     """Refuse at once when the authority rejects the signed call or its answer does not verify.
 
     A signed server error or a transport failure propagates to the retry loop;
-    an unsigned one, such as a proxy's, fails verification and refuses.
+    an unsigned answer, such as a proxy's error page, fails verification and
+    refuses.
     """
     try:
         await client.get_key(PREFLIGHT_PROBE_KEY_ID)
@@ -51,16 +52,13 @@ async def _probe_authentication(client: AuthorityClient, url: str) -> None:
         raise
 
 
-async def preflight_credits_service(
-    client: AuthorityClient | None = None,
-    *,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> None:
-    """Block startup until the inference authority responds and accepts this storefront, or give up.
+async def preflight_credits_service(client: AuthorityClient | None = None) -> None:
+    """Block startup until the inference authority accepts a signed probe, or give up.
 
-    An authentication refusal stops startup at once whatever
-    ``[credits].fail_on_unreachable`` says: retrying cannot change the answer,
-    and a storefront the authority refuses could never issue.
+    The signed probe is the whole check, so nothing unsigned can stand in for
+    it. Only a transport outage lasting the whole timeout may be excused by
+    ``[credits].fail_on_unreachable``; an authority that answered and never
+    accepted the probe always stops startup, and a refusal stops it at once.
     """
     url = config.credits_service_url()
     if not url:
@@ -68,23 +66,22 @@ async def preflight_credits_service(
             "[STARTUP] [credits].service_url is not configured — the "
             "storefront has nothing to sell for."
         )
-    health = url + "/health"
     timeout_s = max(int(settings.get("credits.preflight_timeout", 30)), 1)
     deadline = asyncio.get_event_loop().time() + timeout_s
     last_error: str | None = None
+    answered = False
 
     while True:
         try:
-            async with httpx.AsyncClient(timeout=5, transport=transport) as http:
-                resp = await http.get(health)
-            if resp.status_code == 200:
-                await _probe_authentication(client or get_credits_service_client(), url)
-                logger.info("[STARTUP] Inference authority reachable at %s", url)
-                return
-            last_error = f"HTTP {resp.status_code}"
+            await _probe_authentication(client or get_credits_service_client(), url)
+            logger.info("[STARTUP] Inference authority reachable at %s", url)
+            return
         except AuthorityAuthenticationRefused:
             raise
+        except httpx.TransportError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
         except Exception as exc:
+            answered = True
             last_error = f"{type(exc).__name__}: {exc}"
 
         remaining = deadline - asyncio.get_event_loop().time()
@@ -92,6 +89,11 @@ async def preflight_credits_service(
             break
         await asyncio.sleep(min(2.0, remaining))
 
+    if answered:
+        raise RuntimeError(
+            f"[STARTUP] Inference authority at {url} answered but did not accept "
+            f"the signed probe within {timeout_s}s ({last_error})."
+        )
     msg = (
         f"[STARTUP] Inference authority at {url} unreachable after {timeout_s}s "
         f"({last_error})."

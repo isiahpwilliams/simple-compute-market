@@ -28,11 +28,19 @@ def test_an_offering_names_a_service() -> None:
         _offering(service="")
 
 
-@pytest.mark.parametrize("scope", [{"scope_service": ""}, {"scope_resource_id": ""}])
-def test_an_offerings_scope_is_never_empty(scope: dict) -> None:
-    with pytest.raises(ValueError, match="scope"):
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"scope_service": ""},
+        {"scope_resource_id": ""},
+        {"scope_service": None},
+        {"scope_resource_id": None},
+    ],
+)
+def test_an_offering_scopes_both_service_and_resource_or_neither(scope: dict) -> None:
+    with pytest.raises(ValueError, match="both service and resource"):
         _offering(**scope)
-    assert _offering(scope_resource_id=None).scope_resource_id is None
+    assert _offering(scope_service=None, scope_resource_id=None).scope_service is None
 
 
 def test_an_offerings_default_charge_is_non_negative() -> None:

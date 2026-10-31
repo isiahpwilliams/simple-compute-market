@@ -323,7 +323,7 @@ async def test_two_domains_offerings_behave_alike_save_their_values(tmp_path: Pa
         tmp_path,
         service="forecast",
         scope_service="forecast",
-        scope_resource_id=None,
+        scope_resource_id="forecast-quota",
         default_charge=3,
         current_terms=None,
     )

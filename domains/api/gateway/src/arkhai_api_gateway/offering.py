@@ -35,10 +35,11 @@ class GatewayOffering:
             raise ValueError("a gateway offering names the service it admits")
         if self.default_charge < 0:
             raise ValueError("a gateway offering's default charge is non-negative")
-        # An unset scope is unscoped; an empty one would read as a scope that
-        # matches no grant.
-        if "" in (self.scope_service, self.scope_resource_id):
-            raise ValueError("a gateway offering's scope names a service and resource, or is unset")
+        # A half-set or empty scope passes here but no scoped authority could
+        # ever accept it.
+        scope = (self.scope_service, self.scope_resource_id)
+        if "" in scope or (scope[0] is None) != (scope[1] is None):
+            raise ValueError("a gateway offering scopes both service and resource, or neither")
         _check_upstream_base_url(self.upstream_base_url)
 
     def gate_config(self, base: GateConfig) -> GateConfig:

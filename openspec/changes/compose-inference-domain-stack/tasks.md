@@ -751,8 +751,9 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       gate's scope, fallback charge and purchase pointer cannot differ from the
       offering; `authority` injects a `TokensClient` for tests, else one is
       built from the configuration, and construction refuses a configuration
-      with no signing credential. An offering's scope may be unset (API
-      credits) but never empty.
+      with no signing credential. An offering scopes both service and resource
+      or neither (review 09 F4): a half-set or empty scope no scoped authority
+      could accept is refused at construction.
       `GatewayOffering` refuses an `upstream_base_url` that is not an absolute
       `http`/`https` URL with a host, or that carries userinfo, a query, or a
       fragment. Evidence: the gateway's unit and application-integration tests
@@ -1124,6 +1125,14 @@ cards are publishable without metered consumption").
       application-integration tests for each startup refusal, the preflight's
       signed 404, 401, 403 and unsigned answers, the single wallet identity,
       and the reprice.
+      *Fix (implementation review 09 F3):* the signed probe is now the whole
+      preflight; the unsigned `/health` call is gone, so an unhealthy or
+      impersonated health endpoint can no longer skip it.
+      `fail_on_unreachable` excuses only a transport outage lasting the whole
+      timeout; an authority that answered but never accepted the probe stops
+      startup. Evidence: the storefront suite passes (48), with tests that a
+      signed 503 until the timeout stops startup despite
+      `fail_on_unreachable = false` and that only a transport outage is excused.
 
 ## 6. Inference service root `arkhai-inference-service`
 

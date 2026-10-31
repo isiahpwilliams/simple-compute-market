@@ -57,6 +57,11 @@ class GateConfig:
     balance to within the threshold of zero stay synchronous so
     exhaustion still surfaces immediately.
 
+    A key the authority refused for insufficient credit is answered ``402``
+    by the gate itself for ``exhausted_recheck_seconds``; the next request
+    after that is charged at the authority, so a top-up is seen within the
+    window rather than after the verification expires.
+
     ``scope_service`` and ``scope_resource_id`` name the offering a key must
     have been issued for; the authority refuses any other key uncharged. Unset,
     the gate sends no scope and any key of the authority is admitted.
@@ -71,6 +76,7 @@ class GateConfig:
     max_response_skew: int = 300
     amount_per_request: int = 1
     verify_ttl_seconds: float = 30.0
+    exhausted_recheck_seconds: float = 5.0
     low_balance_threshold: int = 0
     flush_interval_seconds: float = 0.0
     flush_max_batch: int = 256
@@ -199,6 +205,7 @@ class GateConfig:
             max_response_skew=_int("MAX_RESPONSE_SKEW", 300),
             amount_per_request=_int("AMOUNT_PER_REQUEST", 1),
             verify_ttl_seconds=_float("VERIFY_TTL_SECONDS", 30.0),
+            exhausted_recheck_seconds=_float("EXHAUSTED_RECHECK_SECONDS", 5.0),
             low_balance_threshold=_int("LOW_BALANCE_THRESHOLD", 0),
             flush_interval_seconds=_float("FLUSH_INTERVAL_SECONDS", 0.0),
             flush_max_batch=_int("FLUSH_MAX_BATCH", 256),

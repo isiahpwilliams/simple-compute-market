@@ -52,6 +52,29 @@ charge without charging a request it then refuses.
 - **THEN** the key's balance is unchanged and the authority saw only the
   verification
 
+### Requirement: The gate settles an authority refusal by what it refused
+
+A refusal of the key itself — revoked, out of scope, or unknown — MUST deny
+the key from then on as its verification would, whether it came from a single
+charge or a batch, and MUST NOT be reported as exhausted credit. A refusal of
+the key's credit MUST be answered `402` by the gate itself only for a
+configured recheck window, after which the next request is charged at the
+authority, so a key topped up meanwhile is admitted without waiting for its
+verification to expire.
+
+#### Scenario: A batch reports the key revoked
+
+- **WHEN** a batch settles with the authority answering one of its items
+  `key_revoked`
+- **THEN** the key's next request is denied `403 key_revoked`, not `402`
+
+#### Scenario: A key exhausted and then topped up
+
+- **WHEN** the authority refuses a key for insufficient credit and the key is
+  topped up before its verification expires
+- **THEN** requests inside the recheck window are denied `402` without an
+  authority call, and the first request after it is charged and admitted
+
 ### Requirement: The public-result extension receives the delivery's settlement context
 
 The selling library MUST call a domain's public-result extension with the

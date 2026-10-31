@@ -42,6 +42,14 @@ from .client import (
 )
 from .config import GateConfig
 
+# An authority refusal of the key itself, by the verification status it is
+# denied as from then on; any other refusal is of the key's credit.
+_KEY_REFUSALS: dict[str, str | None] = {
+    KEY_REVOKED: "revoked",
+    KEY_OUT_OF_SCOPE: KEY_OUT_OF_SCOPE,
+    KEY_NOT_FOUND: None,
+}
+
 # Error codes in the gate's own deny bodies — clients dispatch on these.
 MISSING_API_KEY = "missing_api_key"
 INVALID_API_KEY = "invalid_api_key"
@@ -95,6 +103,8 @@ class _KeyState:
     # Credits detached for a batch whose answer has not been processed.
     in_flight: int = 0
     exhausted: bool = False
+    # When the authority last refused the key for insufficient credit.
+    exhausted_at: float = 0.0
 
     def settle_balance(self, balance: int) -> None:
         """Rest the estimate on a balance the authority reported for this key.
@@ -387,14 +397,19 @@ class TokenGate:
                 )
             if not state.verify.valid:
                 return self._verify_denial(state.verify, key_id)
-            if state.exhausted:
+            if (
+                state.exhausted
+                and self._clock() < state.exhausted_at + self._cfg.exhausted_recheck_seconds
+            ):
                 return self._deny(402, INSUFFICIENT_CREDITS, key_id)
             estimated_after = state.estimated_balance - amount
             # A verification that stopped vouching after the charge's own
-            # re-verification leaves the authority to decide the charge.
+            # re-verification leaves the authority to decide the charge, as
+            # does an exhaustion old enough that a top-up may have lifted it.
             go_sync = (
                 not batching
                 or self._closing
+                or state.exhausted
                 or not self._vouches(state, verified)
                 or estimated_after <= self._cfg.low_balance_threshold
             )
@@ -431,6 +446,10 @@ class TokenGate:
                         state.exhausted = False
         if result.ok:
             return GateDecision(allowed=True, status=200, key_id=key_id)
+        async with self._lock:
+            state = self._states.get(key_id)
+            if state is not None:
+                self._refuse(state, result.reason)
         if result.reason == KEY_REVOKED:
             return self._deny(403, KEY_REVOKED, key_id)
         if result.reason == KEY_OUT_OF_SCOPE:
@@ -440,10 +459,6 @@ class TokenGate:
                 allowed=False, status=401, key_id=key_id,
                 body={"error": INVALID_API_KEY},
             )
-        async with self._lock:
-            state = self._states.get(key_id)
-            if state is not None:
-                state.exhausted = True
         return self._deny(402, INSUFFICIENT_CREDITS, key_id)
 
     # -- batched flush ------------------------------------------------
@@ -569,16 +584,10 @@ class TokenGate:
             if result.ok:
                 state.settle_balance(result.balance)
                 state.exhausted = False
-            elif result.reason == KEY_OUT_OF_SCOPE:
-                # The key is not this gateway's: deny it as verify would
-                # until a fresh verification answers for it.
-                state.verify = VerifyResult(
-                    valid=False, status=KEY_OUT_OF_SCOPE, balance=0,
-                )
-                state.verified_ticket = next(self._tickets)
             else:
-                state.settle_balance(result.balance)
-                state.exhausted = True
+                if result.reason not in _KEY_REFUSALS:
+                    state.settle_balance(result.balance)
+                self._refuse(state, result.reason)
         unanswered.extend(entries[len(results):])
         self._requeue(unanswered)
 
@@ -597,6 +606,16 @@ class TokenGate:
                 state.admitted[:0] = [admitted for admitted, _ in owned]
 
     # -- helpers ------------------------------------------------------
+
+    def _refuse(self, state: _KeyState, reason: str | None) -> None:
+        """Record an authority refusal of the key itself, or else of its credit."""
+        if reason in _KEY_REFUSALS:
+            # Denied as verify would deny it until a fresh verification answers.
+            state.verify = VerifyResult(valid=False, status=_KEY_REFUSALS[reason], balance=0)
+            state.verified_ticket = next(self._tickets)
+        else:
+            state.exhausted = True
+            state.exhausted_at = self._clock()
 
     def _key_lock(self, key_id: str) -> asyncio.Lock:
         return self._key_locks.setdefault(key_id, asyncio.Lock())

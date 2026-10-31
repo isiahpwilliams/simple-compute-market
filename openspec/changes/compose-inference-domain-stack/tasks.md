@@ -607,6 +607,24 @@ steps"; D16's ordering, verification before charge).
       authority answering out of order — ended every run with each key's
       estimate equal to the authority's balance and every admitted charge
       debited once.
+      *Fix (implementation review 14 F1, F2):* a refusal of the key's
+      credit is answered `402` by the gate itself only for
+      `exhausted_recheck_seconds` (`EXHAUSTED_RECHECK_SECONDS`, default 5);
+      the next request after it is charged synchronously at the authority,
+      so a top-up — through the purchase pointer or landing while a refusal
+      was delayed — is seen within the window rather than after the
+      verification expires. The shared conformance step that an exhausted
+      key short-circuits holds inside the window; the API-credits Rust and
+      TypeScript gates still hold exhaustion until verification expires,
+      which no conformance step reaches. A refusal of the key itself —
+      `key_revoked`, `key_out_of_scope`, `key_not_found` — now denies the
+      key as its verification would from a batch as from a single charge,
+      never as exhausted credit. The api-family delta gains the requirement
+      "The gate settles an authority refusal by what it refused". Evidence:
+      `make test-api-gate` (77) passes, conformance session included; the
+      tests for a lapsed window, a lapsed window in batched mode, and a
+      batch answered `key_revoked` or `key_not_found` fail against the gate
+      before the fix.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

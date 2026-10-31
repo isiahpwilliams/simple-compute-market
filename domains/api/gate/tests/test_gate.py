@@ -1043,3 +1043,106 @@ async def test_a_batch_keeps_each_key_s_charges_in_order_and_the_rest_queued():
         state = gate._states[key_id]
         assert [item["idempotency_key"] for item in state.pending] == [left]
         assert (len(state.admitted), state.queued) == (1, 1)
+
+
+class AuthorityStateClient(FakeClient):
+    """An authority whose key can be refused for credit, revoked, or deleted between calls."""
+
+    def __init__(self, *, balance: int) -> None:
+        super().__init__(balance=balance)
+        self.refusal: str | None = None
+
+    async def verify(self, *, key_id: str, secret: str, service=None, resource_id=None) -> VerifyResult:
+        self.verify_calls += 1
+        if self.refusal == "key_revoked":
+            return VerifyResult(valid=False, status="revoked", balance=0)
+        if self.refusal == "key_not_found":
+            return VerifyResult(valid=False, status=None, balance=0)
+        return VerifyResult(valid=True, status="active", balance=self._balance)
+
+    def _answer(self, amount: int) -> ConsumeResult:
+        if self.refusal:
+            return ConsumeResult(ok=False, balance=0, reason=self.refusal)
+        self._balance -= amount
+        return ConsumeResult(ok=True, balance=self._balance, consumed=amount)
+
+    async def consume(self, *, key_id, amount, idempotency_key=None, service=None, resource_id=None) -> ConsumeResult:
+        self.consume_calls.append({"key_id": key_id, "amount": amount})
+        return self._answer(amount)
+
+    async def consume_batch(self, items) -> list[ConsumeResult]:
+        self.batch_calls.append(list(items))
+        return [self._answer(item["amount"]) for item in items]
+
+
+async def test_a_topped_up_key_is_charged_again_once_the_recheck_window_lapses():
+    now = [0.0]
+    client = AuthorityStateClient(balance=50)
+    gate = TokenGate(_cfg(exhausted_recheck_seconds=5.0), client, clock=lambda: now[0])
+    client.refusal = "insufficient_credits"
+    assert (await gate.authorize("Bearer ak_live.s")).status == 402
+
+    client.refusal = None
+    now[0] = 4.0
+    assert (await gate.authorize("Bearer ak_live.s")).status == 402
+    assert len(client.consume_calls) == 1
+    now[0] = 6.0
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    assert len(client.consume_calls) == 2
+    assert client.verify_calls == 1
+    assert gate._states["ak_live"].exhausted is False
+
+
+async def test_a_batched_key_is_charged_synchronously_once_its_exhaustion_lapses():
+    now = [0.0]
+    client = AuthorityStateClient(balance=50)
+    gate = TokenGate(
+        _cfg(flush_interval_seconds=60.0, exhausted_recheck_seconds=5.0), client,
+        clock=lambda: now[0],
+    )
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    client.refusal = "insufficient_credits"
+    await gate.flush()
+    assert (await gate.authorize("Bearer ak_live.s")).status == 402
+
+    client.refusal = None
+    now[0] = 6.0
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    assert len(client.consume_calls) == 1
+    assert gate._states["ak_live"].pending == []
+
+
+@pytest.mark.parametrize(
+    "reason, status, error",
+    [("key_revoked", 403, "key_revoked"), ("key_not_found", 401, "invalid_api_key")],
+)
+async def test_a_batch_refusing_the_key_itself_denies_it_as_verify_would(reason, status, error):
+    client = AuthorityStateClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    client.refusal = reason
+    await gate.flush()
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.status, decision.body["error"]) == (status, error)
+    assert gate._states["ak_live"].exhausted is False
+    assert client.consume_calls == []
+    assert len(client.batch_calls) == 1
+
+
+async def test_a_synchronous_revocation_is_not_followed_by_an_admitted_charge():
+    client = AuthorityStateClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0, low_balance_threshold=48), client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    client.refusal = "key_revoked"
+    # 49 - 1 reaches the threshold, so this charge is consumed synchronously.
+    assert (await gate.authorize("Bearer ak_live.s")).status == 403
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.status, decision.body["error"]) == (403, "key_revoked")
+    # Only the charge admitted before the revocation is queued.
+    assert len(gate._states["ak_live"].pending) == 1

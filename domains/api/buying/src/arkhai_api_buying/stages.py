@@ -234,7 +234,10 @@ class SettlementResume:
         unready_border: str,
     ) -> dict[str, Any]:
         """Keep any issued credential privately, record the terminal status, show both, and exit unless ready."""
-        delivery = record_delivery(log, final.get("tenant_credentials"), self.credential_store)
+        delivery = record_delivery(
+            log, final.get("tenant_credentials"), self.credential_store,
+            connection_details=final.get("connection_details"),
+        )
         delivery = end_run(
             log,
             delivery,
@@ -257,6 +260,7 @@ class SettlementResume:
             common.render_credentials(
                 self.console, delivery,
                 run_id=self.run_id, command_path=self.contributions.command_path,
+                service_label=self.contributions.rendering.summary_header,
             )
         if final.get("status") != "ready":
             raise typer.Exit(7)

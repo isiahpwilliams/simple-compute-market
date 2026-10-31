@@ -1,0 +1,72 @@
+[project]
+name = "arkhai-inference-storefront"
+version = "0.1.0"
+license = "MIT"
+description = "Seller-side storefront for the inference domain: quota-backed model-card listings, sync negotiation, Alkahest-settled issuance pinned to the accepted terms."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "arkhai-core>=0.4.0",
+    "arkhai-api>=0.2.0",
+    "arkhai-api-client>=0.1.0",
+    "arkhai-api-selling>=0.5.0",
+    "arkhai-api-selling-alkahest>=0.2.0",
+    "arkhai-inference-domain>=0.2.0",
+    "arkhai-core-storefront>=0.18.0",
+    "arkhai-kit-alkahest>=0.8.0",
+    "arkhai-kit-config>=0.4.0",
+    "arkhai-kit-identity==0.4.0",
+    "arkhai-kit-settlement-runtime>=0.4.0",
+    "arkhai-kit-storefront==0.8.0",
+    "arkhai-kit-negotiation-runtime==0.6.0",
+    "fastapi~=0.115.8",
+    # [all] carries typing-inspect, which fastapi_utils.cbv imports
+    # unconditionally under pydantic v2.
+    "fastapi-utils[all]>=0.8.0",
+    "uvicorn~=0.34.0",
+    "httpx>=0.27",
+    "typer>=0.12.0",
+    "dynaconf>=3.0.0",
+    "arkhai-core-storefront-client>=0.27.0",
+]
+
+[project.scripts]
+inference-storefront = "inference_storefront.cli:app"
+
+[project.entry-points."market.storefront_domains"]
+inference = "inference_storefront.domain_runtime:INFERENCE_STOREFRONT_DOMAIN"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4,<9.0.0",
+    "pytest-asyncio>=0.23.8,<1.0.0",
+    # The wheel-requirement and model-validation assertions. Test-only.
+    "packaging>=24",
+    "pydantic>=2",
+    # The startup preflight tests sign answers as the authority.
+    "arkhai-api-contracts>=0.5.0",
+]
+
+[tool.uv]
+# Internal wheels come from the repo's .dist/ via the CLI flag — see the
+# VM storefront's pyproject for why no find-links entry lives here.
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inference_storefront"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

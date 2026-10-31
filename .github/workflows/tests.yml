@@ -67,6 +67,7 @@ jobs:
           - { name: api-buying-alkahest,    dir: domains/api/buying-alkahest, predist: true }
           - { name: api-buying-arkhai-payments, dir: domains/api/buying-arkhai-payments, predist: true }
           - { name: api-gate,               dir: domains/api/gate, predist: true }
+          - { name: api-gateway,            dir: domains/api/gateway, predist: true }
           - { name: vms-domain,             dir: domains/vms/domain, predist: true }
           - { name: bare-metal,            dir: domains/bare_metal, predist: true }
           - { name: bare-metal-storefront, dir: domains/bare_metal/storefront, predist: true }
@@ -90,6 +91,9 @@ jobs:
           - { name: apicredits-service,      dir: domains/apicredits/service, predist: true }
           - { name: apicredits-sample-app,   dir: domains/apicredits/sample-app, predist: true }
           - { name: inference-domain,        dir: domains/inference, predist: true }
+          - { name: inference-service,       dir: domains/inference/service, predist: true }
+          - { name: inference-storefront,    dir: domains/inference/storefront, predist: true }
+          - { name: inference-buyer,         dir: domains/inference/buyer, predist: true }
     steps:
       - uses: actions/checkout@v4
       - name: Use the repository's declared Python version

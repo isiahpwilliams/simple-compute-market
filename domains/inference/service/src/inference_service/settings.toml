@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Inference service defaults for every supported key; no environment-specific values.
+#
+# Override via (highest priority first):
+#   1. INFERENCE_* environment variables
+#   2. config/config-<profile>.yml  (selected by ACTIVE_PROFILES)
+#   3. config/config.yml
+#   4. This file
+# ---------------------------------------------------------------------------
+
+# HTTP server
+host = "0.0.0.0"
+port = 8086
+log_level = "info"
+
+# Database
+# This service's own database, shared with no other service.
+database_url = "sqlite:///inference.db"
+
+# ---------------------------------------------------------------------------
+# Marketplace identity
+#
+# The service verifies signed requests and signs its responses, refusals
+# included. Signing is its only gate, so it refuses to start without a signing
+# credential and at least one trusted role.
+# ---------------------------------------------------------------------------
+site_signing_key_file = ""
+
+# The principal the credential must own; a wrong credential fails at startup.
+site_principal = ""
+
+# Seconds a request timestamp may differ from this service's clock.
+max_timestamp_skew = 300
+
+# Who may call, by role, as scheme/identifier pairs. A role with no entries
+# refuses its requests. `seller` is the storefront (eip191), `service` the
+# gateway spending request credits (ed25519), `admin` an operator. At most two
+# per role (`TrustedIdentitySet`), enough for a rotation.
+[trusted_principals]
+# Empty on purpose: dynaconf merges, so a principal listed here could not be
+# removed by a deployment's override.
+seller = []
+service = []
+admin = []

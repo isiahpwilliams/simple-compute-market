@@ -1,0 +1,103 @@
+# ---------------------------------------------------------------------------
+# Inference storefront base defaults.
+# This file documents every supported key and its default. Do NOT put
+# environment-specific values here.
+#
+# Override via (highest priority first):
+#   1. INFERENCE_STOREFRONT_* environment variables (separator __)
+#   2. $XDG_CONFIG_HOME/arkhai/storefront.secrets.toml  (Secret overlay)
+#   3. $XDG_CONFIG_HOME/arkhai/storefront.json          (a chart-rendered document)
+#   4. $XDG_CONFIG_HOME/arkhai/storefront.toml          (an operator's own file)
+#   5. This file
+# ---------------------------------------------------------------------------
+
+# Root-level keys must appear before the first table header.
+agent_id   = ""        # must be a Python identifier; empty → "root_agent"
+agent_name = ""        # display name; falls back to agent_id
+# HTTP server
+port     = 8006
+base_url = "http://localhost:8006"  # advertised in registry publications
+# Storage / logging
+db_path       = "./src/inference_storefront/data/storefront/agent.db"
+log_level     = "INFO"
+# Registry discovery (seller-side)
+enable_registry_discovery = true
+# Negotiation watchdog
+negotiation_timeout_seconds   = 1800
+negotiation_watchdog_interval = 60
+settlement_servicing_interval_seconds = 30
+
+# Public marketplace identity. The credential is supplied only through
+# ARKHAI_IDENTITY_CREDENTIAL and is never loaded into Dynaconf.
+[identity]
+scheme     = ""
+identifier = ""
+
+[identity.admin_principals]
+identities = []
+[Settlement]
+schema_version = 1
+# Alkahest is the only mechanism this storefront composes; a priority naming
+# any other refuses startup.
+priority = []
+
+[wallet]
+# Sensitive — populated by Secret overlay in k8s, by local file otherwise.
+address     = ""
+private_key = ""
+
+# [chains.<name>] tables, one per chain: rpc_url required; chain_id and
+# alkahest_address_config_path optional.
+
+[registry]
+urls              = []
+discovery_timeout = 5.0
+
+
+[registry.authorities]
+# Required URL tables with authority text and 1-2 principal identities.
+[registry.auth]
+# Free-form table of {url = "bearer-token"} pairs for private registries.
+
+[gateway]
+root_path = ""
+
+[credits]
+# The inference authority this storefront sells for. Every call is signed
+# with the marketplace identity and every answer verified against
+# [credits.expected_authorities]; startup refuses without both. Capacity trust
+# is configured independently below.
+service_url       = "http://localhost:8086"
+preflight_timeout = 30
+fail_on_unreachable = true
+
+[credits.expected_authorities]
+# 1-2 ordered principals of the inference authority.
+identities = []
+
+[capacity]
+# Configure one stable table per site under [capacity.sites.<site_id>] with:
+#   url = "https://site-authority.example"
+# and a nested [capacity.sites.<site_id>.expected_authorities] table carrying an
+# identities array of 1-2 ordered principals. No fallback trust is permitted.
+poll_interval    = 5
+placement        = "fill_first"
+seed_site        = ""
+hold_ttl_seconds = 0
+
+[capacity.sites]
+
+[fulfillment.failure_policy]
+# Actions applied when issuance fails: `release_capacity`, `emit_event`, or
+# `webhook` (POSTs to webhook_url). Issuance rollback is inline, not an action.
+actions         = ["release_capacity", "emit_event"]
+webhook_url     = ""
+webhook_timeout = 5.0
+
+[negotiation]
+# Ordered policies run per round; the family's guards are prepended
+# automatically. The terminal default is listed_price.
+policies = []
+
+[pricing]
+default_min_price = ""

@@ -193,7 +193,7 @@ dist-inference-domain: dist-api-contracts ## Build arkhai-inference-domain wheel
 dist-inference-service: dist-identity dist-ci-kits dist-inference-domain dist-api-authority dist-api-gate dist-api-client ## Build arkhai-inference-service wheel into .dist/
 	cd domains && $(MAKE) dist-inference-service DIST_DIR=$(DIST_DIR)
 
-dist-inference-storefront: dist-inference-domain dist-api-selling-alkahest dist-arkhai-core-storefront dist-registry-client dist-ci-kits dist-config ## Build arkhai-inference-storefront wheel into .dist/
+dist-inference-storefront: dist-inference-domain dist-api-selling-alkahest dist-arkhai-core-storefront dist-registry-client dist-storefront-client dist-ci-kits dist-config ## Build arkhai-inference-storefront wheel into .dist/
 	cd domains && $(MAKE) dist-inference-storefront DIST_DIR=$(DIST_DIR)
 
 dist-inference-buyer: dist-inference-domain dist-api-buying-alkahest dist-registry-client ## Build arkhai-inference-buyer wheel into .dist/

@@ -53,7 +53,6 @@ class ScriptedAuthority:
     def client(self) -> AuthorityClient:
         return AuthorityClient(
             "http://inference-authority.test",
-            "development-admin-key",
             label=INFERENCE_LABEL,
             transport=httpx.MockTransport(self.handler),
         )

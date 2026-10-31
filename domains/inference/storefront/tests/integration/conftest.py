@@ -33,7 +33,11 @@ from inference_storefront.utils import config as storefront_config
 SEED = b"\x22" * 32
 SELLER_SIGNER = Ed25519Signer(SEED)
 ADMIN_SIGNER = Ed25519Signer(b"\x44" * 32)
-SELLER_WALLET = "0x" + "33" * 20
+AUTHORITY_SIGNER = Ed25519Signer(b"\x66" * 32)
+AUTHORITY_URL = "http://inference-authority.test"
+# Anvil's well-known development account 0; never use it on a public network.
+SELLER_WALLET = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+SELLER_WALLET_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 SITE = "tokens"
 ESCROW = {
     "chain_name": "anvil",
@@ -147,6 +151,8 @@ def storefront(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path
     # The process's database client is created by the first startup; each test
     # starts from none and leaves none behind.
     monkeypatch.setattr(container, "_sqlite_client", None)
+    # No chain answers at the fake RPC; a test that settles supplies its own clients.
+    monkeypatch.setattr(server, "_build_alkahest_clients", lambda private_key: {})
     identity = SELLER_SIGNER.identity
     with replaced(
         identity={
@@ -154,7 +160,15 @@ def storefront(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path
             "identifier": identity.identifier,
             "admin_principals": {"identities": [ADMIN_SIGNER.identity.model_dump(mode="json")]},
         },
-        wallet={"address": SELLER_WALLET, "private_key": ""},
+        wallet={"address": SELLER_WALLET, "private_key": SELLER_WALLET_KEY},
+        credits={
+            "service_url": AUTHORITY_URL,
+            "preflight_timeout": 1,
+            "fail_on_unreachable": True,
+            "expected_authorities": {
+                "identities": [AUTHORITY_SIGNER.identity.model_dump(mode="json")]
+            },
+        },
         db_path=str(db_path),
         # A quota site the startup refusal can read; its runtime is the test's.
         capacity={

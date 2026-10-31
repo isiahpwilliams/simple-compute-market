@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from arkhai_api_gate import GateConfig, PurchasePointer
 
@@ -34,6 +35,11 @@ class GatewayOffering:
             raise ValueError("a gateway offering names the service it admits")
         if self.default_charge < 0:
             raise ValueError("a gateway offering's default charge is non-negative")
+        # An unset scope is unscoped; an empty one would read as a scope that
+        # matches no grant.
+        if "" in (self.scope_service, self.scope_resource_id):
+            raise ValueError("a gateway offering's scope names a service and resource, or is unset")
+        _check_upstream_base_url(self.upstream_base_url)
 
     def gate_config(self, base: GateConfig) -> GateConfig:
         """``base`` with this offering's scope, default charge, and purchase pointer.
@@ -48,6 +54,24 @@ class GatewayOffering:
             amount_per_request=self.default_charge,
             purchase=self.purchase,
         )
+
+
+def _check_upstream_base_url(url: str) -> None:
+    """Refuse a base URL every forward would fail on, before any buyer is charged.
+
+    Userinfo is refused because the upstream credential comes from its own file.
+    """
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 - raises on a malformed port
+    except ValueError as exc:
+        raise ValueError("the upstream base URL is malformed") from exc
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("the upstream base URL must be an absolute http or https URL")
+    if "@" in parts.netloc:
+        raise ValueError("the upstream base URL must not carry credentials")
+    if "?" in url or "#" in url:
+        raise ValueError("the upstream base URL must not carry a query or fragment")
 
 
 def read_upstream_credential(path: Path) -> str:

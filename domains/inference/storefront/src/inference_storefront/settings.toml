@@ -63,13 +63,17 @@ discovery_timeout = 5.0
 root_path = ""
 
 [credits]
-# The inference authority this storefront sells for. Capacity trust is
-# configured independently below.
+# The inference authority this storefront sells for. Every call is signed
+# with the marketplace identity and every answer verified against
+# [credits.expected_authorities]; startup refuses without both. Capacity trust
+# is configured independently below.
 service_url       = "http://localhost:8086"
-admin_key         = ""
-admin_key_file    = ""
 preflight_timeout = 30
 fail_on_unreachable = true
+
+[credits.expected_authorities]
+# 1-2 ordered principals of the inference authority.
+identities = []
 
 [capacity]
 # Configure one stable table per site under [capacity.sites.<site_id>] with:

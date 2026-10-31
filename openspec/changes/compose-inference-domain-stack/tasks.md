@@ -738,12 +738,26 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       relayed headers, the upstream close before the first chunk) or recorded
       above (the `uvicorn` placement, the hand-scripted authority, the unit test's
       level, the charge before a failed forward, the unchecked gate).
-      *Handoff:* the inference gateway executable (section 8) builds its gate as
-      `TokenGate(offering.gate_config(GateConfig.from_env(...)), TokensClient(...,
-      signing=config.build_signing()))` and serves `create_gateway_app(offering,
-      gate)` under uvicorn, which it declares. `offering.upstream_base_url` is the
+      *Handoff:* the inference gateway executable (section 8) serves
+      `create_gateway_app(offering, GateConfig.from_env(...))` under uvicorn,
+      which it declares; the app builds the gate from the offering (review 08
+      F4 fix below). `offering.upstream_base_url` is the
       model server's base ending `/v1`. `/v1/models` answers `{"object": "list",
       "data": [{"id": service, "object": "model"}]}`.
+
+      *Fix (implementation review 08 F4, F5):* `create_gateway_app(offering,
+      gate_config, *, authority=None, verification=admit_all, http=None)` now
+      builds its `TokenGate` from `offering.gate_config(gate_config)`, so the
+      gate's scope, fallback charge and purchase pointer cannot differ from the
+      offering; `authority` injects a `TokensClient` for tests, else one is
+      built from the configuration, and construction refuses a configuration
+      with no signing credential. An offering's scope may be unset (API
+      credits) but never empty.
+      `GatewayOffering` refuses an `upstream_base_url` that is not an absolute
+      `http`/`https` URL with a host, or that carries userinfo, a query, or a
+      fragment. Evidence: the gateway's unit and application-integration tests
+      pass (45), including one where the base configuration names another
+      scope, charge and pointer, and sixteen URL shapes.
 
 ## 5. Inference storefront `arkhai-inference-storefront`
 
@@ -1084,6 +1098,33 @@ cards are publishable without metered consumption").
       through the app. `storefront.inference.toml`'s identity, wallet, and
       authority pins are empty for section 10.
 
+      *Fix (implementation review 08 F2, F7, F9, F12):* the storefront no
+      longer has an admin-key path: its authority client always signs with
+      the identity signer and verifies against `credits.expected_authorities`,
+      startup refuses (under its own heading, with every other problem) when
+      either is missing, and the preflight, once `/health` answers, makes a
+      signed `get_key` probe for an unknown key, so a 401, a 403, or an answer
+      that fails verification stops startup at once whatever
+      `fail_on_unreachable` says; an unsigned 5xx from a proxy stops it too.
+      Startup also refuses an Alkahest wallet whose private key does not derive
+      its configured address, and the chain clients and the stage's
+      `seller_wallet` both use the one resolved identity.
+      `dist-inference-storefront` builds `arkhai-core-storefront-client`, which
+      the storefront declares; `arkhai-api-contracts` is declared in its dev
+      group for the preflight tests that sign as the authority. The reprice
+      scenario is now driven through the app
+      (`tests/integration/test_reprice_before_fulfillment.py`): publish, a
+      buyer negotiation accepted at the listed price, a reprice through the
+      seller's routes, then a signed settle and the admin's wait; it enters
+      below the app at the injected escrow verifier and chain client (there is
+      no chain at this level), and rewrites the accepted listing's stored row
+      to the new price so the acceptance record is what can pass it — a
+      variant reading the stored listing fails. This closes 5.12's open gap.
+      Evidence: `make test-inference-storefront` passes (46), with new
+      application-integration tests for each startup refusal, the preflight's
+      signed 404, 401, 403 and unsigned answers, the single wallet identity,
+      and the reprice.
+
 ## 6. Inference service root `arkhai-inference-service`
 
 Delivers the `arkhai:inference-service` image: the family authority composed
@@ -1249,6 +1290,19 @@ payment authority").
       the storefront seeds is registered with `resource_type="inference"`. The
       signed operation names are the family's (`credits_issue`,
       `credits_key_consume`, ...), unchanged under the inference label.
+      *Fix (implementation review 08 F1, inference half):* the inference
+      service refuses `verify` and `consume` naming no `service` or
+      `resource_id` with `422 scope_required`, and answers each unscoped
+      `consume-batch` item `scope_required` uncharged while applying the scoped
+      ones; the family authority keeps scope optional for API credits.
+      Evidence: `make test-inference-service` passes (19), with an application
+      integration test that an unscoped verify, consume and batch item cannot
+      reach a key while a scoped item in the same batch is charged. Open for
+      review: a gate answered `scope_required` falls to its out-of-credits
+      branch (402, the key marked exhausted), as a flush's `key_revoked`
+      already does; it is reachable only from an unscoped gateway in front of
+      the inference service, which section 8's executable does not build.
+
 ## 7. Inference buyer plugin `arkhai-inference-buyer`
 
 Delivers the `market inference` command group: the buying contributions,
@@ -1422,9 +1476,24 @@ carry verification seams for a later proof"; market-composition delta
       plugin. For section 11, the plugin is `market inference`, its schema id
       `inference`, its resource query over the inference registry's filters
       (a rate bound needs `rate_card_asset`), and a refused top-up surfaces as
-      a failed settlement whose reason is `key_out_of_scope`. Two items are
-      open for review: the served model name on a completed purchase (a
-      buying-library change) and 5.12's reprice scenario through the app.
+      a failed settlement whose reason is `key_out_of_scope`. The two items
+      this handoff left open, the served model name and 5.12's reprice
+      scenario, are closed by review 08's fixes.
+      *Fix (implementation review 08 F6):* a completed purchase now shows the
+      served model name. The buying library copies `service_name` from the
+      delivery's `connection_details` onto the delivered credential, records it
+      in the run log, and renders it under the domain's `summary_header`
+      ("Model" for inference, "Service" for API credits) in the credential
+      panel and `credentials show`; `--json` includes it only when present.
+      The tests drive the settle path (`test_settle.py`, the inference
+      `settle` command); `buy`'s delivery and `credentials show` are not
+      separately tested.
+      `arkhai-api-buying` 0.4.0, the inference buyer's floor raised, seven locks
+      refreshed. Evidence: `make test-api-buying` (70), `make
+      test-inference-buyer` (23, the completed-purchase test now asserting the
+      model row), `make test-apicredits` and `make check-packaging` pass. This
+      closes 7.4's open item.
+
 ## 8. Inference gateway executable `arkhai-inference-gateway-service`
 
 Delivers the `arkhai:inference-gateway` image: the root that reads and
@@ -1475,12 +1544,13 @@ proof").
       comparison is like for like (review 01 F1; review 02 F3; review 02 F2).
       Readiness refuses a listing that cannot be read or a card that is not
       request-priced, naming the cause.
-- [ ] 8.4 `src/inference_gateway_service/main.py`: builds the `TokenGate`
-      from the gate configuration with `scope_service` and `scope_resource_id`
-      from the offering and `amount_per_request` its default charge, signs
+- [ ] 8.4 `src/inference_gateway_service/main.py`: reads the gate
+      configuration, whose `scope_service`, `scope_resource_id` and
+      `amount_per_request` the gateway library takes from the offering, signs
       toward the authority as the `service` role with the gateway's own
-      credential (D14), composes `create_gateway_app(offering, gate,
-      verification=admit_all)` (D16), and serves it under uvicorn; `/health`
+      credential (D14), composes `create_gateway_app(offering, gate_config,
+      verification=admit_all)` (D16), which builds the `TokenGate` from the
+      offering, and serves it under uvicorn; `/health`
       reports the offering loaded.
 - [ ] 8.5 `domains/inference/gateway-service/Dockerfile`: the lock-driven
       two-stage pattern with every `FROM` in the form
@@ -1590,7 +1660,7 @@ stack's shape).
       `REGISTRY_AUTHORITY_*` identity and descriptor; deployment-state delta
       "a registry instance selecting the packaged `inference` filter
       specification by path"), `inference-service` (`arkhai:inference-service`,
-      its signing credential and admin key from `/run/secrets/arkhai/`),
+      its signing credential from `/run/secrets/arkhai/`; it has no admin key, D14),
       `model-stub` and the `vllm` profile's `model-server` (section 9),
       `inference-gateway` (`arkhai:inference-gateway`, `INFERENCE_GATEWAY_VERIFY_TTL_SECONDS=3`
       as the API-credits sample app sets, per review 01 F2; the storefront
@@ -1616,17 +1686,20 @@ stack's shape).
       README's rule (checking no derived identifier begins with `-`),
       `inference.identity.env` and `inference.wallet.env` on the lowest
       numbered Anvil development account the README's assignment tables show
-      no storefront using, `inference-admin-key`, and
+      no storefront using (no admin key: the storefront signs toward the
+      authority, review 08 F2), and
       `inference-buyer.config.toml` pinning the inference registry's
       principal; the public identifiers pinned where they are consumed —
       `domains/inference/compose.yml`, `storefront.inference.toml`'s registry
-      and site authority sections, and the buyer configuration (D10; the
+      site authority and `[credits.expected_authorities]` sections (the
+      storefront refuses to start without its authority trust set, review 08
+      F2), and the buyer configuration (D10; the
       README's "What this directory has to satisfy"; `AGENTS.md`, "Test
       fixtures and local development configuration": each env file states it
       is a development value never for a public network).
 - [ ] 10.4 Root `Makefile`: `e2e-inference-stack-env` printing
       `INFERENCE_REGISTRY_IDENTITY_CREDENTIAL_FILE`, `INFERENCE_IDENTITY_ENV_FILE`,
-      `INFERENCE_EVM_WALLET_ENV_FILE`, `INFERENCE_ADMIN_KEY_FILE`,
+      `INFERENCE_EVM_WALLET_ENV_FILE`,
       `INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE`,
       `INFERENCE_GATEWAY_IDENTITY_CREDENTIAL_FILE`, `INFERENCE_BUYER_CONFIG_PATH`,
       `INFERENCE_BUYER_CREDENTIAL_FILE`, `INFERENCE_BUYER_PROFILE_DIR`, and

@@ -13,18 +13,16 @@ _client: AuthorityClient | None = None
 def get_credits_service_client() -> AuthorityClient:
     """Return the process-wide client for the configured inference authority.
 
-    Signing is enabled only with a configured authority trust set: signing
-    requests without verifying responses would accept an unauthenticated
-    answer, and the client refuses that combination.
+    Every request is signed with the marketplace identity and every response
+    verified against the configured authority trust set; the authority accepts
+    nothing else. Startup refuses a storefront missing either.
     """
     global _client
     if _client is None:
-        authorities = config.credits_expected_authorities()
         _client = AuthorityClient(
             config.credits_service_url(),
-            config.credits_admin_key(),
             label=INFERENCE_LABEL,
-            signer=config.resolve_identity_signer() if authorities else None,
-            expected_authorities=authorities,
+            signer=config.resolve_identity_signer(),
+            expected_authorities=config.credits_expected_authorities(),
         )
     return _client

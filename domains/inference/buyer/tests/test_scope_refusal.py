@@ -129,12 +129,21 @@ def test_a_top_up_refused_out_of_scope_is_reported_once_and_not_retried(agreed_t
     assert calls == {"submit": 1, "wait": 1}
 
 
-def test_a_completed_purchase_shows_the_key_and_the_base_url(agreed_top_up, monkeypatch):
+def test_a_completed_purchase_shows_the_key_the_base_url_and_the_model_name(agreed_top_up, monkeypatch):
     credentials = {"key_id": "ik_existing", "base_url": "http://inference-gateway:8105/v1", "balance": 400}
-    _script_seller(monkeypatch, {"status": "ready", "fulfillment_uid": "f-1", "tenant_credentials": credentials})
+    connection = json.dumps({
+        "kind": "inference.v1", "service_name": "llama-3.1-8b", "base_url": credentials["base_url"],
+        "key_id": "ik_existing", "quantity": 100,
+    })
+    _script_seller(monkeypatch, {
+        "status": "ready", "fulfillment_uid": "f-1",
+        "connection_details": connection, "tenant_credentials": credentials,
+    })
 
     result = CliRunner().invoke(app, ["inference", "settle", "--from", agreed_top_up])
 
     assert result.exit_code == 0, (result.output, result.exception)
-    assert "ik_existing" in result.output
-    assert "http://inference-gateway:8105/v1" in result.output
+    rows = [line.strip("│ ").split() for line in result.output.splitlines()]
+    assert ["Key", "ID", "ik_existing"] in rows
+    assert ["Base", "URL", "http://inference-gateway:8105/v1"] in rows
+    assert ["Model", "llama-3.1-8b"] in rows

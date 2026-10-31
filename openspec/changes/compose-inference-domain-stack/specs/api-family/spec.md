@@ -117,10 +117,12 @@ The authority MUST bind a key to the service, resource, and accepted terms
 digest of the grant that created it and MUST refuse an existing-key issuance
 whose service, resource, or terms differ, naming the refusal, so a key's one
 balance is only ever spent on what every one of its grants bought, at the
-charge each was bought at. `verify` and `consume` MAY carry the caller's
-expected service and resource; when present, the authority MUST refuse a key
-whose first grant's scope differs, uncharged, with a named status, and when
-absent it MUST behave as before the fields existed.
+charge each was bought at. `verify`, `consume`, and each batched consume item
+MAY carry the caller's expected service and resource; when present, the
+authority MUST refuse a key whose first grant's scope differs, uncharged, with
+a named status, and when absent it MUST behave as before the fields existed. A
+gate with a configured scope MUST send it on every one of these calls, and
+MUST NOT admit a charge on a verification the authority has since refused.
 
 #### Scenario: A key is topped up from another listing
 
@@ -136,3 +138,17 @@ absent it MUST behave as before the fields existed.
 - **THEN** the authority refuses the verification by scope, the gateway
   answers `403`, the model server receives nothing, and the key's balance is
   unchanged
+
+### Requirement: A delivered credential names the service it was bought for
+
+The buying library MUST show a delivered credential's service name, taken from
+the delivery's connection details, beside its key and base URL under the
+domain's own label, and MUST record it with the credential's other non-secret
+fields.
+
+#### Scenario: A purchase delivers a key
+
+- **WHEN** a settlement delivers a key whose connection details name its
+  service
+- **THEN** the buyer is shown the key, the base URL, and the service name under
+  the domain's label, and the run log records the name but not the secret

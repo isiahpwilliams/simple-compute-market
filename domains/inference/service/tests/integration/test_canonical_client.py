@@ -207,3 +207,20 @@ async def test_a_bearer_secret_is_not_a_marketplace_signature(app):
     assert (refused.status_code, listed.status_code) == (401, 401)
     verified = await _gateway(app).verify(key_id=issued.key_id, secret=issued.secret, **SCOPE)
     assert verified.balance == 10
+
+
+async def test_a_caller_naming_no_scope_can_neither_verify_nor_charge_a_key(app):
+    issued = await _storefront(app).submit_issuance(_request("neg-unscoped-1", 100))
+    gateway = _gateway(app)
+
+    verified = await gateway.verify(key_id=issued.key_id, secret=issued.secret)
+    assert (verified.valid, verified.balance) == (False, 0)
+    consumed = await gateway.consume(key_id=issued.key_id, amount=3)
+    assert (consumed.ok, consumed.reason) == (False, "scope_required")
+    batched = await gateway.consume_batch([
+        {"key_id": issued.key_id, "amount": 3},
+        {"key_id": issued.key_id, "amount": 5, **SCOPE},
+    ])
+    assert [(r.ok, r.reason) for r in batched] == [(False, "scope_required"), (True, None)]
+
+    assert (await gateway.verify(key_id=issued.key_id, secret=issued.secret, **SCOPE)).balance == 95

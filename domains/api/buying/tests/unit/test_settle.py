@@ -79,6 +79,44 @@ def test_a_ready_settlement_stores_its_secret_and_records_its_reference():
     ]
 
 
+@pytest.mark.parametrize(
+    "connection_details",
+    ['{"kind": "example.v1", "service_name": "alpha-1", "key_id": "k1"}', {"service_name": "alpha-1"}],
+    ids=["seller JSON", "decoded mapping"],
+)
+def test_a_ready_settlement_shows_records_and_keeps_the_served_name(connection_details):
+    log = Log()
+    store = Store()
+    resume = _resume(store)
+    final = {
+        "status": "ready",
+        "connection_details": connection_details,
+        "tenant_credentials": {"key_id": "k1", "secret": "s1", "base_url": "http://svc"},
+    }
+
+    resume.finish(log, final, reference=("Ref", "r1"), end_fields={}, unready_border="red")
+
+    assert any(line.split() == ["Product", "alpha-1"] for line in _panel_rows(resume))
+    assert store.saved["run-1"]["service_name"] == "alpha-1"
+    assert log.events[0] == (
+        "credentials_delivered",
+        {"key_id": "k1", "base_url": "http://svc", "service_name": "alpha-1", "delivery_ref": "memory:run-1"},
+    )
+
+
+def test_a_delivery_without_a_served_name_shows_no_service_row():
+    resume = _resume()
+    final = {"status": "ready", "connection_details": "not json", "tenant_credentials": {"key_id": "k1", "secret": "s1"}}
+
+    resume.finish(Log(), final, reference=("Ref", "r1"), end_fields={}, unready_border="red")
+
+    assert not any(line.split()[:1] == ["Product"] for line in _panel_rows(resume))
+
+
+def _panel_rows(resume: SettlementResume) -> list[str]:
+    return [line.strip("│ ") for line in resume.console.file.getvalue().splitlines()]
+
+
 def test_an_unready_settlement_ends_its_run_and_exits():
     log = Log()
     with pytest.raises(typer.Exit) as exited:

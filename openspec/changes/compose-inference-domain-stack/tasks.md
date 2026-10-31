@@ -572,6 +572,25 @@ steps"; D16's ordering, verification before charge).
       order, a stale refusal, the per-key batch limit, a long queue on close,
       and a flush started while closing) each fail against the gate before
       the fix.
+      *Fix (implementation review 13 F1–F4):* send-order tickets could not
+      tell which balance is newer when the authority applies calls in another
+      order, so each key's balance-reporting calls — a synchronous consume,
+      a re-verification of the held secret, and every batch carrying the key
+      — are now serialized under a per-key lock, and an answer's balance less
+      the charges still queued or detached is the estimate; the balance
+      tickets are gone. A secret other than the held one is verified without
+      that lock and never moves the estimate, so guessed secrets cannot delay
+      the holder's calls. A successful charge lifts the key's exhaustion.
+      Once closing, every charge is consumed synchronously, so nothing
+      admitted during the drain is left queued. A batch takes the oldest
+      charges across all keys by admission order, and a requeued charge
+      keeps its age. The review 11 and 12 out-of-order tests are replaced by
+      tests that a second call for a key waits for the first. Evidence:
+      `make test-api-gate` (70) passes; the nine new tests (two flushes, two
+      synchronous charges, a charge and a re-verification behind a batch, a
+      charge after a refused batch, a guessed secret behind a held key lock,
+      a charge while closing, age order across keys, and a requeued key's
+      age) each fail against the gate before the fix.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

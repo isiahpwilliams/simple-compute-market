@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import heapq
 import hmac
 import itertools
 import time
@@ -34,6 +35,7 @@ from .client import (
     KEY_OUT_OF_SCOPE,
     KEY_REVOKED,
     UNAUTHENTICATED_SERVICE,
+    ConsumeResult,
     TokensClient,
     VerifyResult,
     scope_fields,
@@ -86,23 +88,19 @@ class _KeyState:
     secret_fingerprint: bytes
     verified_ticket: int
     pending: list[dict[str, Any]] = field(default_factory=list)
-    # Credits sent in a batch whose answer has not been processed.
+    # The admission order of each pending item, in step with ``pending``.
+    admitted: list[int] = field(default_factory=list)
+    # Credits detached for a batch whose answer has not been processed.
     in_flight: int = 0
-    # The ticket of the authority call whose balance the estimate rests on.
-    balance_ticket: int = 0
     exhausted: bool = False
 
-    def settle_balance(self, balance: int, ticket: int) -> None:
-        """Rest the estimate on an authority-reported balance unless a later call's already does.
+    def settle_balance(self, balance: int) -> None:
+        """Rest the estimate on a balance the authority reported for this key.
 
-        The balance less the charges still queued and in flight. An older
-        call's answer, processed late, leaves the estimate alone: it was
-        computed while that call's own charge was still counted outstanding.
-        Calls in one batch share a ticket and answer in the batch's order.
+        The key's authority calls are serialized, so the balance covers every
+        earlier one; it lacks only the charges still queued or detached for a
+        batch not yet answered.
         """
-        if ticket < self.balance_ticket:
-            return
-        self.balance_ticket = ticket
         self.estimated_balance = (
             balance - self.in_flight - sum(item["amount"] for item in self.pending)
         )
@@ -151,11 +149,17 @@ class TokenGate:
         self._tickets = itertools.count(1)
         self._states: dict[str, _KeyState] = {}
         self._lock = asyncio.Lock()
+        # Held across each call to the authority whose answer reports the
+        # key's balance, so answers arrive in the order the authority applied
+        # them. Taken before ``_lock``, never while holding it.
+        self._key_locks: dict[str, asyncio.Lock] = {}
+        self._admissions = itertools.count()
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
         # A flush called directly holds detached charges no queue shows, so
         # ``aclose`` waits until no flush is in progress. Once closing, a
-        # direct flush takes nothing and ``aclose`` drains the queue itself.
+        # charge is consumed synchronously, a direct flush takes nothing, and
+        # ``aclose`` drains the queue itself.
         self._flushes = 0
         self._no_flush = asyncio.Event()
         self._no_flush.set()
@@ -281,19 +285,43 @@ class TokenGate:
         """The verification answering for ``secret`` and the ticket it was issued under."""
         # The key id is public, read off any bearer header, so a cached
         # verification answers only for the exact secret that earned it.
-        now = self._clock()
-        ticket = next(self._tickets)
         fingerprint = _fingerprint(secret)
         async with self._lock:
+            cached = self._cached(key_id, fingerprint)
+            if cached is not None:
+                return cached
             state = self._states.get(key_id)
-            if (
-                state is not None
-                and state.verify_expires > now
-                and state.verify.valid
-                and hmac.compare_digest(state.secret_fingerprint, fingerprint)
-            ):
-                return state.verify, state.verified_ticket
+            held = state is not None and hmac.compare_digest(
+                state.secret_fingerprint, fingerprint,
+            )
+        if not held:
+            # Only the held secret's answer may move the estimate, so any
+            # other secret is verified without queueing behind the key's
+            # calls: a flood of guessed secrets cannot delay the holder's.
+            return await self._verify_and_record(key_id, secret, fingerprint, balance=False)
+        async with self._key_lock(key_id):
+            async with self._lock:
+                cached = self._cached(key_id, fingerprint)
+            if cached is not None:
+                return cached
+            return await self._verify_and_record(key_id, secret, fingerprint, balance=True)
 
+    def _cached(self, key_id: str, fingerprint: bytes) -> tuple[VerifyResult, int] | None:
+        state = self._states.get(key_id)
+        if (
+            state is not None
+            and state.verify_expires > self._clock()
+            and state.verify.valid
+            and hmac.compare_digest(state.secret_fingerprint, fingerprint)
+        ):
+            return state.verify, state.verified_ticket
+        return None
+
+    async def _verify_and_record(
+        self, key_id: str, secret: str, fingerprint: bytes, *, balance: bool,
+    ) -> tuple[VerifyResult, int]:
+        now = self._clock()
+        ticket = next(self._tickets)
         verify = await self._client.verify(
             key_id=key_id,
             secret=secret,
@@ -318,7 +346,8 @@ class TokenGate:
                 existing.verified_ticket = max(existing.verified_ticket, ticket)
                 return verify, ticket
             if existing is not None:
-                existing.settle_balance(verify.balance, ticket)
+                if balance:
+                    existing.settle_balance(verify.balance)
                 existing.verify = verify
                 existing.verify_expires = now + self._cfg.verify_ttl_seconds
                 existing.secret_fingerprint = fingerprint
@@ -332,7 +361,6 @@ class TokenGate:
                     estimated_balance=verify.balance,
                     secret_fingerprint=fingerprint,
                     verified_ticket=ticket,
-                    balance_ticket=ticket,
                 )
         return verify, ticket
 
@@ -364,6 +392,7 @@ class TokenGate:
             # re-verification leaves the authority to decide the charge.
             go_sync = (
                 not batching
+                or self._closing
                 or not self._vouches(state, verified)
                 or estimated_after <= self._cfg.low_balance_threshold
             )
@@ -371,29 +400,32 @@ class TokenGate:
                 # Optimistic batched charge: let the request through now,
                 # settle it with the authority on the next flush.
                 state.pending.append(self._batch_item(key_id, amount, idem))
+                state.admitted.append(next(self._admissions))
                 state.estimated_balance = estimated_after
                 return GateDecision(allowed=True, status=200, key_id=key_id)
 
         # Synchronous charge — outside the lock (network call).
-        ticket = next(self._tickets)
-        result = await self._client.consume(
-            key_id=key_id,
-            amount=amount,
-            idempotency_key=idem,
-            service=self._cfg.scope_service,
-            resource_id=self._cfg.scope_resource_id,
-        )
-        if result.reason == UNAUTHENTICATED_SERVICE:
-            # Nothing is known about the key, so neither its balance nor its
-            # credit is touched, and the buyer is not told to buy more.
-            return GateDecision(
-                allowed=False, status=502, key_id=key_id,
-                body={"error": UNAUTHENTICATED_SERVICE},
+        async with self._key_lock(key_id):
+            result = await self._client.consume(
+                key_id=key_id,
+                amount=amount,
+                idempotency_key=idem,
+                service=self._cfg.scope_service,
+                resource_id=self._cfg.scope_resource_id,
             )
-        async with self._lock:
-            state = self._states.get(key_id)
-            if state is not None:
-                state.settle_balance(result.balance, ticket)
+            if result.reason == UNAUTHENTICATED_SERVICE:
+                # Nothing is known about the key, so neither its balance nor
+                # its credit is touched, and the buyer is not told to buy more.
+                return GateDecision(
+                    allowed=False, status=502, key_id=key_id,
+                    body={"error": UNAUTHENTICATED_SERVICE},
+                )
+            async with self._lock:
+                state = self._states.get(key_id)
+                if state is not None:
+                    state.settle_balance(result.balance)
+                    if result.ok:
+                        state.exhausted = False
         if result.ok:
             return GateDecision(allowed=True, status=200, key_id=key_id)
         if result.reason == KEY_REVOKED:
@@ -437,84 +469,99 @@ class TokenGate:
                 self._no_flush.set()
 
     async def _flush_once(self) -> int:
-        """Send one batch, oldest charges first; the number of items sent."""
+        """Send one batch, oldest charges first across keys; the number of items sent."""
         limit = max(self._cfg.flush_max_batch, 1)
+        entries: list[tuple[str, int, dict[str, Any]]] = []
         async with self._lock:
-            ticket = next(self._tickets)
-            items: list[dict[str, Any]] = []
-            owners: list[str] = []
-            for key_id, state in self._states.items():
-                room = limit - len(items)
-                taken = state.pending[:room]
-                del state.pending[:room]
-                for item in taken:
-                    items.append(dict(item))
-                    owners.append(key_id)
-                    state.in_flight += item["amount"]
-                if len(items) >= limit:
-                    break
-        if not items:
+            heads = [
+                (state.admitted[0], key_id)
+                for key_id, state in self._states.items() if state.pending
+            ]
+            heapq.heapify(heads)
+            while heads and len(entries) < limit:
+                _, key_id = heapq.heappop(heads)
+                state = self._states[key_id]
+                item, admitted = state.pending.pop(0), state.admitted.pop(0)
+                entries.append((key_id, admitted, item))
+                state.in_flight += item["amount"]
+                if state.pending:
+                    heapq.heappush(heads, (state.admitted[0], key_id))
+        if not entries:
             return 0
+        items = [dict(item) for _, _, item in entries]
         # The authority may have committed a batch whose answer never
         # arrived, so an unanswered item is requeued unchanged: its
         # idempotency key lets the next flush settle it without a second debit.
         # Cancellation counts: ``aclose`` cancels a flush in flight and then
-        # flushes again.
+        # flushes again. Requeueing never awaits, so it needs no lock.
+        held: list[asyncio.Lock] = []
         try:
-            results = await self._client.consume_batch(items)
-        except BaseException:
-            async with self._lock:
-                self._requeue(zip(owners, items))
-            raise
-        unanswered: list[tuple[str, dict[str, Any]]] = []
-        # No lock-held block awaits, so processing below runs whole or not at
-        # all; a cancellation while waiting for the lock leaves every item
-        # unsettled, and requeueing without the lock is equally atomic.
-        try:
-            await self._lock.acquire()
-        except BaseException:
-            self._requeue(zip(owners, items))
-            raise
-        try:
-            for owner, item, result in zip(owners, items, results):
-                state = self._states.get(owner)
-                if state is None:
-                    continue
-                if result.reason in (BATCH_UNAVAILABLE, UNAUTHENTICATED_SERVICE):
-                    # Whether the authority applied it is unknown.
-                    unanswered.append((owner, item))
-                    continue
-                state.in_flight -= item["amount"]
-                if result.ok:
-                    state.settle_balance(result.balance, ticket)
-                elif result.reason == KEY_OUT_OF_SCOPE:
-                    # The key is not this gateway's: deny it as verify would
-                    # until a fresh verification answers for it.
-                    state.verify = VerifyResult(
-                        valid=False, status=KEY_OUT_OF_SCOPE, balance=0,
-                    )
-                    state.verified_ticket = next(self._tickets)
-                else:
-                    state.settle_balance(result.balance, ticket)
-                    state.exhausted = True
-            unanswered.extend(zip(owners[len(results):], items[len(results):]))
-            self._requeue(unanswered)
+            try:
+                # Sorted, so two flushes sharing keys cannot deadlock.
+                for owner in sorted({owner for owner, _, _ in entries}):
+                    lock = self._key_lock(owner)
+                    await lock.acquire()
+                    held.append(lock)
+                results = await self._client.consume_batch(items)
+                await self._lock.acquire()
+            except BaseException:
+                self._requeue(entries)
+                raise
+            try:
+                self._settle_batch(entries, results)
+            finally:
+                self._lock.release()
         finally:
-            self._lock.release()
-        return len(items)
+            for lock in held:
+                lock.release()
+        return len(entries)
 
-    def _requeue(self, entries: Iterable[tuple[str, dict[str, Any]]]) -> None:
+    def _settle_batch(
+        self, entries: list[tuple[str, int, dict[str, Any]]], results: list[ConsumeResult],
+    ) -> None:
+        unanswered: list[tuple[str, int, dict[str, Any]]] = []
+        for entry, result in zip(entries, results):
+            owner, _, item = entry
+            state = self._states.get(owner)
+            if state is None:
+                continue
+            if result.reason in (BATCH_UNAVAILABLE, UNAUTHENTICATED_SERVICE):
+                # Whether the authority applied it is unknown.
+                unanswered.append(entry)
+                continue
+            state.in_flight -= item["amount"]
+            if result.ok:
+                state.settle_balance(result.balance)
+                state.exhausted = False
+            elif result.reason == KEY_OUT_OF_SCOPE:
+                # The key is not this gateway's: deny it as verify would
+                # until a fresh verification answers for it.
+                state.verify = VerifyResult(
+                    valid=False, status=KEY_OUT_OF_SCOPE, balance=0,
+                )
+                state.verified_ticket = next(self._tickets)
+            else:
+                state.settle_balance(result.balance)
+                state.exhausted = True
+        unanswered.extend(entries[len(results):])
+        self._requeue(unanswered)
+
+    def _requeue(self, entries: Iterable[tuple[str, int, dict[str, Any]]]) -> None:
         """Put unsettled items back ahead of their owners' newer pending charges."""
-        by_owner: dict[str, list[dict[str, Any]]] = {}
-        for owner, item in entries:
-            by_owner.setdefault(owner, []).append(item)
+        by_owner: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+        for owner, admitted, item in entries:
+            by_owner.setdefault(owner, []).append((admitted, item))
         for owner, owned in by_owner.items():
             state = self._states.get(owner)
             if state is not None:
-                state.in_flight -= sum(item["amount"] for item in owned)
-                state.pending[:0] = owned
+                state.in_flight -= sum(item["amount"] for _, item in owned)
+                state.pending[:0] = [item for _, item in owned]
+                state.admitted[:0] = [admitted for admitted, _ in owned]
 
     # -- helpers ------------------------------------------------------
+
+    def _key_lock(self, key_id: str) -> asyncio.Lock:
+        return self._key_locks.setdefault(key_id, asyncio.Lock())
 
     def _batch_item(self, key_id: str, amount: int, idempotency_key: str) -> dict[str, Any]:
         return {

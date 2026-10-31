@@ -619,3 +619,47 @@ async def test_closing_during_a_flush_in_flight_resends_its_items_unchanged():
     first, second = _sent_batches(client)
     assert first == second
     assert gate._states["ak_live"].pending == []
+
+
+async def test_a_flush_cancelled_before_it_processes_its_answer_requeues_every_item():
+    client = ScriptedClient(PINNED)
+    gate = _pending_gate(client)
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    answered = asyncio.Event()
+
+    async def unavailable(items):
+        client.calls.append(("consume_batch", {"items": [dict(item) for item in items]}))
+        # Taking the lock parks the flush between its answer and its processing.
+        await gate._lock.acquire()
+        answered.set()
+        return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+
+    client.consume_batch = unavailable
+    flushing = asyncio.ensure_future(gate.flush())
+    await answered.wait()
+    await asyncio.sleep(0)
+    flushing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await flushing
+    gate._lock.release()
+
+    assert gate._states["ak_live"].pending == [
+        {"key_id": "ak_live", "amount": 3, "idempotency_key": "idem-1", "service": "svc"},
+    ]
+
+
+async def test_an_unverifiable_consume_answer_is_a_502_that_leaves_the_key_untouched():
+    client = FakeClient(balance=10)
+    gate = TokenGate(_cfg(), client)
+
+    async def unverifiable(**_):
+        return ConsumeResult(ok=False, balance=0, reason="unauthenticated_service")
+
+    client.consume = unverifiable
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.allowed, decision.status, decision.body) == (
+        False, 502, {"error": "unauthenticated_service"},
+    )
+    state = gate._states["ak_live"]
+    assert (state.exhausted, state.estimated_balance) == (False, 10)

@@ -536,6 +536,16 @@ steps"; D16's ordering, verification before charge).
       and `make test-apicredits` pass, with unit tests for the rotation, a
       re-verified expired handle, a raising flush, an unavailable or
       unauthenticated batch, a short answer, and a close during a flush.
+      *Fix (implementation review 10 F1, F2):* a flush cancelled while it
+      waits to process its answer requeues every detached item unchanged:
+      no lock-held block awaits, so processing runs whole or not at all, and
+      requeueing without the lock is equally atomic. A synchronous consume
+      whose answer cannot be authenticated is denied `502
+      unauthenticated_service`, leaving the key's balance estimate and credit
+      untouched and offering no purchase pointer. Evidence: `make
+      test-api-gate` (55) and `make test-apicredits` pass, with unit tests for
+      a flush cancelled between its answer and its processing and for an
+      unverifiable consume answer.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

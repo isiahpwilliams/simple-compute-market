@@ -350,6 +350,13 @@ class TokenGate:
             service=self._cfg.scope_service,
             resource_id=self._cfg.scope_resource_id,
         )
+        if result.reason == UNAUTHENTICATED_SERVICE:
+            # Nothing is known about the key, so neither its balance nor its
+            # credit is touched, and the buyer is not told to buy more.
+            return GateDecision(
+                allowed=False, status=502, key_id=key_id,
+                body={"error": UNAUTHENTICATED_SERVICE},
+            )
         async with self._lock:
             state = self._states.get(key_id)
             if state is not None:
@@ -409,7 +416,15 @@ class TokenGate:
                 self._requeue(zip(owners, items))
             raise
         unanswered: list[tuple[str, dict[str, Any]]] = []
-        async with self._lock:
+        # No lock-held block awaits, so processing below runs whole or not at
+        # all; a cancellation while waiting for the lock leaves every item
+        # unsettled, and requeueing without the lock is equally atomic.
+        try:
+            await self._lock.acquire()
+        except BaseException:
+            self._requeue(zip(owners, items))
+            raise
+        try:
             for owner, item, result in zip(owners, items, results):
                 state = self._states.get(owner)
                 if state is None:
@@ -431,6 +446,8 @@ class TokenGate:
                     state.exhausted = True
             unanswered.extend(zip(owners[len(results):], items[len(results):]))
             self._requeue(unanswered)
+        finally:
+            self._lock.release()
 
     def _requeue(self, entries: Iterable[tuple[str, dict[str, Any]]]) -> None:
         """Put unsettled items back ahead of their owners' newer pending charges."""

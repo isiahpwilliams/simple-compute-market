@@ -72,9 +72,11 @@ def create_gateway_app(
         try:
             yield
         finally:
-            await gate.aclose()
-            if owns_http:
-                await upstream.aclose()
+            try:
+                await gate.aclose()
+            finally:
+                if owns_http:
+                    await upstream.aclose()
 
     app = FastAPI(title="api-gateway", lifespan=lifespan)
 

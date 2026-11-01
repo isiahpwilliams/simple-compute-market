@@ -80,9 +80,13 @@ verification to expire.
 A charge the gate sends to the authority synchronously MUST reach it after
 every charge of the same key admitted before it and still queued, so a request
 already served is never refused for credit a later charge took. When those
-older charges go unanswered, the synchronous charge MUST be refused `503`
-without being consumed. Closing the gate MUST wait for every charge being
-settled with the authority, batched or synchronous.
+older charges go unanswered, or the authority cannot be reached, the
+synchronous charge MUST be refused `503 batch_unavailable` without being
+consumed. Closing the gate MUST wait for every charge in progress, batched or
+synchronous, offer every queued charge to the authority, and raise the charges
+left unanswered rather than return as though they were settled. Once closed,
+the gate MUST refuse verification and charging `503 gate_closed` without
+calling the authority.
 
 #### Scenario: A queued charge and a later synchronous charge share the last credit
 
@@ -95,6 +99,18 @@ settled with the authority, batched or synchronous.
 
 - **WHEN** a charge is being consumed synchronously while the gate closes
 - **THEN** closing returns only after the authority has answered it
+
+#### Scenario: A batch answer is lost while the gate closes
+
+- **WHEN** the authority's answer to a batch offered while closing is lost
+- **THEN** closing raises the batch's charges as unsettled, each with its
+  idempotency key
+
+#### Scenario: A request finishes verifying after the gate has closed
+
+- **WHEN** a request's verification completes after closing has returned
+- **THEN** its charge is refused `503 gate_closed` and the authority is not
+  called
 
 ### Requirement: The public-result extension receives the delivery's settlement context
 

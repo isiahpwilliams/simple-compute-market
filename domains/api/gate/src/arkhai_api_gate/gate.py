@@ -29,6 +29,8 @@ from collections.abc import Callable, Collection, Container, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 from .client import (
     BATCH_UNAVAILABLE,
     INSUFFICIENT_CREDITS,
@@ -54,6 +56,19 @@ _KEY_REFUSALS: dict[str, str | None] = {
 # Error codes in the gate's own deny bodies — clients dispatch on these.
 MISSING_API_KEY = "missing_api_key"
 INVALID_API_KEY = "invalid_api_key"
+GATE_CLOSED = "gate_closed"
+
+
+class UnsettledCharges(Exception):
+    """Closing ended with charges the authority never answered for.
+
+    Each is a batch item — key, amount, idempotency key, scope — whose
+    request was served; resending it unchanged cannot debit it twice.
+    """
+
+    def __init__(self, charges: list[dict[str, Any]]) -> None:
+        super().__init__(f"{len(charges)} charge(s) left unsettled at close")
+        self.charges = charges
 
 
 @dataclass(frozen=True)
@@ -168,6 +183,7 @@ class TokenGate:
         self._admissions = itertools.count()
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
+        self._closed = False
         # A flush or synchronous charge in progress holds a charge no queue
         # shows, so ``aclose`` waits until none is. Once closing, a charge is
         # consumed synchronously, a direct flush takes nothing, and ``aclose``
@@ -190,9 +206,10 @@ class TokenGate:
     async def aclose(self) -> None:
         """Stop the flush loop and offer every pending charge to the authority once more.
 
-        A batch whose answer is lost is requeued but not retried here, so
-        a charge further back is never crowded out by retries; a transport
-        error ends the drain and propagates.
+        A batch whose answer is lost is not retried here, so a charge
+        further back is never crowded out by retries; the charges left
+        unanswered are raised as ``UnsettledCharges``. A transport error
+        ends the drain and propagates. Once closed, a charge is refused.
         """
         self._closing = True
         if self._flush_task is not None:
@@ -206,9 +223,15 @@ class TokenGate:
         # Nothing is queued once closing, so the drain ends when every
         # charge queued before it has been offered.
         offered: set[int] = set()
-        while sent := await self._flush_once(exclude=offered):
-            offered.update(sent)
-        await self._settled()
+        try:
+            while sent := await self._flush_once(exclude=offered):
+                offered.update(sent)
+            await self._settled()
+        finally:
+            self._closed = True
+        unsettled = [dict(item) for state in self._states.values() for item in state.pending]
+        if unsettled:
+            raise UnsettledCharges(unsettled)
 
     async def _settled(self) -> None:
         # Re-checked on every wake: the event says only that the count was
@@ -239,6 +262,8 @@ class TokenGate:
 
     async def verify(self, authorization: str | None) -> GateDecision | VerifiedKey:
         """Verify the presented key without charging it: a denial, or the verified key."""
+        if self._closed:
+            return self._closed_denial(None)
         secret = parse_bearer(authorization)
         if secret is None:
             return GateDecision(
@@ -290,7 +315,7 @@ class TokenGate:
                 and hmac.compare_digest(state.secret_fingerprint, verified.secret_fingerprint)
                 and not self._vouches(state, verified)
             )
-        if stale:
+        if stale and not self._closed:
             if not hmac.compare_digest(_fingerprint(verified._secret), verified.secret_fingerprint):
                 return GateDecision(
                     allowed=False, status=401, key_id=verified.key_id,
@@ -401,6 +426,8 @@ class TokenGate:
         batching = self._cfg.flush_interval_seconds > 0
 
         async with self._lock:
+            if self._closed:
+                return self._closed_denial(key_id)
             state = self._states.get(key_id)
             # The handle may be stale: another request can have refreshed the
             # state while this one awaited between verify and charge. A newer
@@ -456,7 +483,11 @@ class TokenGate:
                     entries = self._take(self._choose(limit, owners=(key_id,), before=admission))
                 if not entries:
                     break
-                if not await self._send(entries):
+                try:
+                    answered = await self._send(entries)
+                except httpx.TransportError:
+                    answered = False
+                if not answered:
                     return GateDecision(
                         allowed=False, status=503, key_id=key_id,
                         body={"error": BATCH_UNAVAILABLE},
@@ -694,6 +725,11 @@ class TokenGate:
         return GateDecision(
             allowed=False, status=401, key_id=key_id,
             body={"error": INVALID_API_KEY},
+        )
+
+    def _closed_denial(self, key_id: str | None) -> GateDecision:
+        return GateDecision(
+            allowed=False, status=503, key_id=key_id, body={"error": GATE_CLOSED},
         )
 
     def _deny(self, status: int, error: str, key_id: str) -> GateDecision:

@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable, Iterable
 
 from .client import TokensClient
 from .config import GateConfig
-from .gate import GateDecision, TokenGate
+from .gate import GateDecision, TokenGate, UnsettledCharges
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -76,15 +76,23 @@ class TokenGateMiddleware:
         await _send_json(send, decision.status, decision.body or {})
 
     async def _lifespan(self, scope: Scope, receive: Receive, send: Send) -> None:
+        unsettled: list[UnsettledCharges] = []
+
         async def outer_receive() -> dict[str, Any]:
             message = await receive()
             if message["type"] == "lifespan.startup":
                 self.gate.start()
             elif message["type"] == "lifespan.shutdown":
-                await self.gate.aclose()
+                # Raised once the app has shut down too.
+                try:
+                    await self.gate.aclose()
+                except UnsettledCharges as error:
+                    unsettled.append(error)
             return message
 
         await self.app(scope, outer_receive, send)
+        if unsettled:
+            raise unsettled[0]
 
 
 def _header(scope: Scope, name: bytes) -> str | None:

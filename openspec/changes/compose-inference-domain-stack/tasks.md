@@ -644,6 +644,24 @@ steps"; D16's ordering, verification before charge).
       runs in which keys run out of credit; every run ends with each key
       charged for every request admitted, and the gate before the fix
       fails its second run, one key served 54 credits and charged 30.
+      *Fix (implementation review 16 F1–F3):* closing offered a lost batch
+      once and returned as though it were settled; `aclose` now raises
+      `UnsettledCharges` listing the charges left unanswered, each a batch
+      item with its idempotency key, so resending one cannot debit it
+      twice. The ASGI middleware raises it once the app has shut down, and
+      the gateway closes its upstream client whether or not it is raised. A
+      transport error while a synchronous charge settles its key's older
+      charges is refused `503 batch_unavailable` like an unanswered batch.
+      Once closed, the gate refuses `verify` and `charge` with `503
+      gate_closed` without calling the authority, which also covers a
+      request between verification and charge, where no gate call tracks
+      it. Evidence: `make test-api-gate` (85) passes; the tests for an
+      unsettled close, a transport error before a synchronous charge, a
+      request verifying while the gate closes, and the middleware's
+      shutdown fail against the gate before the fix. The randomized check
+      gained 300 runs in which a fifth of batch answers are lost; resending
+      the charges closing raises leaves every key charged once for every
+      request it was served. The gateway's shutdown has no test of its own.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

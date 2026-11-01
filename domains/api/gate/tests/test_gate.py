@@ -16,7 +16,7 @@ import pytest
 
 from arkhai_api_gate.client import ConsumeResult, TokensClient, VerifyResult
 from arkhai_api_gate.config import GateConfig, PurchasePointer
-from arkhai_api_gate.gate import TokenGate, VerifiedKey
+from arkhai_api_gate.gate import TokenGate, UnsettledCharges, VerifiedKey
 from arkhai_api_gate.asgi import TokenGateMiddleware
 
 
@@ -1016,14 +1016,15 @@ async def test_closing_offers_every_charge_once_when_a_batch_answer_is_lost():
     for n in range(5):
         assert (await gate.authorize("Bearer ak_live.s", idempotency_key=f"idem-{n}")).allowed
 
-    await asyncio.wait_for(gate.aclose(), 5)
+    with pytest.raises(UnsettledCharges) as unsettled:
+        await asyncio.wait_for(gate.aclose(), 5)
 
     assert [[item["idempotency_key"] for item in call] for call in client.batch_calls] == [
         ["idem-0", "idem-1"], ["idem-2", "idem-3"], ["idem-4"],
     ]
-    # The lost batch stays queued rather than crowding out the untried charges.
+    # The lost batch is reported rather than retried ahead of the untried charges.
+    assert [item["idempotency_key"] for item in unsettled.value.charges] == ["idem-0", "idem-1"]
     state = gate._states["ak_live"]
-    assert [item["idempotency_key"] for item in state.pending] == ["idem-0", "idem-1"]
     assert (state.queued, state.in_flight) == (2, 0)
 
 
@@ -1238,3 +1239,78 @@ async def test_closing_waits_for_a_charge_consumed_synchronously_while_it_drains
     releases[0].set()
     decision, _, _ = await _done(charging, flushing, closing)
     assert decision.allowed
+
+
+async def test_a_synchronous_charge_is_refused_unconsumed_when_older_charges_meet_a_transport_error():
+    client = FakeClient(balance=10)
+    gate = TokenGate(
+        _cfg(amount_per_request=3, flush_interval_seconds=60.0, low_balance_threshold=5), client,
+    )
+
+    async def unreachable(items):
+        raise httpx.ConnectError("connection refused")
+
+    client.consume_batch = unreachable
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.status, decision.body) == (503, {"error": "batch_unavailable"})
+    assert client.consume_calls == []
+    state = gate._states["ak_live"]
+    assert ([item["idempotency_key"] for item in state.pending], state.in_flight) == (["idem-1"], 0)
+
+
+async def test_a_request_verifying_when_the_gate_closes_is_refused_its_charge():
+    client = HeldVerificationClient("ak_k.s", "ak_k.s")
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    request = asyncio.ensure_future(gate.authorize("Bearer ak_k.s"))
+    await asyncio.wait_for(client.started.wait(), timeout=5)
+
+    await asyncio.wait_for(gate.aclose(), 5)
+    client.release.set()
+    decision = await asyncio.wait_for(request, 5)
+
+    assert (decision.allowed, decision.status, decision.body) == (
+        False, 503, {"error": "gate_closed"},
+    )
+    assert client.consumed == 0
+
+
+async def test_the_middleware_reports_unsettled_charges_after_the_app_shuts_down():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+
+    async def unavailable(items):
+        return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+
+    client.consume_batch = unavailable
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    seen: list[str] = []
+
+    async def app(scope, receive, send):
+        while (message := await receive())["type"] != "lifespan.shutdown":
+            seen.append(message["type"])
+        seen.append(message["type"])
+
+    messages = iter([{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        pass
+
+    with pytest.raises(UnsettledCharges):
+        await TokenGateMiddleware(app, gate=gate)({"type": "lifespan"}, receive, send)
+    assert seen == ["lifespan.startup", "lifespan.shutdown"]
+
+
+async def test_a_closed_gate_refuses_verification_without_the_authority():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(), client)
+    await gate.aclose()
+
+    decision = await gate.verify("Bearer ak_live.s")
+
+    assert (decision.status, decision.body) == (503, {"error": "gate_closed"})
+    assert client.verify_calls == 0

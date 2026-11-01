@@ -17,16 +17,19 @@ from .asgi import TokenGateMiddleware
 from .client import ConsumeResult, TokensClient, VerifyResult
 from .config import GateConfig, PurchasePointer
 from .gate import (
+    GATE_CLOSED,
     INVALID_API_KEY,
     MISSING_API_KEY,
     GateDecision,
     TokenGate,
+    UnsettledCharges,
     VerifiedKey,
     key_id_from_secret,
     parse_bearer,
 )
 
 __all__ = [
+    "GATE_CLOSED",
     "ConsumeResult",
     "GateConfig",
     "GateDecision",
@@ -36,6 +39,7 @@ __all__ = [
     "TokenGate",
     "TokenGateMiddleware",
     "TokensClient",
+    "UnsettledCharges",
     "VerifiedKey",
     "VerifyResult",
     "key_id_from_secret",

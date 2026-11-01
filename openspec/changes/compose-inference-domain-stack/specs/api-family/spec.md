@@ -62,6 +62,13 @@ configured recheck window, after which the next request is charged at the
 authority, so a key topped up meanwhile is admitted without waiting for its
 verification to expire.
 
+Only the authority's named refusals are refusals. A consume answered with no
+result and no named refusal — an error status, an unreadable body, or no
+answer at all — MUST be denied `503 credits_unavailable`, with no purchase
+pointer, leaving the key neither exhausted nor its estimate lowered; the key's
+charges MUST then be made at the authority until it answers for the key again,
+since its balance may already include the unanswered charge.
+
 #### Scenario: A batch reports the key revoked
 
 - **WHEN** a batch settles with the authority answering one of its items
@@ -74,6 +81,13 @@ verification to expire.
   topped up before its verification expires
 - **THEN** requests inside the recheck window are denied `402` without an
   authority call, and the first request after it is charged and admitted
+
+#### Scenario: A consume goes unanswered
+
+- **WHEN** the authority answers a consume `503` with no named refusal
+- **THEN** the request is denied `503 credits_unavailable` without a purchase
+  pointer, and the key's next request is charged at the authority even though
+  its estimate would admit it optimistically
 
 ### Requirement: The gate charges a key in the order it admitted the key's requests
 

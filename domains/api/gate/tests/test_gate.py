@@ -9,6 +9,7 @@ cached verification answering only for the secret that earned it.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 
 import httpx
@@ -1343,3 +1344,69 @@ async def test_a_closed_gate_refuses_verification_without_the_authority():
 
     assert (decision.status, decision.body) == (503, {"error": "gate_closed"})
     assert client.verify_calls == 0
+
+
+def _scripted_authority(consume_answers):
+    """A TokensClient over HTTP: verify answers 100 credits, consume and batch take scripted answers."""
+    batch_answers: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/verify"):
+            return httpx.Response(200, json={"valid": True, "status": "active", "balance": 100})
+        answer = (batch_answers if request.url.path.endswith("consume-batch") else consume_answers).pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return TokensClient(service_url="http://svc", http=http), batch_answers
+
+
+@pytest.mark.parametrize("answer", [
+    httpx.Response(503),
+    httpx.Response(502, text="upstream down"),
+    httpx.Response(500, json={"error": "internal"}),
+    httpx.Response(200, json=["not", "an", "object"]),
+    httpx.ConnectError("connection reset"),
+], ids=["empty", "text", "unknown-error", "not-an-object", "transport"])
+async def test_a_consume_without_an_answer_is_unavailable_not_exhaustion(answer):
+    client, _ = _scripted_authority([answer])
+
+    result = await client.consume(key_id="ak_live", amount=1, idempotency_key="idem-1")
+
+    assert (result.ok, result.reason) == (False, "credits_unavailable")
+
+
+async def test_a_batch_item_without_a_known_refusal_is_unanswered():
+    client, batch_answers = _scripted_authority([])
+    batch_answers.append(httpx.Response(200, json={"results": [
+        {"ok": False, "reason": "internal"}, {"ok": False, "reason": "key_revoked", "balance": 0},
+    ]}))
+
+    results = await client.consume_batch([{"key_id": "a"}, {"key_id": "b"}])
+
+    assert [r.reason for r in results] == ["batch_unavailable", "key_revoked"]
+
+
+async def test_an_unanswered_consume_is_503_and_the_key_is_charged_at_the_authority_until_it_answers():
+    ok = httpx.Response(200, json={"ok": True, "consumed": 1, "balance": 97})
+    client, _ = _scripted_authority([httpx.Response(503), ok])
+    gate = TokenGate(
+        _cfg(flush_interval_seconds=60.0, low_balance_threshold=99, purchase=PurchasePointer(listing_id="lst-1")),
+        client,
+    )
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    # No purchase pointer: nothing says the key is out of credit.
+    assert (decision.status, decision.body) == (503, {"error": "credits_unavailable"})
+    state = gate._states["ak_live"]
+    assert (state.exhausted, state.uncertain, state.estimated_balance) == (False, True, 100)
+
+    gate._cfg = dataclasses.replace(gate._cfg, low_balance_threshold=0)
+    # Charged synchronously although the estimate would admit it optimistically.
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    assert (state.uncertain, state.estimated_balance, state.pending) == (False, 97, [])
+
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    assert len(state.pending) == 1

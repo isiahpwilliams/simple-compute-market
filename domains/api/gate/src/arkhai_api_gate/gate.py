@@ -33,6 +33,7 @@ import httpx
 
 from .client import (
     BATCH_UNAVAILABLE,
+    CREDITS_UNAVAILABLE,
     INSUFFICIENT_CREDITS,
     KEY_NOT_FOUND,
     KEY_OUT_OF_SCOPE,
@@ -122,6 +123,8 @@ class _KeyState:
     exhausted: bool = False
     # When the authority last refused the key for insufficient credit.
     exhausted_at: float = 0.0
+    # A consume went unanswered, so the authority may have applied it unseen.
+    uncertain: bool = False
 
     def settle_balance(self, balance: int) -> None:
         """Rest the estimate on a balance the authority reported for this key.
@@ -131,6 +134,7 @@ class _KeyState:
         batch not yet answered.
         """
         self.estimated_balance = balance - self.in_flight - self.queued
+        self.uncertain = False
 
 
 def _fingerprint(secret: str) -> bytes:
@@ -463,6 +467,7 @@ class TokenGate:
                 not batching
                 or self._closing
                 or state.exhausted
+                or state.uncertain
                 or not self._vouches(state, verified)
                 or estimated_after <= self._cfg.low_balance_threshold
             )
@@ -512,6 +517,18 @@ class TokenGate:
                 return GateDecision(
                     allowed=False, status=502, key_id=key_id,
                     body={"error": UNAUTHENTICATED_SERVICE},
+                )
+            if result.reason == CREDITS_UNAVAILABLE:
+                # Charged at the authority until it answers for the key again,
+                # since its balance may already include this charge. A resend
+                # would debit a request that is refused here.
+                async with self._lock:
+                    state = self._states.get(key_id)
+                    if state is not None:
+                        state.uncertain = True
+                return GateDecision(
+                    allowed=False, status=503, key_id=key_id,
+                    body={"error": CREDITS_UNAVAILABLE},
                 )
             async with self._lock:
                 state = self._states.get(key_id)

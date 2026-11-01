@@ -673,7 +673,20 @@ steps"; D16's ordering, verification before charge).
       found that the client maps a consume answered non-200 without an
       error field to `insufficient_credits`, so a transient authority error
       denies a funded key `402` for the recheck window; that mapping
-      predates this change and is left to the owner.
+      predates this change, and the owner had it changed: only the
+      authority's named refusals are refusals now. A consume answered
+      otherwise — an error status, an unreadable body, a transport error —
+      is `credits_unavailable`, denied `503` with no purchase pointer, the
+      key neither exhausted nor its estimate lowered; the key is charged at
+      the authority until it answers for the key again, since its balance
+      may already include the lost charge. A resend under the original
+      idempotency key could debit a request already refused, so none is
+      made. A batch item without a named refusal is unanswered and
+      requeued. Evidence: `make test-api-gate` (93) passes; the seven new
+      tests fail against the gate before the fix. The randomized check
+      gained 300 runs in which a fifth of consumes go unanswered; every key
+      ends charged for exactly the requests it was served. The API-credits
+      Rust and TypeScript gates keep the old mapping.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

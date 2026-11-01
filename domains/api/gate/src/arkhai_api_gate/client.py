@@ -26,6 +26,8 @@ KEY_NOT_FOUND = "key_not_found"
 KEY_REVOKED = "key_revoked"
 INSUFFICIENT_CREDITS = "insufficient_credits"
 KEY_OUT_OF_SCOPE = "key_out_of_scope"
+#: The authority's refusals; any other unsuccessful answer is no answer.
+REFUSALS = frozenset({KEY_NOT_FOUND, KEY_REVOKED, INSUFFICIENT_CREDITS, KEY_OUT_OF_SCOPE})
 
 #: Denial reported when the authority answered but could not be established
 #: as the authority. Distinct from `insufficient_credits`: the key may be
@@ -35,6 +37,10 @@ UNAUTHENTICATED_SERVICE = "unauthenticated_service"
 #: Reported for every item of a batch the authority did not answer; whether
 #: it settled them is unknown.
 BATCH_UNAVAILABLE = "batch_unavailable"
+
+#: Reported for a consume the authority did not answer with a result or a
+#: refusal; whether it was applied is unknown.
+CREDITS_UNAVAILABLE = "credits_unavailable"
 
 #: The path and signed operation of each route this client calls, spelled
 #: locally so the gate depends on httpx alone. The authority signs over its
@@ -200,6 +206,7 @@ class TokensClient:
         if idempotency_key is not None:
             body["idempotency_key"] = idempotency_key
         body.update(scope_fields(service, resource_id))
+        unavailable = ConsumeResult(ok=False, balance=0, reason=CREDITS_UNAVAILABLE)
         try:
             resp = await self._post(
                 CONSUME_PATH.format(key_id=key_id),
@@ -207,13 +214,17 @@ class TokensClient:
                 operation=CONSUME_OPERATION,
                 resource=key_id,
             )
+            data = resp.json() if resp.content else {}
         except ResponseAuthenticationError:
             # Fails closed, and says which kind of closed: an unverifiable
             # answer is not evidence the key is out of credits.
             return ConsumeResult(
                 ok=False, balance=0, reason=UNAUTHENTICATED_SERVICE,
             )
-        data = resp.json() if resp.content else {}
+        except (httpx.TransportError, ValueError):
+            return unavailable
+        if not isinstance(data, dict):
+            return unavailable
         if resp.status_code == 200 and data.get("ok"):
             return ConsumeResult(
                 ok=True,
@@ -221,10 +232,9 @@ class TokensClient:
                 consumed=int(data.get("consumed") or 0),
                 duplicate=bool(data.get("duplicate")),
             )
-        # Refusals carry {"error": reason, "balance": B}; an unexpected
-        # status with no error maps to insufficient_credits so the gate
-        # fails closed.
-        reason = data.get("error") or data.get("reason") or INSUFFICIENT_CREDITS
+        reason = data.get("error") or data.get("reason")
+        if reason not in REFUSALS:
+            return unavailable
         return ConsumeResult(
             ok=False, balance=int(data.get("balance") or 0), reason=reason,
         )
@@ -254,7 +264,10 @@ class TokensClient:
                 ConsumeResult(ok=False, balance=0, reason=BATCH_UNAVAILABLE)
                 for _ in items
             ]
-        results = resp.json().get("results") or []
+        try:
+            results = resp.json().get("results") or []
+        except (ValueError, AttributeError):
+            results = []
         out: list[ConsumeResult] = []
         for r in results:
             if r.get("ok"):
@@ -264,12 +277,12 @@ class TokensClient:
                     consumed=int(r.get("consumed") or 0),
                     duplicate=bool(r.get("duplicate")),
                 ))
-            else:
+            elif (reason := r.get("reason") or r.get("error")) in REFUSALS:
                 out.append(ConsumeResult(
-                    ok=False,
-                    balance=int(r.get("balance") or 0),
-                    reason=r.get("reason") or r.get("error") or INSUFFICIENT_CREDITS,
+                    ok=False, balance=int(r.get("balance") or 0), reason=reason,
                 ))
+            else:
+                out.append(ConsumeResult(ok=False, balance=0, reason=BATCH_UNAVAILABLE))
         return out
 
 

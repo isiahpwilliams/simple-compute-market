@@ -15,7 +15,7 @@ import time
 import httpx
 import pytest
 
-from arkhai_api_gate.client import ConsumeResult, TokensClient, VerifyResult
+from arkhai_api_gate.client import ConsumeResult, TokensClient, VerifyResult, VerifyUnavailable
 from arkhai_api_gate.config import GateConfig, PurchasePointer
 from arkhai_api_gate.gate import TokenGate, UnsettledCharges, VerifiedKey
 from arkhai_api_gate.asgi import TokenGateMiddleware
@@ -1470,3 +1470,68 @@ async def test_the_middleware_shuts_the_app_down_before_raising_any_close_error(
     with pytest.raises(httpx.ConnectError):
         await TokenGateMiddleware(app, gate=gate)({"type": "lifespan"}, receive, send)
     assert seen == ["lifespan.startup", "lifespan.shutdown"]
+
+
+def _verifying_authority(verify_answers):
+    """A TokensClient whose verifications take scripted answers and whose consumes succeed."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/verify"):
+            answer = verify_answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        return httpx.Response(200, json={"ok": True, "consumed": 1, "balance": 99})
+
+    return TokensClient(service_url="http://svc", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+
+@pytest.mark.parametrize("answer", [
+    httpx.ConnectError("authority unavailable"),
+    httpx.Response(503),
+    httpx.Response(200, text="upstream down"),
+    httpx.Response(200, json={"valid": "false", "status": "revoked", "balance": 100}),
+    httpx.Response(200, json={"status": "active", "balance": 100}),
+    httpx.Response(200, json={"valid": True, "status": "active", "balance": "100"}),
+], ids=["transport", "5xx", "text", "string-valid", "no-valid", "string-balance"])
+async def test_a_verification_without_a_readable_answer_is_unavailable(answer):
+    client = _verifying_authority([answer])
+
+    result = await client.verify(key_id="ak_live", secret="ak_live.s")
+
+    assert isinstance(result, VerifyUnavailable)
+
+
+async def test_a_verification_refused_at_the_http_layer_is_not_valid():
+    client = _verifying_authority([httpx.Response(422, json={"error": "scope_required"})])
+
+    result = await client.verify(key_id="ak_live", secret="ak_live.s")
+
+    assert (type(result), result.valid) == (VerifyResult, False)
+
+
+async def test_an_unavailable_verification_is_503_and_records_nothing():
+    valid = httpx.Response(200, json={"valid": True, "status": "active", "balance": 100})
+    client = _verifying_authority([httpx.ConnectError("authority unavailable"), valid])
+    gate = TokenGate(_cfg(), client)
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.status, decision.body) == (503, {"error": "credits_unavailable"})
+    assert "ak_live" not in gate._states
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+
+@pytest.mark.parametrize("answer", [
+    {"ok": "false", "balance": 10},
+    {"ok": True, "balance": 10, "consumed": "1"},
+], ids=["string-ok", "string-consumed"])
+async def test_a_consume_with_mistyped_fields_is_unavailable(answer):
+    client, batch_answers = _scripted_authority([httpx.Response(200, json=answer)])
+    batch_answers.append(httpx.Response(200, json={"results": [answer]}))
+
+    single = await client.consume(key_id="ak_live", amount=1)
+    batched = await client.consume_batch([{"key_id": "ak_live"}])
+
+    assert (single.ok, single.reason) == (False, "credits_unavailable")
+    assert [(r.ok, r.reason) for r in batched] == [(False, "batch_unavailable")]

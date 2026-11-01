@@ -700,6 +700,19 @@ steps"; D16's ordering, verification before charge).
       has shut down. Evidence: `make test-api-gate` (97) passes, the five
       new tests failing against the gate before the fix, and `make
       test-inference-service`, whose scope test the review cited, passes.
+      *Fix (implementation review 18 F1):* a verification that met a
+      transport error raised out of `authorize`, and one answered `5xx` was
+      cached as invalid, denying a good key `401` until the verification
+      expired. A verification with no readable answer — a transport error,
+      a `5xx`, an unreadable body, a mistyped field — is now
+      `VerifyUnavailable`, denied `503 credits_unavailable` and recorded
+      nowhere; a `4xx` is still not valid. Every authority answer's fields
+      are read strictly: `valid` and `ok` must be booleans and balances and
+      charges integers, or the answer is no answer — a consume
+      `credits_unavailable`, a batch item `batch_unavailable`. Evidence:
+      `make test-api-gate` (107) passes; nine of the ten new tests fail
+      against the gate before the fix, the tenth pinning that a `4xx` is
+      still not valid.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

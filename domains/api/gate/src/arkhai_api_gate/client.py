@@ -72,6 +72,37 @@ class VerifyResult:
     request_charge: int | None = None
 
 
+@dataclass(frozen=True)
+class VerifyUnavailable(VerifyResult):
+    """No readable answer from the authority, so nothing is known about the key."""
+
+
+_UNAVAILABLE = VerifyUnavailable(valid=False, status=None, balance=0)
+
+
+def _flag(data: dict[str, Any], name: str, *, required: bool = False) -> bool:
+    value = data[name] if required else data.get(name, False)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} is not a boolean")
+    return value
+
+
+def _whole(data: dict[str, Any], name: str) -> int:
+    value = data.get(name)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} is not an integer")
+    return value
+
+
+def _text(data: dict[str, Any], name: str) -> str | None:
+    value = data.get(name)
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{name} is not a string")
+    return value
+
+
 def scope_fields(service: str | None, resource_id: str | None) -> dict[str, str]:
     """The expected key scope a request or batch item carries; nothing when unset."""
     scope = {}
@@ -174,24 +205,29 @@ class TokensClient:
                 operation=VERIFY_OPERATION,
                 resource=key_id,
             )
+            if resp.status_code >= 500:
+                return _UNAVAILABLE
+            if resp.status_code != 200:
+                return VerifyResult(valid=False, status=None, balance=0)
+            data = resp.json()
+            if not isinstance(data, dict):
+                return _UNAVAILABLE
+            terms = data.get("accepted_terms")
+            if terms is not None and not isinstance(terms, dict):
+                return _UNAVAILABLE
+            return VerifyResult(
+                valid=_flag(data, "valid", required=True),
+                status=_text(data, "status"),
+                balance=_whole(data, "balance"),
+                accepted_terms=terms,
+                terms_digest=_text(data, "terms_digest"),
+                request_charge=None if data.get("request_charge") is None else _whole(data, "request_charge"),
+            )
         except ResponseAuthenticationError:
-            # Same disposition as a transport failure below: the gate denies
-            # rather than failing open. Logged by the caller's handler.
+            # The gate denies rather than failing open.
             return VerifyResult(valid=False, status=None, balance=0)
-        if resp.status_code != 200:
-            # Auth/transport problems are treated as "not valid" — the
-            # gate denies rather than failing open.
-            return VerifyResult(valid=False, status=None, balance=0)
-        data = resp.json()
-        charge = data.get("request_charge")
-        return VerifyResult(
-            valid=bool(data.get("valid")),
-            status=data.get("status"),
-            balance=int(data.get("balance") or 0),
-            accepted_terms=data.get("accepted_terms"),
-            terms_digest=data.get("terms_digest"),
-            request_charge=None if charge is None else int(charge),
-        )
+        except (httpx.TransportError, KeyError, ValueError):
+            return _UNAVAILABLE
 
     async def consume(
         self,
@@ -215,6 +251,19 @@ class TokensClient:
                 resource=key_id,
             )
             data = resp.json() if resp.content else {}
+            if not isinstance(data, dict):
+                return unavailable
+            if resp.status_code == 200 and _flag(data, "ok"):
+                return ConsumeResult(
+                    ok=True,
+                    balance=_whole(data, "balance"),
+                    consumed=_whole(data, "consumed"),
+                    duplicate=_flag(data, "duplicate"),
+                )
+            reason = data.get("error") or data.get("reason")
+            if not (400 <= resp.status_code < 500 and isinstance(reason, str) and reason):
+                return unavailable
+            return ConsumeResult(ok=False, balance=_whole(data, "balance"), reason=reason)
         except ResponseAuthenticationError:
             # Fails closed, and says which kind of closed: an unverifiable
             # answer is not evidence the key is out of credits.
@@ -223,21 +272,6 @@ class TokensClient:
             )
         except (httpx.TransportError, ValueError):
             return unavailable
-        if not isinstance(data, dict):
-            return unavailable
-        if resp.status_code == 200 and data.get("ok"):
-            return ConsumeResult(
-                ok=True,
-                balance=int(data.get("balance") or 0),
-                consumed=int(data.get("consumed") or 0),
-                duplicate=bool(data.get("duplicate")),
-            )
-        reason = data.get("error") or data.get("reason")
-        if not (400 <= resp.status_code < 500 and isinstance(reason, str) and reason):
-            return unavailable
-        return ConsumeResult(
-            ok=False, balance=int(data.get("balance") or 0), reason=reason,
-        )
 
     async def consume_batch(
         self, items: list[dict[str, Any]],
@@ -270,18 +304,21 @@ class TokensClient:
             results = []
         out: list[ConsumeResult] = []
         for r in results:
-            if r.get("ok"):
-                out.append(ConsumeResult(
-                    ok=True,
-                    balance=int(r.get("balance") or 0),
-                    consumed=int(r.get("consumed") or 0),
-                    duplicate=bool(r.get("duplicate")),
-                ))
-            elif isinstance(reason := r.get("reason") or r.get("error"), str) and reason:
-                out.append(ConsumeResult(
-                    ok=False, balance=int(r.get("balance") or 0), reason=reason,
-                ))
-            else:
+            try:
+                if not isinstance(r, dict):
+                    raise ValueError("not an object")
+                if _flag(r, "ok"):
+                    out.append(ConsumeResult(
+                        ok=True,
+                        balance=_whole(r, "balance"),
+                        consumed=_whole(r, "consumed"),
+                        duplicate=_flag(r, "duplicate"),
+                    ))
+                elif isinstance(reason := r.get("reason") or r.get("error"), str) and reason:
+                    out.append(ConsumeResult(ok=False, balance=_whole(r, "balance"), reason=reason))
+                else:
+                    raise ValueError("neither a result nor a refusal")
+            except ValueError:
                 out.append(ConsumeResult(ok=False, balance=0, reason=BATCH_UNAVAILABLE))
         return out
 

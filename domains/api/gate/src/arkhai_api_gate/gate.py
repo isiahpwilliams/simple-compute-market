@@ -43,6 +43,7 @@ from .client import (
     ConsumeResult,
     TokensClient,
     VerifyResult,
+    VerifyUnavailable,
     scope_fields,
 )
 from .config import GateConfig
@@ -396,6 +397,8 @@ class TokenGate:
             service=self._cfg.scope_service,
             resource_id=self._cfg.scope_resource_id,
         )
+        if isinstance(verify, VerifyUnavailable):
+            return verify, ticket
 
         async with self._lock:
             existing = self._states.get(key_id)
@@ -747,6 +750,11 @@ class TokenGate:
         }
 
     def _verify_denial(self, verify: VerifyResult, key_id: str) -> GateDecision:
+        if isinstance(verify, VerifyUnavailable):
+            return GateDecision(
+                allowed=False, status=503, key_id=key_id,
+                body={"error": CREDITS_UNAVAILABLE},
+            )
         if verify.status == "revoked":
             return self._deny(403, KEY_REVOKED, key_id)
         if verify.status == KEY_OUT_OF_SCOPE:

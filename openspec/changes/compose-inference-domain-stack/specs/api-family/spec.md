@@ -71,6 +71,10 @@ or no answer at all — MUST be denied `503 credits_unavailable`, with no purcha
 pointer, leaving the key neither exhausted nor its estimate lowered; the key's
 charges MUST then be made at the authority until it answers for the key again,
 since its balance may already include the unanswered charge.
+A verification with no readable answer — a transport error, a `5xx`, an
+unreadable body, or a field not of its declared type — MUST be denied `503
+credits_unavailable` and recorded nowhere, so it neither invalidates a good
+key nor admits a refused one.
 
 #### Scenario: A batch reports the key revoked
 

@@ -247,7 +247,6 @@ def _build_alkahest_clients(private_key: str) -> dict[str, Any]:
 def _build_inference_services(
     domain: MarketDomainContract,
 ) -> InferenceStorefrontServices:
-    # Refuse a bad configuration before anything is constructed.
     require_startable_storefront()
     validate_mechanism_configuration()
     marketplace_signer = resolve_identity_signer()

@@ -116,12 +116,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# URL hierarchy:
-#   /health                          <- bare liveness probe (no prefix)
-#   /api/v1/system/*                 <- versioned health + version
-#   /api/v1/issuance                 <- deal fulfillment (storefront)
-#   /api/v1/keys/*                   <- consume/verify, admin, guard lookup
-#   /api/v1/capacity/*               <- site quota ledger (market_site)
 app.include_router(make_health_router())
 app.include_router(
     make_system_router(lambda: _container_module.resolved_system_service),

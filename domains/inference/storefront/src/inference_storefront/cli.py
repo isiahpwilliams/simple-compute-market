@@ -109,8 +109,7 @@ def publish_cmd(
     option. Omit all three to publish the configured settlement clauses.
     The card's resource, site, and offering mode are taken from the quota.
     """
-    # Imported only once ``--config`` has run: the storefront's settings
-    # resolve when its config module is first imported.
+    # Imported only once ``--config`` has run, as in ``serve``.
     import inference_storefront.container as _container
     from inference_storefront.domain_runtime import get_market_domain_contract
     from inference_storefront.server import _build_inference_services

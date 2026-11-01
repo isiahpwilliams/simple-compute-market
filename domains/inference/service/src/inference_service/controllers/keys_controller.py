@@ -50,10 +50,6 @@ def _unscoped(*requests: object) -> JSONResponse | None:
 def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRouter:
     router = APIRouter(tags=["keys"])
 
-    # ------------------------------------------------------------------
-    # Market-facing: issuance
-    # ------------------------------------------------------------------
-
     @router.post(
         "/issuance",
         response_model=IssuanceResponse,
@@ -82,10 +78,6 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
             return IssuanceResponse(**service.get_issuance(fulfillment_id))
         except RouteRefusal as refusal:
             return _refused(refusal)
-
-    # ------------------------------------------------------------------
-    # Gateway-facing: consume / verify
-    # ------------------------------------------------------------------
 
     @router.post(
         "/keys/{key_id}/consume",
@@ -144,10 +136,6 @@ def make_keys_router(get_service: Callable[[], AuthorityRouteService]) -> APIRou
         return service.verify(
             key_id, secret=body.secret, service=body.service, resource_id=body.resource_id
         )
-
-    # ------------------------------------------------------------------
-    # Admin + the seller guards' key→owner lookup
-    # ------------------------------------------------------------------
 
     @router.get(
         "/keys",

@@ -687,6 +687,19 @@ steps"; D16's ordering, verification before charge).
       gained 300 runs in which a fifth of consumes go unanswered; every key
       ends charged for exactly the requests it was served. The API-credits
       Rust and TypeScript gates keep the old mapping.
+      *Fix (implementation review 17 F1, F2):* naming the four family
+      refusals turned the inference authority's `scope_required` into
+      `credits_unavailable`. A refusal is now any answer naming its reason —
+      a `4xx` with an error code, or a batch item with a reason — and only a
+      `5xx`, an unreadable body, or no answer is unknown. A refusal other
+      than of the key or its credit is of the gate's own call: a
+      synchronous charge is denied `502` with its code, and a batched one
+      is not resent, neither touching the key. The ASGI middleware delivered
+      `lifespan.shutdown` to the app only if closing the gate raised
+      `UnsettledCharges`; it now holds any error from closing until the app
+      has shut down. Evidence: `make test-api-gate` (97) passes, the five
+      new tests failing against the gate before the fix, and `make
+      test-inference-service`, whose scope test the review cited, passes.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

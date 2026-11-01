@@ -26,7 +26,7 @@ KEY_NOT_FOUND = "key_not_found"
 KEY_REVOKED = "key_revoked"
 INSUFFICIENT_CREDITS = "insufficient_credits"
 KEY_OUT_OF_SCOPE = "key_out_of_scope"
-#: The authority's refusals; any other unsuccessful answer is no answer.
+#: The family authority's refusals of a key or of its credit.
 REFUSALS = frozenset({KEY_NOT_FOUND, KEY_REVOKED, INSUFFICIENT_CREDITS, KEY_OUT_OF_SCOPE})
 
 #: Denial reported when the authority answered but could not be established
@@ -39,7 +39,7 @@ UNAUTHENTICATED_SERVICE = "unauthenticated_service"
 BATCH_UNAVAILABLE = "batch_unavailable"
 
 #: Reported for a consume the authority did not answer with a result or a
-#: refusal; whether it was applied is unknown.
+#: refusal — a ``4xx`` naming its reason; whether it was applied is unknown.
 CREDITS_UNAVAILABLE = "credits_unavailable"
 
 #: The path and signed operation of each route this client calls, spelled
@@ -233,7 +233,7 @@ class TokensClient:
                 duplicate=bool(data.get("duplicate")),
             )
         reason = data.get("error") or data.get("reason")
-        if reason not in REFUSALS:
+        if not (400 <= resp.status_code < 500 and isinstance(reason, str) and reason):
             return unavailable
         return ConsumeResult(
             ok=False, balance=int(data.get("balance") or 0), reason=reason,
@@ -277,7 +277,7 @@ class TokensClient:
                     consumed=int(r.get("consumed") or 0),
                     duplicate=bool(r.get("duplicate")),
                 ))
-            elif (reason := r.get("reason") or r.get("error")) in REFUSALS:
+            elif isinstance(reason := r.get("reason") or r.get("error"), str) and reason:
                 out.append(ConsumeResult(
                     ok=False, balance=int(r.get("balance") or 0), reason=reason,
                 ))

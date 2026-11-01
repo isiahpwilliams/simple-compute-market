@@ -1377,15 +1377,46 @@ async def test_a_consume_without_an_answer_is_unavailable_not_exhaustion(answer)
     assert (result.ok, result.reason) == (False, "credits_unavailable")
 
 
-async def test_a_batch_item_without_a_known_refusal_is_unanswered():
+async def test_a_batch_item_is_a_refusal_only_when_it_names_its_reason():
     client, batch_answers = _scripted_authority([])
     batch_answers.append(httpx.Response(200, json={"results": [
-        {"ok": False, "reason": "internal"}, {"ok": False, "reason": "key_revoked", "balance": 0},
+        {"ok": False}, {"ok": False, "reason": "scope_required"}, {"ok": False, "reason": "key_revoked"},
     ]}))
 
-    results = await client.consume_batch([{"key_id": "a"}, {"key_id": "b"}])
+    results = await client.consume_batch([{"key_id": "a"}, {"key_id": "b"}, {"key_id": "c"}])
 
-    assert [r.reason for r in results] == ["batch_unavailable", "key_revoked"]
+    assert [r.reason for r in results] == ["batch_unavailable", "scope_required", "key_revoked"]
+
+
+async def test_a_consume_refused_with_a_named_reason_passes_it_on():
+    client, _ = _scripted_authority([httpx.Response(400, json={"error": "scope_required"})])
+
+    result = await client.consume(key_id="ak_live", amount=1)
+
+    assert (result.ok, result.reason) == (False, "scope_required")
+
+
+async def test_a_refusal_of_the_gate_s_own_call_is_502_and_leaves_the_key_untouched():
+    client, _ = _scripted_authority([httpx.Response(400, json={"error": "scope_required"})])
+    gate = TokenGate(_cfg(purchase=PurchasePointer(listing_id="lst-1")), client)
+
+    decision = await gate.authorize("Bearer ak_live.s")
+
+    assert (decision.status, decision.body) == (502, {"error": "scope_required"})
+    state = gate._states["ak_live"]
+    assert (state.exhausted, state.uncertain, state.estimated_balance) == (False, False, 100)
+
+
+async def test_a_batched_item_refused_for_the_gate_s_own_call_is_not_resent_nor_exhausts_the_key():
+    client, batch_answers = _scripted_authority([])
+    batch_answers.append(httpx.Response(200, json={"results": [{"ok": False, "reason": "scope_required"}]}))
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+
+    await gate.flush()
+
+    state = gate._states["ak_live"]
+    assert (state.pending, state.in_flight, state.exhausted) == ([], 0, False)
 
 
 async def test_an_unanswered_consume_is_503_and_the_key_is_charged_at_the_authority_until_it_answers():
@@ -1410,3 +1441,32 @@ async def test_an_unanswered_consume_is_503_and_the_key_is_charged_at_the_author
 
     assert (await gate.authorize("Bearer ak_live.s")).allowed
     assert len(state.pending) == 1
+
+
+async def test_the_middleware_shuts_the_app_down_before_raising_any_close_error():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+
+    async def unreachable(items):
+        raise httpx.ConnectError("authority unavailable")
+
+    client.consume_batch = unreachable
+    assert (await gate.authorize("Bearer ak_live.s")).allowed
+    seen: list[str] = []
+
+    async def app(scope, receive, send):
+        while (message := await receive())["type"] != "lifespan.shutdown":
+            seen.append(message["type"])
+        seen.append(message["type"])
+
+    messages = iter([{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        pass
+
+    with pytest.raises(httpx.ConnectError):
+        await TokenGateMiddleware(app, gate=gate)({"type": "lifespan"}, receive, send)
+    assert seen == ["lifespan.startup", "lifespan.shutdown"]

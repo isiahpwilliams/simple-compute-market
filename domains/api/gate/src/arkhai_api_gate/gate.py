@@ -38,6 +38,7 @@ from .client import (
     KEY_NOT_FOUND,
     KEY_OUT_OF_SCOPE,
     KEY_REVOKED,
+    REFUSALS,
     UNAUTHENTICATED_SERVICE,
     ConsumeResult,
     TokensClient,
@@ -511,13 +512,6 @@ class TokenGate:
                 service=self._cfg.scope_service,
                 resource_id=self._cfg.scope_resource_id,
             )
-            if result.reason == UNAUTHENTICATED_SERVICE:
-                # Nothing is known about the key, so neither its balance nor
-                # its credit is touched, and the buyer is not told to buy more.
-                return GateDecision(
-                    allowed=False, status=502, key_id=key_id,
-                    body={"error": UNAUTHENTICATED_SERVICE},
-                )
             if result.reason == CREDITS_UNAVAILABLE:
                 # Charged at the authority until it answers for the key again,
                 # since its balance may already include this charge. A resend
@@ -529,6 +523,14 @@ class TokenGate:
                 return GateDecision(
                     allowed=False, status=503, key_id=key_id,
                     body={"error": CREDITS_UNAVAILABLE},
+                )
+            if not result.ok and result.reason not in REFUSALS:
+                # A refusal of the gate's own call, such as an unverifiable
+                # answer or a missing scope, says nothing of the key, so
+                # neither its balance nor its credit is touched.
+                return GateDecision(
+                    allowed=False, status=502, key_id=key_id,
+                    body={"error": result.reason},
                 )
             async with self._lock:
                 state = self._states.get(key_id)
@@ -695,6 +697,10 @@ class TokenGate:
             if result.ok:
                 state.settle_balance(result.balance)
                 state.exhausted = False
+            elif result.reason not in REFUSALS:
+                # Refused for the gate's own call, not the key; not resent,
+                # since the authority would refuse it again.
+                continue
             else:
                 if result.reason not in _KEY_REFUSALS:
                     state.settle_balance(result.balance)

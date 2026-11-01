@@ -62,9 +62,12 @@ configured recheck window, after which the next request is charged at the
 authority, so a key topped up meanwhile is admitted without waiting for its
 verification to expire.
 
-Only the authority's named refusals are refusals. A consume answered with no
-result and no named refusal — an error status, an unreadable body, or no
-answer at all — MUST be denied `503 credits_unavailable`, with no purchase
+A refusal is an answer naming its reason: a `4xx` with an error code, or a
+batch item with a reason. A refusal other than of the key or its credit — such
+as `scope_required` — is of the gate's own call: the request MUST be denied
+`502` with that code, and neither the key's balance nor its credit touched. A
+consume answered with no result and no refusal — a `5xx`, an unreadable body,
+or no answer at all — MUST be denied `503 credits_unavailable`, with no purchase
 pointer, leaving the key neither exhausted nor its estimate lowered; the key's
 charges MUST then be made at the authority until it answers for the key again,
 since its balance may already include the unanswered charge.

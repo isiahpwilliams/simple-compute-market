@@ -999,7 +999,7 @@ async def test_a_requeued_key_keeps_its_age_and_does_not_starve_an_older_charge(
     ]
 
 
-async def test_closing_offers_every_charge_once_when_a_batch_answer_is_lost():
+async def test_closing_stops_draining_a_key_whose_batch_answer_is_lost():
     client = FakeClient(balance=50)
     gate = TokenGate(_cfg(flush_interval_seconds=60.0, flush_max_batch=2), client)
     real = client.consume_batch
@@ -1013,19 +1013,48 @@ async def test_closing_offers_every_charge_once_when_a_batch_answer_is_lost():
         return await real(items)
 
     client.consume_batch = lose_first
-    for n in range(5):
-        assert (await gate.authorize("Bearer ak_live.s", idempotency_key=f"idem-{n}")).allowed
+    for key, idem in [("a", "a-0"), ("a", "a-1"), ("b", "b-0"), ("a", "a-2"), ("b", "b-1")]:
+        assert (await gate.authorize(f"Bearer ak_{key}.s", idempotency_key=idem)).allowed
 
     with pytest.raises(UnsettledCharges) as unsettled:
         await asyncio.wait_for(gate.aclose(), 5)
 
+    # The later charge of the stalled key never overtakes its lost ones.
     assert [[item["idempotency_key"] for item in call] for call in client.batch_calls] == [
-        ["idem-0", "idem-1"], ["idem-2", "idem-3"], ["idem-4"],
+        ["a-0", "a-1"], ["b-0", "b-1"],
     ]
-    # The lost batch is reported rather than retried ahead of the untried charges.
-    assert [item["idempotency_key"] for item in unsettled.value.charges] == ["idem-0", "idem-1"]
-    state = gate._states["ak_live"]
-    assert (state.queued, state.in_flight) == (2, 0)
+    assert [item["idempotency_key"] for item in unsettled.value.charges] == ["a-0", "a-1", "a-2"]
+    state = gate._states["ak_a"]
+    assert (state.queued, state.in_flight) == (3, 0)
+
+
+async def test_a_second_close_waits_for_the_first_and_offers_what_it_left():
+    client = FakeClient(balance=50)
+    gate = TokenGate(_cfg(flush_interval_seconds=60.0), client)
+    real = client.consume_batch
+    arrived, release = asyncio.Event(), asyncio.Event()
+
+    async def held_then_lost(items):
+        client.batch_calls.append(list(items))
+        if len(client.batch_calls) == 1:
+            arrived.set()
+            await release.wait()
+            return [ConsumeResult(ok=False, balance=0, reason="batch_unavailable") for _ in items]
+        return await real(items)
+
+    client.consume_batch = held_then_lost
+    assert (await gate.authorize("Bearer ak_live.s", idempotency_key="idem-1")).allowed
+    first = asyncio.ensure_future(gate.aclose())
+    await arrived.wait()
+    second = asyncio.ensure_future(gate.aclose())
+    await _ticks()
+
+    assert not second.done()
+    release.set()
+    with pytest.raises(UnsettledCharges):
+        await asyncio.wait_for(first, 5)
+    await asyncio.wait_for(second, 5)
+    assert gate._states["ak_live"].pending == []
 
 
 async def test_a_batch_keeps_each_key_s_charges_in_order_and_the_rest_queued():

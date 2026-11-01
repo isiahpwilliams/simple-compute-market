@@ -662,6 +662,18 @@ steps"; D16's ordering, verification before charge).
       gained 300 runs in which a fifth of batch answers are lost; resending
       the charges closing raises leaves every key charged once for every
       request it was served. The gateway's shutdown has no test of its own.
+      An edge-case pass after these fixes found two more, both fixed. A
+      second `aclose` running alongside the first returned cleanly while
+      the first's batch was still out; closes now run one at a time, and a
+      later one offers what the earlier left once more. The drain skipped
+      only a lost batch's own charges, so the same key's later charges
+      reached the authority ahead of them; a key whose answer is lost is
+      now drained no further, and its charges are all raised. Evidence:
+      `make test-api-gate` (86) passes, with tests for both. The pass also
+      found that the client maps a consume answered non-200 without an
+      error field to `insufficient_credits`, so a transient authority error
+      denies a funded key `402` for the recheck window; that mapping
+      predates this change and is left to the owner.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

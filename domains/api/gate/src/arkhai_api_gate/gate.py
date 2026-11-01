@@ -184,10 +184,8 @@ class TokenGate:
         self._flush_task: asyncio.Task[None] | None = None
         self._closing = False
         self._closed = False
-        # A flush or synchronous charge in progress holds a charge no queue
-        # shows, so ``aclose`` waits until none is. Once closing, a charge is
-        # consumed synchronously, a direct flush takes nothing, and ``aclose``
-        # drains the queue itself.
+        self._close_lock = asyncio.Lock()
+        # Flushes and synchronous charges in progress, which ``aclose`` waits for.
         self._calls = 0
         self._idle = asyncio.Event()
         self._idle.set()
@@ -206,11 +204,17 @@ class TokenGate:
     async def aclose(self) -> None:
         """Stop the flush loop and offer every pending charge to the authority once more.
 
-        A batch whose answer is lost is not retried here, so a charge
-        further back is never crowded out by retries; the charges left
-        unanswered are raised as ``UnsettledCharges``. A transport error
-        ends the drain and propagates. Once closed, a charge is refused.
+        A key whose batch answer is lost is not drained further, so its later
+        charges never overtake the lost ones and retries never crowd out
+        another key's; its charges are raised as ``UnsettledCharges``. A
+        transport error ends the drain and propagates. Once closed, a charge
+        is refused. A concurrent call waits for this one, then offers what it
+        left once more.
         """
+        async with self._close_lock:
+            await self._close()
+
+    async def _close(self) -> None:
         self._closing = True
         if self._flush_task is not None:
             self._flush_task.cancel()
@@ -223,9 +227,14 @@ class TokenGate:
         # Nothing is queued once closing, so the drain ends when every
         # charge queued before it has been offered.
         offered: set[int] = set()
+        exclude: set[int] = set()
         try:
-            while sent := await self._flush_once(exclude=offered):
+            while sent := await self._flush_once(exclude=exclude):
                 offered.update(sent)
+                for state in self._states.values():
+                    if any(admitted in offered for admitted in state.admitted):
+                        exclude.update(state.admitted)
+                exclude.update(sent)
             await self._settled()
         finally:
             self._closed = True
@@ -458,8 +467,6 @@ class TokenGate:
                 or estimated_after <= self._cfg.low_balance_threshold
             )
             if not go_sync:
-                # Optimistic batched charge: let the request through now,
-                # settle it with the authority on the next flush.
                 state.pending.append(self._batch_item(key_id, amount, idem))
                 state.admitted.append(next(self._admissions))
                 state.queued += amount
@@ -578,11 +585,10 @@ class TokenGate:
     async def _send(self, entries: list[tuple[str, int, dict[str, Any]]]) -> bool:
         """Settle detached charges with the authority, their keys' locks held; whether all were answered."""
         items = [dict(item) for _, _, item in entries]
-        # The authority may have committed a batch whose answer never
-        # arrived, so an unanswered item is requeued unchanged: its
-        # idempotency key lets the next flush settle it without a second debit.
-        # Cancellation counts: ``aclose`` cancels a flush in flight and then
-        # flushes again. Requeueing never awaits, so it needs no lock.
+        # The authority may have committed a batch whose answer never arrived,
+        # so an unanswered item, cancellation included, is requeued unchanged:
+        # its idempotency key keeps a resend from debiting twice. Requeueing
+        # never awaits, so it needs no lock.
         try:
             results = await self._client.consume_batch(items)
             await self._lock.acquire()

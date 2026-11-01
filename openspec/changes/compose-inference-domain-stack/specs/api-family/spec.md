@@ -83,8 +83,10 @@ already served is never refused for credit a later charge took. When those
 older charges go unanswered, or the authority cannot be reached, the
 synchronous charge MUST be refused `503 batch_unavailable` without being
 consumed. Closing the gate MUST wait for every charge in progress, batched or
-synchronous, offer every queued charge to the authority, and raise the charges
-left unanswered rather than return as though they were settled. Once closed,
+synchronous, including another close; offer the queued charges in each key's
+admission order, draining no further a key whose answer is lost; and raise the
+charges left unsettled rather than return as though they were settled. Once
+closed,
 the gate MUST refuse verification and charging `503 gate_closed` without
 calling the authority.
 
@@ -103,8 +105,8 @@ calling the authority.
 #### Scenario: A batch answer is lost while the gate closes
 
 - **WHEN** the authority's answer to a batch offered while closing is lost
-- **THEN** closing raises the batch's charges as unsettled, each with its
-  idempotency key
+- **THEN** closing sends no later charge of that key and raises the key's
+  charges as unsettled, each with its idempotency key
 
 #### Scenario: A request finishes verifying after the gate has closed
 

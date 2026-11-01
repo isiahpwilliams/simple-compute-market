@@ -109,7 +109,6 @@ class ConsumeBatchItem(BaseModel):
     service: str | None = Field(default=None, min_length=1, max_length=255)
     resource_id: str | None = Field(default=None, min_length=1, max_length=255)
 
-    # Unannotated: a return annotation would replace the published serialisation schema.
     @model_serializer(mode="wrap")
     def _omit_unset_scope(self, handler: SerializerFunctionWrapHandler):
         return omit_unset(handler(self), _SCOPE_FIELDS)
@@ -149,7 +148,6 @@ class VerifyRequest(BaseModel):
     service: str | None = Field(default=None, min_length=1, max_length=255)
     resource_id: str | None = Field(default=None, min_length=1, max_length=255)
 
-    # Unannotated: a return annotation would replace the published serialisation schema.
     @model_serializer(mode="wrap")
     def _omit_unset_scope(self, handler: SerializerFunctionWrapHandler):
         return omit_unset(handler(self), _SCOPE_FIELDS)
@@ -167,7 +165,6 @@ class VerifyResponse(BaseModel):
     terms_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
     request_charge: RequestCharge | None = None
 
-    # Unannotated: a return annotation would replace the published serialisation schema.
     @model_serializer(mode="wrap")
     def _omit_unset_terms(self, handler: SerializerFunctionWrapHandler):
         return omit_unset(handler(self), ACCEPTED_TERMS_FIELDS)

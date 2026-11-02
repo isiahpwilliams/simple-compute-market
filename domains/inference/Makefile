@@ -3,9 +3,9 @@ export UV_PYTHON := $(or $(shell cat ../../.python-version 2>/dev/null),$(error 
 
 DIST_DIR ?= ../../.dist
 
-.PHONY: reinit test test-domain test-service test-storefront test-buyer
+.PHONY: reinit test test-domain test-service test-storefront test-buyer test-gateway-service
 
-test: test-domain test-service test-storefront test-buyer
+test: test-domain test-service test-storefront test-buyer test-gateway-service
 
 reinit: ## Sync this environment, refreshing the internal wheels its lock installs. Run make dist first.
 	python3 ../../scripts/uv_project.py reinit
@@ -21,3 +21,6 @@ test-storefront:
 
 test-buyer:
 	cd buyer && make test
+
+test-gateway-service:
+	cd gateway-service && make test

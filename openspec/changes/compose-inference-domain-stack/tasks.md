@@ -1690,7 +1690,7 @@ F3; D14; D16; inference delta "The gateway admits only paid requests for
 listed models", "The gateway and buyer carry verification seams for a later
 proof").
 
-- [ ] 8.1 Create `domains/inference/gateway-service/` with `pyproject.toml`
+- [x] 8.1 Create `domains/inference/gateway-service/` with `pyproject.toml`
       (`arkhai-inference-gateway-service`, hatchling, `packages =
       ["src/inference_gateway_service"]`) depending on `arkhai-api-gateway`,
       `arkhai-api-gate[signed]`, `arkhai-inference-domain`, the client of the
@@ -1698,7 +1698,7 @@ proof").
       `tests/integration/`. The architecture check reads the directory as an
       executable through the role word after its last hyphen (D2; `ARCHITECTURE.md`,
       "Package and dependency layers").
-- [ ] 8.2 `src/inference_gateway_service/config.py`: settings under the prefix
+- [x] 8.2 `src/inference_gateway_service/config.py`: settings under the prefix
       `INFERENCE_GATEWAY_` — the gate's `GateConfig.from_env(prefix,
       authority_label="inference-service")` set (authority URL, the
       `service`-role identity credential file, authority principals, verify
@@ -1708,7 +1708,7 @@ proof").
       The listing is read from the inference storefront, the listing's
       origin, through the core storefront client (D2: the storefront is the
       default source; a registry read is admitted but not built here).
-- [ ] 8.3 `src/inference_gateway_service/offering.py`: `load_offering(settings)`
+- [x] 8.3 `src/inference_gateway_service/offering.py`: `load_offering(settings)`
       selects the listing — the configured id when set, otherwise the
       storefront's open listings, every page at the route's largest size
       until a short page, filtered to the one whose card names the
@@ -1730,7 +1730,7 @@ proof").
       comparison is like for like (review 01 F1; review 02 F3; review 02 F2).
       Readiness refuses a listing that cannot be read or a card that is not
       request-priced, naming the cause.
-- [ ] 8.4 `src/inference_gateway_service/main.py`: reads the gate
+- [x] 8.4 `src/inference_gateway_service/main.py`: reads the gate
       configuration, whose `scope_service`, `scope_resource_id` and
       `amount_per_request` the gateway library takes from the offering, signs
       toward the authority as the `service` role with the gateway's own
@@ -1738,7 +1738,7 @@ proof").
       verification=admit_all)` (D16), which builds the `TokenGate` from the
       offering, and serves it under uvicorn; `/health`
       reports the offering loaded.
-- [ ] 8.5 `domains/inference/gateway-service/Dockerfile`: the lock-driven
+- [x] 8.5 `domains/inference/gateway-service/Dockerfile`: the lock-driven
       two-stage pattern with every `FROM` in the form
       `python:${PYTHON_VERSION}-slim@sha256:<digest>` — the tag the
       Python-version check requires, pinned to the digest it resolved to when
@@ -1748,7 +1748,7 @@ proof").
       mounted secret (D16 "built reproducibly from a digest-pinned base";
       inference delta "the gateway image MUST be built from digest-pinned
       inputs"; `BUILD_AND_PACKAGING.md`, "Images").
-- [ ] 8.6 Unit tests (`tests/unit/`): the projection of a fixture listing
+- [x] 8.6 Unit tests (`tests/unit/`): the projection of a fixture listing
       (`test_offering.py`) — service, scope, default charge, purchase pointer,
       and the canonical terms payload equal to the storefront projection's
       digest input for the same card; the selection over a scripted listing
@@ -1761,7 +1761,7 @@ proof").
       and charge
       (`test_config.py`); every `FROM` in the Dockerfile carries `@sha256:`
       (`test_dockerfile.py`).
-- [ ] 8.7 Integration tests (`tests/integration/test_gateway_against_authority.py`,
+- [x] 8.7 Integration tests (`tests/integration/test_gateway_against_authority.py`,
       the gateway app projected from a fixture listing, the real inference
       service root in process as the authority with a quota registered and a
       pinned key issued through `AuthorityClient`, and a controlled upstream at
@@ -1776,19 +1776,57 @@ proof").
       sale", in process); a streamed response reaches the client before the
       upstream finishes, this case against the app on a socket as 4.6 runs it
       (plan review 06 F4).
-- [ ] 8.8 Build and release: `domains/Makefile` and the root `Makefile` gain
+- [x] 8.8 Build and release: `domains/Makefile` and the root `Makefile` gain
       `dist-inference-gateway` (after `dist-api-gateway`) and
       `test-inference-gateway-service` in the aggregates;
       `build-inference-gateway` (`arkhai:inference-gateway`) in the root
       `Makefile` and in `build`; `.github/workflows/tests.yml` gains
       `inference-gateway-service`; the manifest, publish workflow, and
       `RELEASING.md` gain `arkhai-inference-gateway-service`.
-- [ ] 8.9 **Verification.** `make test-inference-gateway-service` (unit and
+- [x] 8.9 **Verification.** `make test-inference-gateway-service` (unit and
       the application's integration level against the in-process authority).
       `make test`. New project: `make lock PROJECTS=domains/inference/gateway-service`
       and `make check-packaging`. Once deployed, `e2e_inference_deal`
       exercises every status this section names through the real stub and
       authority.
+
+*Section 8 note.* The settings are `GatewaySettings` (`config.py`), read under
+`INFERENCE_GATEWAY_` with `LISTING_RETRY_SECONDS` (default 5) and an optional
+`REGISTRY_URL` for the purchase pointer; `RESOURCE_ID` and `SERVED_MODEL_NAME`
+stay required with `LISTING_ID`, and a configured listing naming another model
+or quota is refused, so a stale id cannot front the wrong offering. `main.py`'s
+`GatewayService` answers `503` with the refusal's reason until a load
+succeeds, retrying, then enters the gateway app's own lifespan and serves it;
+the image runs it as `uvicorn --factory inference_gateway_service.main:create_app`
+on port 8090, the identity credential read from
+`/run/secrets/arkhai/gateway-identity` and the upstream credential from the file
+`UPSTREAM_CREDENTIAL_FILE` names, which section 10 mounts. A missing identity
+credential fails at construction rather than retrying. Both bases are pinned
+to the digests their tags resolved to on 2026-11-02. The terms test compares
+the offering's terms digest with `accepted_terms_digest(accepted_terms(card))`,
+the function the storefront's `issuance_projection` pins with; the storefront,
+a sibling composition, is not installed for the comparison. The integration
+harness `tests/integration/authority.py` repeats the service's signed test
+composition, whose tests are not installed. Evidence: `make
+test-inference-gateway-service` (25: unit 18, integration 7) passes, including
+the not-ready-until-published case and the streamed case on a socket; `make
+check-packaging` and `make check-architecture` pass; `make
+build-inference-gateway` builds (its first attempt timed out downloading a
+wheel from the package index and passed on retry), and the image imports the
+gateway. The first lock was created with `uv lock`, since `make lock` relocks
+only an existing one, then relocked with `make lock`. `make test` has not been
+run in full.
+
+*Fix (implementation review 21 F1):* the loader retried every error, so a
+malformed signing credential, a bad model server URL, or an unreadable
+upstream credential left the gateway unready forever after startup had
+completed, and each retry built a fresh authority client. `create_app` now
+builds the signed authority client once and checks the model server URL and
+upstream credential before serving, so such an error stops startup; only
+`OfferingUnavailable` is retried, and any other load error ends the loading
+with `/health` reporting it. Evidence: `make test-inference-gateway-service`
+(30) passes; the five tests in `tests/unit/test_main.py` fail against the
+gateway before the fix.
 
 ## 9. Deterministic model stub and the `vllm` profile
 
@@ -1798,7 +1836,7 @@ deployment-state delta "Local inference stack composition", scenario "A real
 model server is wanted locally"; test-compatibility delta "The scenario MUST
 run against a deterministic model server").
 
-- [ ] 9.1 Create `e2e-tests/model-stub/` beside the end-to-end image, outside
+- [x] 9.1 Create `e2e-tests/model-stub/` beside the end-to-end image, outside
       the architecture check (`ARCHITECTURE.toml` skips `e2e-tests`): a
       `pyproject.toml` (one package under `src/`, `fastapi` and `uvicorn`), a
       `Makefile` with `reinit` and `test`, and `src/inference_model_stub/app.py`
@@ -1808,7 +1846,7 @@ run against a deterministic model server").
       when `stream` is set, and `/health` (D5). It is not a published
       distribution: like the end-to-end image, it is test tooling, so it joins
       neither the manifest nor the publish workflow.
-- [ ] 9.2 `e2e-tests/model-stub/Dockerfile` building `arkhai:inference-model-stub`
+- [x] 9.2 `e2e-tests/model-stub/Dockerfile` building `arkhai:inference-model-stub`
       on the lock-driven pattern; root `Makefile` targets
       `dist-inference-model-stub` and `build-inference-model-stub`
       (the proposal's "Build" list), the latter in `build-e2e-inference`
@@ -1820,16 +1858,30 @@ run against a deterministic model server").
       names, with the gateway's upstream switched to it by the profile and no
       other service's configuration changed (D5; deployment-state delta
       scenario "A real model server is wanted locally").
-- [ ] 9.4 Unit tests (`test_app.py` under `e2e-tests/model-stub/tests/`, the
+- [x] 9.4 Unit tests (`test_app.py` under `e2e-tests/model-stub/tests/`, the
       stub over ASGI): the model list, an exact non-streamed completion for a known
       prompt, and a streamed one whose first event precedes the last; the
       stub rejects a `model` it is not configured for with `404`, so the
       gateway's own check is observable as the one that answers first.
-- [ ] 9.5 **Verification.** `make -C e2e-tests/model-stub test` (unit),
+- [x] 9.5 **Verification.** `make -C e2e-tests/model-stub test` (unit),
       wired into `make test-e2e-unit`. `make test`. New project: `make lock
       PROJECTS=e2e-tests/model-stub` and `make check-packaging`. Once deployed,
       `e2e_inference_deal` runs against the stub; the `vllm` profile is not
       exercised by any lane, by D5, and none is owed.
+
+*Section 9 note.* The stub is `arkhai-inference-model-stub`
+(`inference_model_stub.app`), its model and inter-chunk delay set by
+`MODEL_STUB_MODEL` and `MODEL_STUB_CHUNK_DELAY_SECONDS`; a reply is a digest of
+the prompt, so the same prompt always gets the same text. 9.3 is left to
+section 10, which creates `domains/inference/compose.yml`: the stub and the
+`vllm` profile's server are reachable only through the gateway, storefront,
+and authority that file composes, so a file with the model servers alone would
+compose nothing runnable. `dist-inference-model-stub` builds the wheel into
+`.dist` only for the image, and `test-e2e-unit` runs the stub's tests. The
+first lock was created with `uv lock`, since `make lock` relocks only an
+existing one. Evidence: `make -C e2e-tests/model-stub test` (5) passes;
+`make build-inference-model-stub` builds, and the image answers `/v1/models`;
+`make check-packaging` passes. `make test` has not been run in full.
 
 ## 10. Compose stack, development identities, and build targets
 

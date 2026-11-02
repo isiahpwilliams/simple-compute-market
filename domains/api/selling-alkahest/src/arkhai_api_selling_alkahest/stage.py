@@ -25,6 +25,7 @@ from arkhai_api_selling.issuance import (
     SettleResult,
     accepted_agreement,
     delivery,
+    evidence_terms,
     persist_delivery,
     progress_result,
     settlement_evidence,
@@ -626,6 +627,7 @@ class AlkahestSellerStage:
                 owner=issuance.owner, buyer=delivery(composition.contributions, evidence).owner,
                 claimant=composition.local_principal, issuer=composition.local_principal,
                 committed_at_unix=issuance.committed_at_unix, request_digest=issuance.request_digest,
+                **evidence_terms(result["issuance_request"]),
             )
             publication = await asyncio.to_thread(composition.evidence_service.publish, body)
             await runtime.record_fulfillment_submission(

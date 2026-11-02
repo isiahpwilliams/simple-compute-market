@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+import httpx
 import pytest
 from market_identity import (
     EMPTY_BODY,
@@ -13,6 +14,9 @@ from market_identity import (
     sign_response,
 )
 
+from arkhai_api_gate.client import TokensClient, VerifyUnavailable
+from arkhai_api_gate.config import GateConfig
+from arkhai_api_gate.gate import TokenGate
 from arkhai_api_gate.signing import (
     AUTHORITY_RESPONSE_ROLE,
     AuthoritySigning,
@@ -85,3 +89,19 @@ def test_a_response_signed_by_an_untrusted_key_names_the_deployments_authority()
 
     with pytest.raises(ResponseAuthenticationError, match=rf"^HTTP 402: {LABEL} response authentication failed: "):
         signing.verify(call, headers=_headers(IMPOSTOR, call, 402), status=402)
+
+
+async def test_an_unsigned_outage_answer_to_a_verification_is_unavailable_and_records_nothing():
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
+    client = TokensClient(service_url="http://authority", http=http, signing=_signing())
+    gate = TokenGate(
+        GateConfig(service_url="http://authority", authority_label=LABEL),
+        client,
+    )
+
+    assert isinstance(await client.verify(key_id="ak_x", secret="ak_x.s"), VerifyUnavailable)
+    decision = await gate.authorize("Bearer ak_x.s")
+
+    assert (decision.status, decision.body) == (503, {"error": "credits_unavailable"})
+    assert "ak_x" not in gate._states
+    await http.aclose()

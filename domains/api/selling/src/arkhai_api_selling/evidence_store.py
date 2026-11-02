@@ -391,6 +391,8 @@ class IssuanceEvidenceService:
             issuer=body.issuer,
             request_digest=body.request_digest,
             funding_expiration_unix=body.committed_at_unix,
+            terms_digest=body.terms_digest,
+            request_charge=body.request_charge,
         )
         verify_issuance_evidence(
             self._label,

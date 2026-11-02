@@ -13,6 +13,7 @@ from typing import Any
 
 from datetime import datetime, timezone
 
+from arkhai_api.issuance import accepted_terms_digest
 from arkhai_api.labels import IssuanceLabel
 from arkhai_api.purchase import provision_terms_model
 from market_core import (
@@ -120,7 +121,22 @@ DOMAIN = MarketDomainContract(
 
 
 def with_extension(extension) -> SellingContributions:
+    """The bundle with ``extension``, called with the listing, the result, and the delivery context."""
     return replace(EXAMPLE, public_result_extension=extension)
+
+
+def with_terms(accepted_terms: Mapping[str, Any], *, request_charge: int) -> SellingContributions:
+    """The bundle whose projection pins ``accepted_terms`` and ``request_charge`` on every subject."""
+
+    def projection(listing_resource: Mapping[str, Any]) -> IssuanceSubject:
+        return replace(
+            _subject(listing_resource),
+            accepted_terms=accepted_terms,
+            terms_digest=accepted_terms_digest(dict(accepted_terms)),
+            request_charge=request_charge,
+        )
+
+    return replace(EXAMPLE, issuance_projection=projection)
 
 
 def accepted_agreement(listing_id: str) -> tuple[Agreement, bytes]:

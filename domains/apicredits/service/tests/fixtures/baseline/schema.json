@@ -4,7 +4,8 @@
     "20260811_002_canonical_owner_principals",
     "20260815_003_fulfillment_grants",
     "20260922_004_pool_advertisement_and_backing",
-    "20261005_005_reservation_release_requested_at"
+    "20261005_005_reservation_release_requested_at",
+    "20261030_006_grant_terms"
   ],
   "tables": {
     "api_keys": {
@@ -772,6 +773,48 @@
         }
       ],
       "sql": "CREATE TABLE credit_grants (\n\tid INTEGER NOT NULL, \n\tkey_id VARCHAR NOT NULL, \n\tfulfillment_id VARCHAR, \n\tnegotiation_id VARCHAR, \n\tservice VARCHAR, \n\tresource_id VARCHAR, \n\tkey_mode VARCHAR, \n\tkey_target_id VARCHAR, \n\towner_scheme VARCHAR, \n\towner_id VARCHAR, \n\trequest_digest VARCHAR, \n\tcapacity_reservation_id VARCHAR, \n\tresult_balance INTEGER, \n\tquantity INTEGER NOT NULL, \n\treason VARCHAR NOT NULL, \n\tgranted_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tFOREIGN KEY(key_id) REFERENCES api_keys (key_id), \n\tUNIQUE (fulfillment_id), \n\tUNIQUE (negotiation_id)\n)",
+      "triggers": []
+    },
+    "grant_terms": {
+      "columns": [
+        {
+          "default": null,
+          "name": "grant_id",
+          "not_null": true,
+          "primary_key": 1,
+          "type": "INTEGER"
+        },
+        {
+          "default": null,
+          "name": "accepted_terms",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "TEXT"
+        },
+        {
+          "default": null,
+          "name": "terms_digest",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "VARCHAR"
+        },
+        {
+          "default": null,
+          "name": "request_charge",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "INTEGER"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "from": "grant_id",
+          "table": "credit_grants",
+          "to": "id"
+        }
+      ],
+      "indexes": [],
+      "sql": "CREATE TABLE grant_terms (\n\tgrant_id INTEGER NOT NULL, \n\taccepted_terms TEXT NOT NULL, \n\tterms_digest VARCHAR NOT NULL, \n\trequest_charge INTEGER NOT NULL, \n\tPRIMARY KEY (grant_id), \n\tFOREIGN KEY(grant_id) REFERENCES credit_grants (id)\n)",
       "triggers": []
     },
     "resource_pools": {

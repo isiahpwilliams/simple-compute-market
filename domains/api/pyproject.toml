@@ -1,6 +1,6 @@
 [project]
 name = "arkhai-api"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 description = "The api family's vocabulary: the prepaid bearer-access purchase shape, issuance identities and digests, and signed issuance evidence, bound by every API-selling domain."
 requires-python = ">=3.12,<3.14"

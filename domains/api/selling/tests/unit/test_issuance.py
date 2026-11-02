@@ -6,7 +6,12 @@ import json
 
 import httpx
 import pytest
-from arkhai_api.issuance import IssuanceRequest, fulfillment_id, issuance_result_model
+from arkhai_api.issuance import (
+    IssuanceRequest,
+    accepted_terms_digest,
+    fulfillment_id,
+    issuance_result_model,
+)
 from arkhai_api_client import AuthorityError
 from market_core import SettlementEvidence
 
@@ -15,6 +20,7 @@ from arkhai_api_selling.issuance import (
     accepted_agreement as read_accepted_agreement,
     connection_payload,
     delivery,
+    evidence_terms,
     fulfill,
     fulfill_from_hold,
     issuance_subject,
@@ -22,7 +28,7 @@ from arkhai_api_selling.issuance import (
     prepare_issuance_request,
     settlement_evidence,
 )
-from tests.bundles import BUYER, CLAIMANT, EXAMPLE, accepted_agreement, with_extension
+from tests.bundles import BUYER, CLAIMANT, EXAMPLE, accepted_agreement, with_extension, with_terms
 
 IssuanceResult = issuance_result_model(EXAMPLE.label)
 LISTING = {"product": "alpha", "quota": "quota-a", "url": "https://alpha.example"}
@@ -302,6 +308,30 @@ async def test_the_hold_row_stays_until_a_retry_completes():
     assert store.deleted == ["neg-payment"]
 
 
+# Accepted terms
+
+
+def test_an_unpinned_subject_produces_an_unpinned_request():
+    request = prepare_issuance_request(EXAMPLE, evidence=_evidence())
+    assert (request.accepted_terms, request.terms_digest, request.request_charge) == (None, None, None)
+    assert evidence_terms(request) == {}
+
+
+def test_a_subjects_terms_reach_the_request_and_its_evidence_terms():
+    terms = {"rate": {"per_request": 2}}
+    bundle = with_terms(terms, request_charge=2)
+
+    request = prepare_issuance_request(bundle, evidence=_evidence())
+
+    assert request.accepted_terms == terms
+    assert request.terms_digest == accepted_terms_digest(terms)
+    assert request.request_charge == 2
+    assert request.request_digest != prepare_issuance_request(EXAMPLE, evidence=_evidence()).request_digest
+    assert evidence_terms(request) == {
+        "terms_digest": accepted_terms_digest(terms), "request_charge": 2,
+    }
+
+
 # The public result
 
 
@@ -331,7 +361,7 @@ async def _no_secret(request):
 
 
 async def test_a_public_result_extension_rides_beside_the_connection_payload_and_never_the_secret():
-    bundle = with_extension(lambda listing, result: {"materialization": {"product": listing["product"], "grant": result.grant_id}})
+    bundle = with_extension(lambda listing, result, _context: {"materialization": {"product": listing["product"], "grant": result.grant_id}})
     result = await fulfill(bundle, evidence=_evidence(), credits_client=_Authority(_no_secret), stage_event=_events()[1])
     store = _ProgressStore()
 
@@ -343,9 +373,27 @@ async def test_a_public_result_extension_rides_beside_the_connection_payload_and
     assert "secret" not in json.dumps(public)
 
 
+async def test_an_extension_receives_the_deliverys_settlement_context():
+    seen = []
+
+    def extension(listing, result, context):
+        seen.append((listing["product"], result.grant_id, context.mechanism, context.settlement_ref))
+        return {"materialization": {"escrow_uid": context.settlement_ref}}
+
+    base = _evidence("neg-ctx")
+    evidence = SettlementEvidence(base.negotiation_id, base.mechanism, "escrow-ctx", base.status, base.evidence)
+    result = await fulfill(
+        with_extension(extension), evidence=evidence,
+        credits_client=_Authority(_no_secret), stage_event=_events()[1],
+    )
+
+    assert seen == [("alpha", fulfillment_id(EXAMPLE.label, "neg-ctx"), "opaque.future.v1", "escrow-ctx")]
+    assert result["public_extension"] == {"materialization": {"escrow_uid": "escrow-ctx"}}
+
+
 @pytest.mark.parametrize("key", ["secret", "tenant_credentials", "key_id"])
 async def test_an_extension_naming_a_private_or_existing_field_is_refused(key):
-    bundle = with_extension(lambda _listing, _result: {key: "x"})
+    bundle = with_extension(lambda _listing, _result, _context: {key: "x"})
 
     result = await fulfill(bundle, evidence=_evidence(), credits_client=_Authority(), stage_event=_events()[1])
 
@@ -414,7 +462,7 @@ async def test_a_replaced_hold_still_answers_the_request():
 
 async def test_an_extension_is_handed_the_result_without_its_secret():
     seen = []
-    bundle = with_extension(lambda _listing, issued: seen.append(issued) or {})
+    bundle = with_extension(lambda _listing, issued, _context: seen.append(issued) or {})
 
     result = await fulfill(bundle, evidence=_evidence(), credits_client=_Authority(), stage_event=_events()[1])
 
@@ -475,7 +523,7 @@ async def test_the_hold_row_stays_when_the_grants_state_is_unknown():
 )
 async def test_an_unsafe_extension_is_refused_before_the_delivery_reaches_its_stage(extension, message):
     events, stage_event = _events()
-    bundle = with_extension(lambda _listing, _result: extension)
+    bundle = with_extension(lambda _listing, _result, _context: extension)
 
     result = await fulfill(bundle, evidence=_evidence(), credits_client=_Authority(), stage_event=stage_event)
 

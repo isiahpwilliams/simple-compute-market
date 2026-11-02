@@ -76,15 +76,23 @@ class TokenGateMiddleware:
         await _send_json(send, decision.status, decision.body or {})
 
     async def _lifespan(self, scope: Scope, receive: Receive, send: Send) -> None:
+        failed: list[Exception] = []
+
         async def outer_receive() -> dict[str, Any]:
             message = await receive()
             if message["type"] == "lifespan.startup":
                 self.gate.start()
             elif message["type"] == "lifespan.shutdown":
-                await self.gate.aclose()
+                # Raised once the app has shut down too.
+                try:
+                    await self.gate.aclose()
+                except Exception as error:  # noqa: BLE001 — re-raised below
+                    failed.append(error)
             return message
 
         await self.app(scope, outer_receive, send)
+        if failed:
+            raise failed[0]
 
 
 def _header(scope: Scope, name: bytes) -> str | None:

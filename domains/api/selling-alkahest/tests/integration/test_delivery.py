@@ -9,12 +9,14 @@ reference, waits for an operator with the delivered credential kept privately.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from arkhai_api.issuance import IssuanceRequest, issuance_result_model
+from arkhai_api.issuance import IssuanceRequest, accepted_terms_digest, issuance_result_model
 from arkhai_api_client import AuthorityError
 from arkhai_api_selling.evidence_store import IssuanceEvidenceRepository, IssuanceEvidenceService
 from arkhai_api_selling.issuance import fulfill_from_hold, project_progress
@@ -92,7 +94,7 @@ class Chain:
 
 
 class Harness:
-    def __init__(self, tmp_path, authority: Authority) -> None:
+    def __init__(self, tmp_path, authority: Authority, contributions=EXAMPLE) -> None:
         self.db = StorefrontSQLiteClient(str(tmp_path / "storefront.db"), EXAMPLE)
         self.repository = SettlementSQLiteRepository(self.db.db_path, apply_migrations=False)
         self.runtime = SettlementRuntime(self.repository, {})
@@ -108,13 +110,13 @@ class Harness:
 
         async def fulfill(*, evidence, retry_uncertain, db, credits_client):
             return await fulfill_from_hold(
-                EXAMPLE, evidence=evidence, db=db, credits_client=credits_client,
+                contributions, evidence=evidence, db=db, credits_client=credits_client,
                 stage_event=self._event, apply_failure_policy=self._failure,
                 retry_uncertain=retry_uncertain,
             )
 
         self.composition = SimpleNamespace(
-            contributions=EXAMPLE, domain=SimpleNamespace(fulfillment=SimpleNamespace(fulfill=fulfill)),
+            contributions=contributions, domain=SimpleNamespace(fulfillment=SimpleNamespace(fulfill=fulfill)),
             credits_client=authority, evidence_service=evidence_service, runtime=self.runtime,
             repository=self.repository,
             local_principal=SELLER.identity,
@@ -219,6 +221,39 @@ async def test_a_published_attestation_is_recorded_and_completes_the_fulfillment
     assert operation["receipt"] == {"fulfillment_ref": "0xattestation"}
     assert (await h.obligation_record()).fulfillment_ref == "0xattestation"
     assert len(chain.submissions) == 1 and chain.submissions[0][1] == ESCROW_UID
+
+
+async def test_the_published_evidence_carries_the_terms_its_request_pinned(tmp_path):
+    terms = {"rate": {"per_request": 2}}
+
+    def pinned(listing_resource):
+        return replace(
+            EXAMPLE.issuance_projection(listing_resource),
+            accepted_terms=terms, terms_digest=accepted_terms_digest(terms), request_charge=2,
+        )
+
+    authority = Authority()
+    h = Harness(tmp_path, authority, replace(EXAMPLE, issuance_projection=pinned))
+    await h.accept()
+    chain = Chain()
+
+    outcome = await h.deliver(chain)
+
+    assert outcome.status == "fulfilled"
+    body = json.loads(chain.submissions[0][0])["body"]
+    assert (body["terms_digest"], body["request_charge"]) == (accepted_terms_digest(terms), 2)
+    assert body["request_digest"] == authority.requests[0].request_digest
+    assert "accepted_terms" not in body
+
+
+async def test_unpinned_published_evidence_carries_no_terms(tmp_path):
+    h = Harness(tmp_path, Authority())
+    await h.accept()
+    chain = Chain()
+
+    await h.deliver(chain)
+
+    assert not {"terms_digest", "request_charge"} & set(json.loads(chain.submissions[0][0])["body"])
 
 
 async def test_an_unknown_attestation_outcome_parks_the_deal_with_its_credential_kept(tmp_path):

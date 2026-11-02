@@ -56,6 +56,15 @@ class GateConfig:
     them on the interval; charges that would bring the estimated
     balance to within the threshold of zero stay synchronous so
     exhaustion still surfaces immediately.
+
+    A key the authority refused for insufficient credit is answered ``402``
+    by the gate itself for ``exhausted_recheck_seconds``; the next request
+    after that is charged at the authority, so a top-up is seen within the
+    window rather than after the verification expires.
+
+    ``scope_service`` and ``scope_resource_id`` name the offering a key must
+    have been issued for; the authority refuses any other key uncharged. Unset,
+    the gate sends no scope and any key of the authority is admitted.
     """
 
     service_url: str
@@ -67,11 +76,14 @@ class GateConfig:
     max_response_skew: int = 300
     amount_per_request: int = 1
     verify_ttl_seconds: float = 30.0
+    exhausted_recheck_seconds: float = 5.0
     low_balance_threshold: int = 0
     flush_interval_seconds: float = 0.0
     flush_max_batch: int = 256
     request_timeout_seconds: float = 10.0
     purchase: PurchasePointer = field(default_factory=PurchasePointer)
+    scope_service: str | None = None
+    scope_resource_id: str | None = None
 
     @property
     def signing_enabled(self) -> bool:
@@ -124,9 +136,10 @@ class GateConfig:
         ``AUTHORITY_PRINCIPALS``, ``MAX_RESPONSE_SKEW``,
         ``AMOUNT_PER_REQUEST``, ``VERIFY_TTL_SECONDS``,
         ``LOW_BALANCE_THRESHOLD``, ``FLUSH_INTERVAL_SECONDS``,
-        ``FLUSH_MAX_BATCH``, ``REQUEST_TIMEOUT_SECONDS``, and the purchase
+        ``FLUSH_MAX_BATCH``, ``REQUEST_TIMEOUT_SECONDS``, the purchase
         pointer ``PURCHASE_SERVICE_NAME`` / ``PURCHASE_LISTING_ID`` /
-        ``PURCHASE_STOREFRONT_URL`` / ``PURCHASE_REGISTRY_URL``.
+        ``PURCHASE_STOREFRONT_URL`` / ``PURCHASE_REGISTRY_URL``, and the key
+        scope ``SCOPE_SERVICE`` / ``SCOPE_RESOURCE_ID``.
         """
 
         def _get(name: str, default: str = "") -> str:
@@ -192,6 +205,7 @@ class GateConfig:
             max_response_skew=_int("MAX_RESPONSE_SKEW", 300),
             amount_per_request=_int("AMOUNT_PER_REQUEST", 1),
             verify_ttl_seconds=_float("VERIFY_TTL_SECONDS", 30.0),
+            exhausted_recheck_seconds=_float("EXHAUSTED_RECHECK_SECONDS", 5.0),
             low_balance_threshold=_int("LOW_BALANCE_THRESHOLD", 0),
             flush_interval_seconds=_float("FLUSH_INTERVAL_SECONDS", 0.0),
             flush_max_batch=_int("FLUSH_MAX_BATCH", 256),
@@ -202,4 +216,6 @@ class GateConfig:
                 storefront_url=_get("PURCHASE_STOREFRONT_URL") or None,
                 registry_url=_get("PURCHASE_REGISTRY_URL") or None,
             ),
+            scope_service=_get("SCOPE_SERVICE") or None,
+            scope_resource_id=_get("SCOPE_RESOURCE_ID") or None,
         )

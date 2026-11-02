@@ -52,6 +52,90 @@ charge without charging a request it then refuses.
 - **THEN** the key's balance is unchanged and the authority saw only the
   verification
 
+### Requirement: The gate settles an authority refusal by what it refused
+
+A refusal of the key itself — revoked, out of scope, or unknown — MUST deny
+the key from then on as its verification would, whether it came from a single
+charge or a batch, and MUST NOT be reported as exhausted credit. A refusal of
+the key's credit MUST be answered `402` by the gate itself only for a
+configured recheck window, after which the next request is charged at the
+authority, so a key topped up meanwhile is admitted without waiting for its
+verification to expire.
+
+A refusal is an answer naming its reason: a `4xx` with an error code, or a
+batch item with a reason. A refusal other than of the key or its credit — such
+as `scope_required` — is of the gate's own call: the request MUST be denied
+`502` with that code, and neither the key's balance nor its credit touched. A
+consume answered with no result and no refusal — a `5xx`, an unreadable body,
+or no answer at all — MUST be denied `503 credits_unavailable`, with no purchase
+pointer, leaving the key neither exhausted nor its estimate lowered; the key's
+charges MUST then be made at the authority until it answers for the key again,
+since its balance may already include the unanswered charge.
+A verification with no readable answer — a transport error, a `5xx`, an
+unreadable body, a field not of its declared type, or an answer that cannot be
+authenticated as the authority's — MUST be denied `503
+credits_unavailable` and recorded nowhere, so it neither invalidates a good
+key nor admits a refused one.
+
+#### Scenario: A batch reports the key revoked
+
+- **WHEN** a batch settles with the authority answering one of its items
+  `key_revoked`
+- **THEN** the key's next request is denied `403 key_revoked`, not `402`
+
+#### Scenario: A key exhausted and then topped up
+
+- **WHEN** the authority refuses a key for insufficient credit and the key is
+  topped up before its verification expires
+- **THEN** requests inside the recheck window are denied `402` without an
+  authority call, and the first request after it is charged and admitted
+
+#### Scenario: A consume goes unanswered
+
+- **WHEN** the authority answers a consume `503` with no named refusal
+- **THEN** the request is denied `503 credits_unavailable` without a purchase
+  pointer, and the key's next request is charged at the authority even though
+  its estimate would admit it optimistically
+
+### Requirement: The gate charges a key in the order it admitted the key's requests
+
+A charge the gate sends to the authority synchronously MUST reach it after
+every charge of the same key admitted before it and still queued, so a request
+already served is never refused for credit a later charge took. When those
+older charges go unanswered, or the authority cannot be reached, the
+synchronous charge MUST be refused `503 batch_unavailable` without being
+consumed. Closing the gate MUST wait for every charge in progress, batched or
+synchronous, including another close; offer the queued charges in each key's
+admission order, draining no further a key whose answer is lost; and raise the
+charges left unsettled rather than return as though they were settled. Once
+closed,
+the gate MUST refuse verification and charging `503 gate_closed` without
+calling the authority.
+
+#### Scenario: A queued charge and a later synchronous charge share the last credit
+
+- **WHEN** a key with 10 credits has a 6-credit charge queued and a second
+  6-credit request falls below the low-balance threshold
+- **THEN** the queued charge is settled first, and the second request is
+  denied `402`
+
+#### Scenario: A synchronous charge arrives while the gate closes
+
+- **WHEN** a charge is being consumed synchronously while the gate closes
+- **THEN** closing returns only after the authority has answered it
+
+#### Scenario: A batch answer is lost while the gate closes
+
+- **WHEN** the authority's answer to a batch offered while closing is lost
+- **THEN** closing sends no later charge of that key and raises the key's
+  charges as unsettled, each with its idempotency key
+
+#### Scenario: A request finishes verifying after the gate has closed
+
+- **WHEN** a request's verification completes after closing has returned
+- **THEN** its charge is refused `503 gate_closed` and the authority is not
+  called
+
 ### Requirement: The public-result extension receives the delivery's settlement context
 
 The selling library MUST call a domain's public-result extension with the

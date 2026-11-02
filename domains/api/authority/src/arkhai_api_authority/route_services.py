@@ -14,8 +14,10 @@ from arkhai_api_authority.keys_service import (
     INSUFFICIENT_CREDITS,
     KEY_NOT_FOUND,
     KEY_NOT_OWNED,
+    KEY_OUT_OF_SCOPE,
     KEY_REVOKED,
     QUOTA_EXHAUSTED,
+    TERMS_DIGEST_MISMATCH,
     IssuanceError,
     KeysService,
 )
@@ -30,10 +32,13 @@ _ISSUANCE_STATUS = {
     KEY_REVOKED: 409,
     QUOTA_EXHAUSTED: 409,
     FULFILLMENT_CONFLICT: 409,
+    KEY_OUT_OF_SCOPE: 409,
+    TERMS_DIGEST_MISMATCH: 422,
 }
 _CONSUME_STATUS = {
     KEY_NOT_FOUND: 404,
     KEY_REVOKED: 403,
+    KEY_OUT_OF_SCOPE: 403,
     INSUFFICIENT_CREDITS: 402,
 }
 
@@ -71,6 +76,9 @@ class AuthorityRouteService:
                 key_id=request.key.key_id,
                 request_digest=request.request_digest,
                 capacity_reservation_id=request.capacity_reservation_id,
+                accepted_terms=request.accepted_terms,
+                terms_digest=request.terms_digest,
+                request_charge=request.request_charge,
             )
         except IssuanceError as exc:
             logger.info("[ISSUANCE] refused fulfillment=%s: %s", request.fulfillment_id, exc.reason)
@@ -94,9 +102,23 @@ class AuthorityRouteService:
             raise RouteRefusal(404, {"detail": "issuance not found"})
         return result
 
-    def consume(self, key_id: str, *, amount: int, idempotency_key: str | None) -> dict[str, Any]:
+    def consume(
+        self,
+        key_id: str,
+        *,
+        amount: int,
+        idempotency_key: str | None,
+        service: str | None = None,
+        resource_id: str | None = None,
+    ) -> dict[str, Any]:
         try:
-            outcome = self._keys.consume(key_id=key_id, amount=amount, idempotency_key=idempotency_key)
+            outcome = self._keys.consume(
+                key_id=key_id,
+                amount=amount,
+                idempotency_key=idempotency_key,
+                service=service,
+                resource_id=resource_id,
+            )
         except ValueError as exc:
             raise RouteRefusal(422, {"detail": str(exc)}) from exc
         if outcome.get("ok"):
@@ -110,8 +132,17 @@ class AuthorityRouteService:
         """Items are independent; a failed item is an outcome in order, not a refusal."""
         return {"results": self._keys.consume_batch(items)}
 
-    def verify(self, key_id: str, *, secret: str) -> dict[str, Any]:
-        return self._keys.verify(key_id=key_id, secret=secret)
+    def verify(
+        self,
+        key_id: str,
+        *,
+        secret: str,
+        service: str | None = None,
+        resource_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._keys.verify(
+            key_id=key_id, secret=secret, service=service, resource_id=resource_id
+        )
 
     def list_keys(self, *, status: str | None, owner_id: str | None) -> dict[str, Any]:
         keys = self._keys.list_keys(status=status, owner_id=owner_id)

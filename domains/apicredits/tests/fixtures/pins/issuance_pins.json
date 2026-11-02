@@ -192,5 +192,59 @@
       },
       "name": "new-key-eip191-other-service"
     }
+  ],
+  "inference_cases": [
+    {
+      "expected": {
+        "api_credits_request_digest": "sha256:193becec432cdfb099b529709c30c2da4cb8405a368a88d7df7a306b3de2895d",
+        "evidence_digest": "sha256:4db15731d8d72a239b03391b606e2d35acb96a89b71a5f9df7958e6e3f75806f",
+        "fulfillment_id": "inference-fulfillment.v1:644cb5919e0041744b136111957721929baa66d9558d4cbfe34cb1f879b1baf2",
+        "issuance_request": "{\"accepted_terms\":{\"attestation\":null,\"rate_card\":{\"asset\":\"USD/6\",\"cached_prompt_per_mtok\":0,\"completion_per_mtok\":0,\"image_per_unit\":0,\"prompt_per_mtok\":0,\"request_credits\":1}},\"capacity_reservation_id\":null,\"fulfillment_id\":\"inference-fulfillment.v1:644cb5919e0041744b136111957721929baa66d9558d4cbfe34cb1f879b1baf2\",\"key\":{\"key_id\":null,\"mode\":\"new\"},\"negotiation_id\":\"neg-pin-inference-1\",\"owner\":{\"identifier\":\"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ\",\"scheme\":\"ed25519\"},\"quantity\":2000000,\"request_charge\":1,\"request_digest\":\"sha256:98f88a762cb29c8347fb83b860e1e28d68696666c9f84157daf2a6d5d4986ac4\",\"resource_id\":\"inference-quota\",\"schema\":\"arkhai.inference.issuance-request.v1\",\"service\":\"qwen2.5-0.5b-instruct\",\"terms_digest\":\"sha256:35562d954a9d6ac6c3e55b5c806b0b285f45b743f50b97c109a1939e17f12477\"}",
+        "portable_fulfillment_ref": "{\"attestation_uid\":\"attestation:pin-inference-1\",\"evidence_digest\":\"sha256:4db15731d8d72a239b03391b606e2d35acb96a89b71a5f9df7958e6e3f75806f\",\"resolver_id\":\"inference-resolver.v1\",\"schema\":\"arkhai.inference.portable-fulfillment-ref.v1\"}",
+        "request_digest": "sha256:98f88a762cb29c8347fb83b860e1e28d68696666c9f84157daf2a6d5d4986ac4",
+        "signed_evidence": "{\"body\":{\"buyer\":{\"identifier\":\"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ\",\"scheme\":\"ed25519\"},\"capability\":\"inference.issuance.v1\",\"claimant\":{\"identifier\":\"Q83AI9ItX54QfRoGk0V9NdHRDrfSHHIRkvVvXeQGZdM\",\"scheme\":\"ed25519\"},\"committed_at_unix\":2000000500,\"condition_anchor\":\"condition:pin-inference-1\",\"domain\":\"inference\",\"fulfillment_id\":\"inference-fulfillment.v1:644cb5919e0041744b136111957721929baa66d9558d4cbfe34cb1f879b1baf2\",\"grant_id\":\"inference-fulfillment.v1:644cb5919e0041744b136111957721929baa66d9558d4cbfe34cb1f879b1baf2\",\"issuer\":{\"identifier\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg\",\"scheme\":\"ed25519\"},\"key_id\":\"ik_0123456789abcdef\",\"key_mode\":\"new\",\"obligation_ref\":\"obligation:pin-inference-1\",\"owner\":{\"identifier\":\"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ\",\"scheme\":\"ed25519\"},\"protocol\":\"arkhai.inference.issuance-evidence.v1\",\"quantity\":2000000,\"request_charge\":1,\"request_digest\":\"sha256:98f88a762cb29c8347fb83b860e1e28d68696666c9f84157daf2a6d5d4986ac4\",\"resource_id\":\"inference-quota\",\"schema_version\":\"1\",\"service\":\"qwen2.5-0.5b-instruct\",\"status\":\"committed\",\"terms_digest\":\"sha256:35562d954a9d6ac6c3e55b5c806b0b285f45b743f50b97c109a1939e17f12477\"},\"proof\":{\"scheme\":\"ed25519\",\"value\":\"RRF3GwVO9EalS4IggEk7aRiX1Cv3Ry6mLE5jp3J0rKo2ehrz_1vR2eb0jDwdlIqkY7Hgq8elDOA5jVx84xS4BQ\"}}"
+      },
+      "inputs": {
+        "accepted_terms": {
+          "attestation": null,
+          "rate_card": {
+            "asset": "USD/6",
+            "cached_prompt_per_mtok": 0,
+            "completion_per_mtok": 0,
+            "image_per_unit": 0,
+            "prompt_per_mtok": 0,
+            "request_credits": 1
+          }
+        },
+        "attestation_uid": "attestation:pin-inference-1",
+        "claimant": {
+          "identifier": "Q83AI9ItX54QfRoGk0V9NdHRDrfSHHIRkvVvXeQGZdM",
+          "scheme": "ed25519"
+        },
+        "committed_at_unix": 2000000500,
+        "condition_anchor": "condition:pin-inference-1",
+        "issuer": {
+          "identifier": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+          "scheme": "ed25519"
+        },
+        "key": {
+          "mode": "new"
+        },
+        "key_id": "ik_0123456789abcdef",
+        "name": "inference-new-key-with-terms",
+        "negotiation_id": "neg-pin-inference-1",
+        "obligation_ref": "obligation:pin-inference-1",
+        "owner": {
+          "identifier": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+          "scheme": "ed25519"
+        },
+        "quantity": 2000000,
+        "request_charge": 1,
+        "resolver_id": "inference-resolver.v1",
+        "resource_id": "inference-quota",
+        "service": "qwen2.5-0.5b-instruct"
+      },
+      "name": "inference-new-key-with-terms"
+    }
   ]
 }

@@ -315,6 +315,11 @@
       "wheel_only": true
     },
     {
+      "key": "inference-gateway-service",
+      "path": "domains/inference/gateway-service",
+      "dist": "arkhai-inference-gateway-service"
+    },
+    {
       "key": "apicredits-buyer",
       "path": "domains/apicredits/buyer",
       "dist": "arkhai-apicredits-buyer",

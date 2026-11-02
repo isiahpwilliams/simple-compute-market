@@ -5,8 +5,8 @@ export UV_PYTHON := $(or $(shell cat ../.python-version 2>/dev/null),$(error ../
 	dist-bare-metal-storefront dist-storefront dist-provisioning-operator-client dist-provisioning-adapters \
 	dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront \
 	dist-apicredits-sample-app dist-apicredits-buyer \
-	dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-buyer test-provisioning-iac test-provisioning-adapter test-storefront \
-	test-bare-metal test-compute test-api test-api-client test-api-authority test-api-selling test-api-selling-alkahest test-api-selling-arkhai-payments test-api-buying test-api-buying-alkahest test-api-buying-arkhai-payments test-api-gate test-api-gateway test-vms-domain test-vms-buyer test-apicredits test-inference test-inference-service test-inference-storefront test-inference-buyer
+	dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-inference-gateway dist-buyer test-provisioning-iac test-provisioning-adapter test-storefront \
+	test-bare-metal test-compute test-api test-api-client test-api-authority test-api-selling test-api-selling-alkahest test-api-selling-arkhai-payments test-api-buying test-api-buying-alkahest test-api-buying-arkhai-payments test-api-gate test-api-gateway test-vms-domain test-vms-buyer test-apicredits test-inference test-inference-service test-inference-storefront test-inference-buyer test-inference-gateway-service
 
 DIST_DIR ?= $(abspath ../.dist)
 
@@ -15,7 +15,7 @@ dist: dist-compute dist-api dist-api-contracts dist-api-client dist-api-authorit
 	dist-storefront dist-provisioning-operator-client dist-provisioning-adapters \
 	dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront \
 	dist-apicredits-sample-app dist-apicredits-buyer \
-	dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-buyer ## Build every domains-scoped wheel
+	dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-inference-gateway dist-buyer ## Build every domains-scoped wheel
 
 # ---------------------------------------------------------------------------
 # Dist -- leaf wheel-build recipes for domains/-scoped packages, mirroring
@@ -222,6 +222,12 @@ dist-inference-buyer: dist-inference-domain dist-api-buying dist-api-buying-alka
 	@ls $(DIST_DIR)/arkhai_inference_buyer-*-none-any.whl > /dev/null 2>&1 || \
 		(echo "ERROR: arkhai-inference-buyer produced a platform-specific wheel -- must build inside Docker" && exit 1)
 
+dist-inference-gateway: dist-inference-domain dist-api-gateway ## Build arkhai-inference-gateway-service wheel into .dist/
+	-mkdir -p $(DIST_DIR)
+	cd inference/gateway-service && uv build --wheel --out-dir $(DIST_DIR)
+	@ls $(DIST_DIR)/arkhai_inference_gateway_service-*-none-any.whl > /dev/null 2>&1 || \
+		(echo "ERROR: arkhai-inference-gateway-service produced a platform-specific wheel -- must build inside Docker" && exit 1)
+
 dist-buyer: dist-vms-listings dist-vms-negotiation dist-vms-settlement ## Build arkhai-vms-buyer (the `market` CLI) wheel into .dist/
 	-mkdir -p $(DIST_DIR)
 	cd vms/buyer && uv build --wheel --out-dir $(DIST_DIR)
@@ -316,6 +322,9 @@ test-inference-storefront: ## Inference storefront tests: unit and application i
 
 test-inference-buyer: ## Inference buyer plugin tests: unit
 	cd inference && $(MAKE) test-buyer
+
+test-inference-gateway-service: ## Inference gateway tests: unit and integration against the in-process authority
+	cd inference && $(MAKE) test-gateway-service
 
 
 test-provisioning-adapter: ## VM provisioning adapter tests against built wheels

@@ -1817,6 +1817,17 @@ gateway. The first lock was created with `uv lock`, since `make lock` relocks
 only an existing one, then relocked with `make lock`. `make test` has not been
 run in full.
 
+*Fix (implementation review 21 F1):* the loader retried every error, so a
+malformed signing credential, a bad model server URL, or an unreadable
+upstream credential left the gateway unready forever after startup had
+completed, and each retry built a fresh authority client. `create_app` now
+builds the signed authority client once and checks the model server URL and
+upstream credential before serving, so such an error stops startup; only
+`OfferingUnavailable` is retried, and any other load error ends the loading
+with `/health` reporting it. Evidence: `make test-inference-gateway-service`
+(30) passes; the five tests in `tests/unit/test_main.py` fail against the
+gateway before the fix.
+
 ## 9. Deterministic model stub and the `vllm` profile
 
 Delivers the OpenAI-style model server the lane runs without a GPU or a

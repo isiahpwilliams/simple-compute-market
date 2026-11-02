@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
-from arkhai_api_gate import GateConfig, TokensClient
-from arkhai_api_gateway import admit_all, create_gateway_app
+from arkhai_api_gate import GateConfig, PurchasePointer, TokensClient
+from arkhai_api_gateway import GatewayOffering, admit_all, create_gateway_app, read_upstream_credential
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from storefront_client.client import StorefrontClient
 
 from inference_gateway_service.config import GatewaySettings, gate_config
-from inference_gateway_service.offering import load_offering
+from inference_gateway_service.offering import OfferingUnavailable, load_offering
+
+logger = logging.getLogger(__name__)
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -23,10 +26,11 @@ Send = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class GatewayService:
-    """Answers ``503`` until ``load`` builds the gateway, retrying it, then serves the gateway.
+    """Answers ``503`` until ``load`` builds the gateway, then serves the gateway.
 
     The gateway can start before the storefront has published its listing, so
-    a refusal is reported by ``/health`` and retried rather than fatal.
+    ``OfferingUnavailable`` is reported by ``/health`` and retried. Any other
+    error ends the loading: it is not one waiting can cure.
     """
 
     def __init__(self, load: Callable[[], Awaitable[FastAPI]], *, retry_seconds: float) -> None:
@@ -72,11 +76,16 @@ class GatewayService:
         while True:
             try:
                 app = await self._load()
-            except Exception as error:  # noqa: BLE001 — reported by /health and retried
-                self._reason = str(error) or repr(error)
+            except OfferingUnavailable as error:
+                self._reason = str(error)
                 self.refused.set()
                 await asyncio.sleep(self._retry_seconds)
                 continue
+            except Exception as error:  # noqa: BLE001 — reported by /health, not retried
+                logger.exception("the gateway failed to load and will not retry")
+                self._reason = f"failed: {error!r}"
+                self.refused.set()
+                return
             running = app.router.lifespan_context(app)
             await running.__aenter__()
             self._running = running
@@ -105,8 +114,27 @@ def create_app(
     """The gateway for the listing ``settings`` names, signing toward its authority as ``service``."""
     settings = settings or GatewaySettings.from_env()
     gate = gate or gate_config()
-    if authority is None and not gate.signing_enabled:
-        raise ValueError("the gateway signs toward its authority: no identity credential is configured")
+    # Everything the listing does not supply is checked here, before serving,
+    # so a configuration error stops startup rather than every retry.
+    if authority is None:
+        if not gate.signing_enabled:
+            raise ValueError("the gateway signs toward its authority: no identity credential is configured")
+        authority = TokensClient(
+            service_url=gate.service_url,
+            admin_key=gate.admin_key,
+            timeout=gate.request_timeout_seconds,
+            signing=gate.build_signing(),
+        )
+    GatewayOffering(
+        service=settings.served_model_name,
+        scope_service=settings.served_model_name,
+        scope_resource_id=settings.resource_id,
+        default_charge=0,
+        purchase=PurchasePointer(),
+        upstream_base_url=settings.upstream_base_url,
+    )
+    if settings.upstream_credential_file is not None:
+        read_upstream_credential(settings.upstream_credential_file)
 
     async def load() -> FastAPI:
         storefront = StorefrontClient(settings.storefront_url, transport=storefront_transport)

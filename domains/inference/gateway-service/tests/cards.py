@@ -54,14 +54,14 @@ def summary(listing_id: str = "lst-1", **fields: Any) -> ListingSummary:
 
 
 def settings(**fields: Any) -> GatewaySettings:
-    return GatewaySettings(
-        storefront_url=STOREFRONT_URL,
-        registry_url=REGISTRY_URL,
-        resource_id=QUOTA,
-        served_model_name=SERVED_MODEL,
-        upstream_base_url=UPSTREAM_URL,
-        **fields,
-    )
+    defaults: dict[str, Any] = {
+        "storefront_url": STOREFRONT_URL,
+        "registry_url": REGISTRY_URL,
+        "resource_id": QUOTA,
+        "served_model_name": SERVED_MODEL,
+        "upstream_base_url": UPSTREAM_URL,
+    }
+    return GatewaySettings(**{**defaults, **fields})
 
 
 class Storefront:

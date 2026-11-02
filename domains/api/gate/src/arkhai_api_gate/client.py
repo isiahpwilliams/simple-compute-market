@@ -223,10 +223,9 @@ class TokensClient:
                 terms_digest=_text(data, "terms_digest"),
                 request_charge=None if data.get("request_charge") is None else _whole(data, "request_charge"),
             )
-        except ResponseAuthenticationError:
-            # The gate denies rather than failing open.
-            return VerifyResult(valid=False, status=None, balance=0)
-        except (httpx.TransportError, KeyError, ValueError):
+        except (ResponseAuthenticationError, httpx.TransportError, KeyError, ValueError):
+            # An answer that cannot be authenticated, an unsigned proxy outage
+            # included, says nothing about the key.
             return _UNAVAILABLE
 
     async def consume(

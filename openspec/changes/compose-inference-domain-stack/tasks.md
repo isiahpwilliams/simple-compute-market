@@ -713,6 +713,14 @@ steps"; D16's ordering, verification before charge).
       `make test-api-gate` (107) passes; nine of the ten new tests fail
       against the gate before the fix, the tenth pinning that a `4xx` is
       still not valid.
+      *Fix (implementation review 19 F1):* a signed client authenticates an
+      answer before reading its status, so an unsigned proxy `503` failed
+      authentication and was cached as invalid, denying a good key `401`. A
+      verification whose answer cannot be authenticated is now
+      `VerifyUnavailable` too: `503 credits_unavailable`, recorded nowhere.
+      A consume whose answer cannot be authenticated stays `502
+      unauthenticated_service`. Evidence: `make test-api-gate` (108) passes;
+      the new signed-client test fails against the client before the fix.
 
 ## 4. Family gateway library `arkhai-api-gateway`
 

@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -33,9 +33,14 @@ def _prompt_of_completion(body: dict[str, Any]) -> str:
 
 
 def create_app(
-    *, model: str = DEFAULT_MODEL, chunk_delay_seconds: float = DEFAULT_CHUNK_DELAY_SECONDS,
+    *,
+    model: str = DEFAULT_MODEL,
+    chunk_delay_seconds: float = DEFAULT_CHUNK_DELAY_SECONDS,
+    pause: Callable[[], Awaitable[None]] | None = None,
 ) -> FastAPI:
+    """The stub; ``pause`` runs between streamed chunks, by default a ``chunk_delay_seconds`` sleep."""
     app = FastAPI(title="inference-model-stub")
+    between = pause or (lambda: asyncio.sleep(chunk_delay_seconds))
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -104,7 +109,7 @@ def create_app(
             )
             chunk = {"id": ident, "object": f"{kind}.chunk", "created": created, "model": model, "choices": [delta]}
             yield f"data: {json.dumps(chunk)}\n\n".encode()
-            await asyncio.sleep(chunk_delay_seconds)
+            await between()
         yield b"data: [DONE]\n\n"
 
     return app

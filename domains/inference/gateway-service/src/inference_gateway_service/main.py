@@ -36,6 +36,9 @@ class GatewayService:
         self._reason = "the listing has not loaded yet"
         self._loader: asyncio.Task[None] | None = None
         self._running: contextlib.AbstractAsyncContextManager[Any] | None = None
+        #: Set once the gateway serves, and once any load is refused.
+        self.loaded = asyncio.Event()
+        self.refused = asyncio.Event()
 
     @property
     def ready(self) -> bool:
@@ -71,12 +74,14 @@ class GatewayService:
                 app = await self._load()
             except Exception as error:  # noqa: BLE001 — reported by /health and retried
                 self._reason = str(error) or repr(error)
+                self.refused.set()
                 await asyncio.sleep(self._retry_seconds)
                 continue
             running = app.router.lifespan_context(app)
             await running.__aenter__()
             self._running = running
             self._app = app
+            self.loaded.set()
             return
 
     async def _stop(self) -> None:

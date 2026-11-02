@@ -8,9 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
-import threading
-import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -150,9 +148,7 @@ async def _running(service: GatewayService) -> AsyncIterator[httpx.AsyncClient]:
     assert (await outbox.get())["type"] == "lifespan.startup.complete"
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=service), base_url="http://gateway") as client:
-            async with asyncio.timeout(5):
-                while not service.ready:
-                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(service.loaded.wait(), 5)
             yield client
     finally:
         await inbox.put({"type": "lifespan.shutdown"})
@@ -246,13 +242,10 @@ async def test_the_gateway_is_not_ready_until_its_listing_is_published(authority
     await inbox.put({"type": "lifespan.startup"})
     await outbox.get()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://gateway") as client:
-        while len(storefront.pages) < 2:
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(gateway.refused.wait(), 5)
         waiting = await client.get("/health")
         storefront.listings.append(listing("lst-1"))
-        async with asyncio.timeout(5):
-            while not gateway.ready:
-                await asyncio.sleep(0.01)
+        await asyncio.wait_for(gateway.loaded.wait(), 5)
         ready = await client.get("/health")
     await inbox.put({"type": "lifespan.shutdown"})
     await outbox.get()
@@ -267,34 +260,32 @@ class ControlledStream:
     """A model server that streams one event, then holds the last until released."""
 
     def __init__(self) -> None:
-        self.release = threading.Event()
-        self.sent_last = threading.Event()
+        self.release = asyncio.Event()
+        self.sent_last = False
 
     async def events(self) -> AsyncIterator[bytes]:
         yield b'data: {"choices":[{"delta":{"content":"first"}}]}\n\n'
-        released = await asyncio.to_thread(self.release.wait, 10)
-        assert released, "the test never released the last event"
-        self.sent_last.set()
+        await self.release.wait()
+        self.sent_last = True
         yield b"data: [DONE]\n\n"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=self.events())
 
 
-@contextlib.contextmanager
-def _served(app: Any) -> Iterator[str]:
-    """``app`` served by uvicorn in a thread; ``ASGITransport`` cannot observe mid-stream events."""
+@contextlib.asynccontextmanager
+async def _served(app: Any) -> AsyncIterator[str]:
+    """``app`` on a socket in this event loop; ``ASGITransport`` collects a body before returning it."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     sock.listen()
     server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
-    thread.start()
+    serving = asyncio.ensure_future(server.serve(sockets=[sock]))
     try:
         yield f"http://127.0.0.1:{sock.getsockname()[1]}"
     finally:
         server.should_exit = True
-        thread.join(timeout=10)
+        await serving
         sock.close()
 
 
@@ -303,28 +294,18 @@ async def test_a_streamed_completion_reaches_the_buyer_before_the_model_finishes
     upstream = ControlledStream()
     gateway = _gateway(httpx.ASGITransport(app=authority), httpx.MockTransport(upstream.handle))
 
-    def stream(base_url: str) -> tuple[str, bool, list[str]]:
-        with httpx.Client(base_url=base_url, timeout=10) as client:
-            for _ in range(250):
-                if client.get("/health").status_code == 200:
-                    break
-                time.sleep(0.02)
-            with client.stream(
-                "POST", "/v1/chat/completions",
-                json={"model": SERVED_MODEL, "stream": True, "messages": []},
-                headers={"authorization": f"Bearer {issued.secret}"},
-            ) as response:
-                lines = response.iter_lines()
-                first = next(lines)
-                finished_early = upstream.sent_last.is_set()
-                upstream.release.set()
-                return first, finished_early, [line for line in lines if line]
-
-    try:
-        with _served(gateway) as base_url:
-            first, finished_early, rest = await asyncio.to_thread(stream, base_url)
-    finally:
-        upstream.release.set()
+    async with _served(gateway) as base_url:
+        await asyncio.wait_for(gateway.loaded.wait(), 5)
+        async with httpx.AsyncClient(base_url=base_url, timeout=5) as client, client.stream(
+            "POST", "/v1/chat/completions",
+            json={"model": SERVED_MODEL, "stream": True, "messages": []},
+            headers={"authorization": f"Bearer {issued.secret}"},
+        ) as response:
+            lines = response.aiter_lines()
+            first = await anext(lines)
+            finished_early = upstream.sent_last
+            upstream.release.set()
+            rest = [line async for line in lines if line]
 
     assert "first" in first
     assert not finished_early

@@ -1,12 +1,16 @@
-"""The stub over ASGI: its model list, exact replies, streaming order, and refusal of other models."""
+"""The stub: its model list, exact replies, streaming order, and refusal of other models."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
-import time
+import socket
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+import uvicorn
 
 from inference_model_stub.app import create_app, reply_to
 
@@ -38,19 +42,45 @@ async def test_a_known_prompt_gets_the_same_exact_reply(client):
     assert completion.json()["choices"][0]["text"] == reply_to("hello")
 
 
-async def test_a_streamed_reply_arrives_in_order_before_it_finishes(client):
+@contextlib.asynccontextmanager
+async def _served(app) -> AsyncIterator[str]:
+    """``app`` on a socket in this event loop; ``ASGITransport`` collects a body before returning it."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="off"))
+    serving = asyncio.ensure_future(server.serve(sockets=[sock]))
+    try:
+        yield f"http://127.0.0.1:{sock.getsockname()[1]}"
+    finally:
+        server.should_exit = True
+        await serving
+        sock.close()
+
+
+async def test_a_streamed_reply_arrives_in_order_before_it_finishes():
+    release = asyncio.Event()
+    pauses: list[None] = []
+
+    async def pause() -> None:
+        pauses.append(None)
+        await release.wait()
+
     body = {"model": MODEL, "messages": [{"role": "user", "content": "hello"}], "stream": True}
-    arrivals: list[tuple[float, str]] = []
+    async with _served(create_app(model=MODEL, pause=pause)) as base_url:
+        async with httpx.AsyncClient(base_url=base_url, timeout=5) as client:
+            async with client.stream("POST", "/v1/chat/completions", json=body) as response:
+                lines = response.aiter_lines()
+                first = await anext(lines)
+                # The stub is held after its first chunk, so the first event arrived alone.
+                assert len(pauses) == 1
+                release.set()
+                rest = [line async for line in lines if line]
 
-    async with client.stream("POST", "/v1/chat/completions", json=body) as response:
-        async for line in response.aiter_lines():
-            if line.startswith("data: "):
-                arrivals.append((time.monotonic(), line.removeprefix("data: ")))
-
-    assert arrivals[-1][1] == "[DONE]"
-    pieces = [json.loads(data)["choices"][0]["delta"]["content"] for _, data in arrivals[:-1]]
+    events = [first.removeprefix("data: "), *(line.removeprefix("data: ") for line in rest)]
+    assert events[-1] == "[DONE]"
+    pieces = [json.loads(data)["choices"][0]["delta"]["content"] for data in events[:-1]]
     assert "".join(pieces) == reply_to("hello")
-    assert arrivals[0][0] < arrivals[-1][0]
 
 
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/completions"])

@@ -641,14 +641,14 @@ build-apicredits-sample-app:
 build-inference-service:
 	docker build --ulimit nofile=65536:65536 -f domains/inference/service/Dockerfile -t arkhai:inference-service .
 
-# The inference lane's deterministic model server: test tooling, built into the
-# wheelhouse only for its image and never published.
 dist-inference-gateway: dist-inference-domain dist-api-gateway dist-storefront-client ## Build arkhai-inference-gateway-service wheel into .dist/
 	cd domains && $(MAKE) dist-inference-gateway DIST_DIR=$(DIST_DIR)
 
 build-inference-gateway: dist-inference-gateway ## Build arkhai:inference-gateway
 	docker build -f domains/inference/gateway-service/Dockerfile -t arkhai:inference-gateway .
 
+# The inference lane's deterministic model server: test tooling, built into the
+# wheelhouse only for its image and never published.
 dist-inference-model-stub: ## Build arkhai-inference-model-stub wheel into .dist/
 	-mkdir -p $(DIST_DIR)
 	cd e2e-tests/model-stub && uv build --wheel --out-dir $(DIST_DIR)

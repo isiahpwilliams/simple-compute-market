@@ -13,6 +13,7 @@ dependencies = [
     "arkhai-api-gate[signed]>=0.2.0",
     "arkhai-inference-domain>=0.2.0",
     "arkhai-core-storefront-client>=0.27.0",
+    "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "pydantic>=2.7",
     "uvicorn[standard]>=0.34.0",

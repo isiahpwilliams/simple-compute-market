@@ -1798,7 +1798,7 @@ deployment-state delta "Local inference stack composition", scenario "A real
 model server is wanted locally"; test-compatibility delta "The scenario MUST
 run against a deterministic model server").
 
-- [ ] 9.1 Create `e2e-tests/model-stub/` beside the end-to-end image, outside
+- [x] 9.1 Create `e2e-tests/model-stub/` beside the end-to-end image, outside
       the architecture check (`ARCHITECTURE.toml` skips `e2e-tests`): a
       `pyproject.toml` (one package under `src/`, `fastapi` and `uvicorn`), a
       `Makefile` with `reinit` and `test`, and `src/inference_model_stub/app.py`
@@ -1808,7 +1808,7 @@ run against a deterministic model server").
       when `stream` is set, and `/health` (D5). It is not a published
       distribution: like the end-to-end image, it is test tooling, so it joins
       neither the manifest nor the publish workflow.
-- [ ] 9.2 `e2e-tests/model-stub/Dockerfile` building `arkhai:inference-model-stub`
+- [x] 9.2 `e2e-tests/model-stub/Dockerfile` building `arkhai:inference-model-stub`
       on the lock-driven pattern; root `Makefile` targets
       `dist-inference-model-stub` and `build-inference-model-stub`
       (the proposal's "Build" list), the latter in `build-e2e-inference`
@@ -1820,16 +1820,30 @@ run against a deterministic model server").
       names, with the gateway's upstream switched to it by the profile and no
       other service's configuration changed (D5; deployment-state delta
       scenario "A real model server is wanted locally").
-- [ ] 9.4 Unit tests (`test_app.py` under `e2e-tests/model-stub/tests/`, the
+- [x] 9.4 Unit tests (`test_app.py` under `e2e-tests/model-stub/tests/`, the
       stub over ASGI): the model list, an exact non-streamed completion for a known
       prompt, and a streamed one whose first event precedes the last; the
       stub rejects a `model` it is not configured for with `404`, so the
       gateway's own check is observable as the one that answers first.
-- [ ] 9.5 **Verification.** `make -C e2e-tests/model-stub test` (unit),
+- [x] 9.5 **Verification.** `make -C e2e-tests/model-stub test` (unit),
       wired into `make test-e2e-unit`. `make test`. New project: `make lock
       PROJECTS=e2e-tests/model-stub` and `make check-packaging`. Once deployed,
       `e2e_inference_deal` runs against the stub; the `vllm` profile is not
       exercised by any lane, by D5, and none is owed.
+
+*Section 9 note.* The stub is `arkhai-inference-model-stub`
+(`inference_model_stub.app`), its model and inter-chunk delay set by
+`MODEL_STUB_MODEL` and `MODEL_STUB_CHUNK_DELAY_SECONDS`; a reply is a digest of
+the prompt, so the same prompt always gets the same text. 9.3 is left to
+section 10, which creates `domains/inference/compose.yml`: the stub and the
+`vllm` profile's server are reachable only through the gateway, storefront,
+and authority that file composes, so a file with the model servers alone would
+compose nothing runnable. `dist-inference-model-stub` builds the wheel into
+`.dist` only for the image, and `test-e2e-unit` runs the stub's tests. The
+first lock was created with `uv lock`, since `make lock` relocks only an
+existing one. Evidence: `make -C e2e-tests/model-stub test` (5) passes;
+`make build-inference-model-stub` builds, and the image answers `/v1/models`;
+`make check-packaging` passes. `make test` has not been run in full.
 
 ## 10. Compose stack, development identities, and build targets
 

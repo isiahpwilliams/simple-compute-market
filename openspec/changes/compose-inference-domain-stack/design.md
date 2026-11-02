@@ -196,9 +196,18 @@ charge (plan review 06 F3).
 
 The storefront's `SettlementStageTable` and the buyer's hold one stage,
 Alkahest. Startup compares the configured settlement priority against the
-table and refuses any mechanism the table lacks, naming it; the kit itself
-ignores an unknown mechanism, so the refusal is the new piece. Neither
-inference wheel declares the fiat payments distribution.
+table and refuses any mechanism the table lacks, naming it. Resolving the
+seller settlement registry also refuses a mechanism it does not register
+(implementation found this; the plan assumed it was ignored), so the
+storefront's refusal adds the named heading beside its other startup
+problems rather than the only refusal. Neither inference wheel declares the
+fiat payments distribution.
+
+The issuance label and the accepted-terms payload live in the domain package
+(`arkhai_inference.label`, `arkhai_inference.listings.accepted_terms`), not in
+the storefront root: the service root composes the same label and the gateway
+executable hands the same current terms to its verification hook, and two
+composition roots cannot import each other (implementation, section 5).
 
 ### D10. Compose files, identities, and env targets mirror API credits
 
@@ -213,7 +222,8 @@ lane-only compute and API-credits registries; the root `docker-compose.yml`
 includes the domain file. Identities: `inference-registry.ed25519`,
 `inference-service.ed25519`, `inference-gateway.ed25519`, an
 `inference.identity.env` and `inference.wallet.env` on an Anvil account no
-other storefront uses, `inference-admin-key`, and a buyer configuration pinning
+other storefront uses (the storefront signs toward the authority, which has
+no admin key), and a buyer configuration pinning
 the inference registry, all derived by the identities README's rule and pinned
 where they are consumed. Root targets `e2e-inference-stack-env` and
 `e2e-inference-dev-env` print them; `e2e-dev-identities-env` gains the stack.
@@ -240,6 +250,18 @@ provenance, and the request charge; one `AlkahestBuyerStage`. Discovery
 filters compile from the served specification, which already pairs each rate
 bound with `rate_card_asset`, so the plugin encodes no pairing rule.
 
+The one stage is a plugin-local subclass of `AlkahestBuyerStage` that carries
+the purchase-time hook (D16), with a subclass of its buy session, because the
+buying library proposes from both: `buy` through the session's `propose`,
+`negotiate` through the stage's `prepare_selection`. The subclasses rely on the
+Alkahest stage's constructor and `propose` signature, which that library does
+not declare as an extension contract (implementation, section 7). The served
+model name reaches the buyer in the delivery's `connection_details`; the
+buying library copies its `service_name` onto the delivered credential and the
+credential panel shows it under the domain's `summary_header`, so a completed
+purchase shows the key, the base URL, and the model name (implementation
+review 08 F6).
+
 ### D13. The withdrawn modules are recovered, not rewritten
 
 `model_card.py`, `rate_card_guard.py`, and `materialization.py` are recovered
@@ -252,6 +274,12 @@ over the kit.
 The gateway holds its own development credential and signs toward the
 authority as the `service` role, which the authority trusts by role, as the
 API-credits sample application does.
+
+The inference service has no shared-secret gate behind its signed
+authentication: it refuses to start without a signing credential and a trusted
+role. The API-credits service's `X-Admin-Key` fallback serves deployments
+provisioned before identities and admits every caller when no key is set,
+which the bearer-credential requirement cannot admit (implementation, section 6).
 
 ### D15. The authority's database starts on the family chain
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -167,11 +167,8 @@ def resolve_prices_from_matches(
     )
 
 
-def render_credentials(
-    console: Console, delivery: Delivery, *, run_id: str, command_path: str,
-) -> None:
-    """Show the issued key once, then exit if its secret could not be saved privately."""
-    credentials = delivery.credentials
+def credentials_table(credentials: Mapping[str, Any], *, service_label: str) -> Table:
+    """A delivered credential's fields; ``service_label`` names its ``service_name``."""
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold")
     table.add_column()
@@ -179,10 +176,19 @@ def render_credentials(
         ("Key ID", "key_id"),
         ("Secret", "secret"),
         ("Base URL", "base_url"),
+        (service_label, "service_name"),
         ("Balance", "balance"),
     ):
         if credentials.get(key) is not None:
             table.add_row(label, str(credentials[key]))
+    return table
+
+
+def render_credentials(
+    console: Console, delivery: Delivery, *, run_id: str, command_path: str, service_label: str,
+) -> None:
+    """Show the issued key once, then exit if its secret could not be saved privately."""
+    table = credentials_table(delivery.credentials, service_label=service_label)
     if delivery.unsaved:
         title, border = "API key issued — NOT SAVED; copy it now", "red"
     elif delivery.reference:

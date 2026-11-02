@@ -182,6 +182,11 @@
       "dist": "arkhai-api-gate"
     },
     {
+      "key": "api-gateway",
+      "path": "domains/api/gateway",
+      "dist": "arkhai-api-gateway"
+    },
+    {
       "key": "compute",
       "path": "domains/compute",
       "dist": "arkhai-compute"
@@ -292,6 +297,22 @@
       "key": "inference-domain",
       "path": "domains/inference",
       "dist": "arkhai-inference-domain"
+    },
+    {
+      "key": "inference-service",
+      "path": "domains/inference/service",
+      "dist": "arkhai-inference-service"
+    },
+    {
+      "key": "inference-storefront",
+      "path": "domains/inference/storefront",
+      "dist": "arkhai-inference-storefront"
+    },
+    {
+      "key": "inference-buyer",
+      "path": "domains/inference/buyer",
+      "dist": "arkhai-inference-buyer",
+      "wheel_only": true
     },
     {
       "key": "apicredits-buyer",

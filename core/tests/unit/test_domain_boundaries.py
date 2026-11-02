@@ -16,7 +16,7 @@ SOURCE_ROOTS = (
     CORE / "buyer" / "src" / "core_buyer",
     CORE / "storefront" / "src" / "core_storefront",
 )
-CONCRETE_IDENTITIES = {"compute.v1", "api_credits.v1", "bare_metal.v1"}
+CONCRETE_IDENTITIES = {"compute.v1", "api_credits.v1", "bare_metal.v1", "inference.v1"}
 
 
 def _trees():

@@ -156,6 +156,17 @@ class InferenceModelCard(BaseModel):
         return value
 
 
+def accepted_terms(card: InferenceModelCard) -> dict[str, Any]:
+    """The terms a buyer accepts with ``card``: its rate card and attestation, as plain JSON.
+
+    Storefront and gateway both build them here so the pinned and current terms agree.
+    """
+    return {
+        "rate_card": card.rate_card.model_dump(mode="json"),
+        "attestation": None if card.attestation is None else card.attestation.model_dump(mode="json"),
+    }
+
+
 def coerce_resource_dict(value: Any) -> dict[str, Any]:
     """Best-effort dict view of a listing_resource (SQLite stores JSON text)."""
     if isinstance(value, dict):

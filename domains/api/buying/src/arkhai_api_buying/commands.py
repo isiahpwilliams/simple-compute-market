@@ -22,7 +22,6 @@ from core_buyer.run_log import (
 )
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 from arkhai_api_buying import buy, common, negotiate, settle
 from arkhai_api_buying.credentials import CredentialStoreError, checked_run_id
@@ -181,27 +180,21 @@ def _credentials_app(settlement: BuyerSettlementComposition) -> typer.Typer:
         """Show the API key a run delivered, secret included."""
         credentials, source = _delivered_credential(settlement, run_id)
         if as_json:
-            typer.echo(json.dumps(
-                {
-                    "run_id": run_id,
-                    "key_id": credentials.get("key_id"),
-                    "secret": credentials.get("secret"),
-                    "base_url": credentials.get("base_url"),
-                    "balance": credentials.get("balance"),
-                    "source": source,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ))
+            shown = {
+                "run_id": run_id,
+                "key_id": credentials.get("key_id"),
+                "secret": credentials.get("secret"),
+                "base_url": credentials.get("base_url"),
+                "balance": credentials.get("balance"),
+                "source": source,
+            }
+            if credentials.get("service_name") is not None:
+                shown["service_name"] = credentials["service_name"]
+            typer.echo(json.dumps(shown, separators=(",", ":"), sort_keys=True))
             return
-        table = Table.grid(padding=(0, 2))
-        table.add_column(style="bold")
-        table.add_column()
-        for label, key in (
-            ("Key ID", "key_id"), ("Secret", "secret"), ("Base URL", "base_url"), ("Balance", "balance"),
-        ):
-            if credentials.get(key) is not None:
-                table.add_row(label, str(credentials[key]))
+        table = common.credentials_table(
+            credentials, service_label=settlement.contributions.rendering.summary_header,
+        )
         console = Console()
         console.print(Panel(table, title=f"API key — run {run_id}", border_style="green"))
         if source == "run_log":

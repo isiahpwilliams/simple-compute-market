@@ -100,6 +100,13 @@ outside its grant.
 - **THEN** the operation is refused as unauthenticated rather than treated as
   the key owner's marketplace signature
 
+#### Scenario: The authority has no site identity
+
+- **WHEN** the inference authority is started without a site signing credential
+  or without any trusted caller role
+- **THEN** it refuses to start before opening its database, and serves no route
+  behind a shared secret instead
+
 ### Requirement: Quota-backed publication
 
 An inference listing MUST identify an authoritative quota resource at a
@@ -213,7 +220,9 @@ expires, until metered consumption replaces the per-request charge. The gateway 
 answer `401` for a missing or unknown credential, `403` for a revoked one, and
 `402` with a pointer to where credits can be bought for an exhausted one. A
 gateway MUST serve exactly one model at one configured charge, and its model
-list MUST contain only that model.
+list MUST contain only that model. The inference authority MUST refuse a
+verification or charge, batched or not, that names no key scope, so no caller
+can reach a key except through the offering it was bought for.
 
 #### Scenario: A key bought for another model is presented
 
@@ -221,6 +230,13 @@ list MUST contain only that model.
   gateway and requests model A
 - **THEN** the gateway answers `403`, the model server receives nothing, and
   the key's balance is unchanged
+
+#### Scenario: A caller names no scope
+
+- **WHEN** a trusted caller verifies or charges an inference key, singly or in
+  a batch, without naming a service and resource
+- **THEN** the authority refuses it as `scope_required` and the key's balance
+  is unchanged
 
 #### Scenario: The gateway starts before the storefront has published
 

@@ -556,7 +556,8 @@ def register(
             typer.secho(f"Buy failed: {reason}", err=True, fg=typer.colors.RED)
             raise typer.Exit(3)
         delivery = record_delivery(
-            run_log, result.tenant_credentials, settlement.credential_store
+            run_log, result.tenant_credentials, settlement.credential_store,
+            connection_details=result.connection_details,
         )
         delivery = end_run(
             run_log,
@@ -595,7 +596,8 @@ def register(
         console.print(Panel(tbl, title="Buy complete", border_style=border))
         if delivery is not None:
             render_credentials(
-                console, delivery, run_id=run_log.run_id, command_path=command
+                console, delivery, run_id=run_log.run_id, command_path=command,
+                service_label=contributions.rendering.summary_header,
             )
         if result.status != "ready":
             raise typer.Exit(4)

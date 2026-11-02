@@ -1488,6 +1488,13 @@ The start command and the health check now read the variable. Each package's
 `tests/unit/test_dockerfile.py` pins it, failing against the images before
 the fix; the images were not rebuilt. The API-credits images share the
 pattern and are not changed here.
+*Fix (implementation review 20 F1):* the storefront's shutdown cancelled its
+background loops through `clear_loops()` and went on without waiting, so a
+loop could still be unwinding against the state shutdown clears. It now awaits
+the loop controller's `stop_loops()` first. `tests/integration/test_shutdown.py`
+holds a loop that unwinds across an await and fails against the storefront
+before the fix. The API-credits storefront shares the defect and is not
+changed here.
 
 ## 7. Inference buyer plugin `arkhai-inference-buyer`
 

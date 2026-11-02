@@ -372,6 +372,9 @@ async def _start_inference_services(
 async def _stop_inference_services(
     services: InferenceStorefrontServices,
 ) -> None:
+    # Waited for, so no loop is still unwinding against the state cleared below.
+    if _container.resolved_loop_controller is not None:
+        await _container.resolved_loop_controller.stop_loops()
     _container.clear_lifespan_state(domain=services.domain)
     _container.resolved_negotiation_runtime = None
     logger.info("[SHUTDOWN] inference storefront shutting down")

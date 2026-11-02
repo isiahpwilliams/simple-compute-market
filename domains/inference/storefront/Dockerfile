@@ -60,7 +60,9 @@ ARG PORT=8000
 ENV PORT=${PORT}
 EXPOSE ${PORT}
 
+# The listener and the health check both read PORT, so a build or run that sets
+# it moves them together.
 HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=10s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ['PORT'] + '/health')" || exit 1
 
-CMD ["inference-storefront", "serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec inference-storefront serve --host 0.0.0.0 --port \"$PORT\""]

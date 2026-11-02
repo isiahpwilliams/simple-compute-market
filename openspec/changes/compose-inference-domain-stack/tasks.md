@@ -1481,6 +1481,14 @@ payment authority").
       already does; it is reachable only from an unscoped gateway in front of
       the inference service, which section 8's executable does not build.
 
+*Fix (implementation review 20 F2):* the service and storefront images set
+their port variable (`INFERENCE_PORT`, `PORT`) from `ARG PORT` but started
+the server and probed health on a literal port, so an override moved neither.
+The start command and the health check now read the variable. Each package's
+`tests/unit/test_dockerfile.py` pins it, failing against the images before
+the fix; the images were not rebuilt. The API-credits images share the
+pattern and are not changed here.
+
 ## 7. Inference buyer plugin `arkhai-inference-buyer`
 
 Delivers the `market inference` command group: the buying contributions,

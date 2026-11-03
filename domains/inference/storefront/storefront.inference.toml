@@ -4,8 +4,9 @@
 # Mounted into the inference-storefront container at
 # /etc/arkhai/storefront.toml (XDG_CONFIG_HOME=/etc).
 #
-# The marketplace identity, wallet, and authority pins below are empty: no
-# development identities are pinned for this stack, so it does not start as is.
+# The identity and wallet are Anvil account 0, and the registry and authority
+# pins are the public halves of dev-env/identities/inference-registry.ed25519
+# and inference-service.ed25519; see dev-env/identities/README.md.
 
 agent_id      = "inferenceseller"
 port          = 8000
@@ -18,13 +19,15 @@ enable_registry_discovery = true
 
 [identity]
 scheme     = "eip191"
-identifier = ""
+identifier = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
 
 [identity.admin_principals]
-identities = []
+identities = [
+  { scheme = "eip191", identifier = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266" },
+]
 
 [wallet]
-address     = ""
+address     = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 private_key = "" # INFERENCE_STOREFRONT_WALLET__PRIVATE_KEY secret environment input
 
 # Alkahest is the only mechanism this storefront composes; naming another
@@ -52,7 +55,9 @@ discovery_timeout = 5.0
 
 [registry.authorities."http://inference-registry:8080"]
 authority = "inference-registry"
-identities = []
+identities = [
+  { scheme = "ed25519", identifier = "QpkX0mKYYK2PMdhAweeYEpDGzdX_htGTGmZq-L0e9r8" },
+]
 
 [credits]
 # The inference authority this storefront sells for; it also hosts the quota
@@ -72,10 +77,14 @@ url = "http://inference-service:8086"
 # The inference authority, pinned again under [credits.expected_authorities]:
 # this key is the capacity-publication subsystem's merged list, and appending
 # to it must not widen what the issuance boundary accepts.
-identities = []
+identities = [
+  { scheme = "ed25519", identifier = "nS5GC-Q7uZtXKg2sep2iHsmiDYQEx6KdmME6c4-ah6A" },
+]
 
 [credits.expected_authorities]
-identities = []
+identities = [
+  { scheme = "ed25519", identifier = "nS5GC-Q7uZtXKg2sep2iHsmiDYQEx6KdmME6c4-ah6A" },
+]
 
 [negotiation]
 # Empty: the family's guards prepend automatically; the terminal default is
@@ -105,6 +114,6 @@ context_length    = 8192
 quantization      = "none"
 architecture      = { modality = "text->text", instruct_type = "chat" }
 supported_parameters = ["max_tokens", "temperature", "stream"]
-endpoint          = { base_url = "http://inference-gateway:8105/v1" }
+endpoint          = { base_url = "http://inference-gateway:8090/v1" }
 # The gate charges one fixed amount per request, so the token and image rates are zero.
 rate_card         = { asset = "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0", prompt_credits_per_million = 0, completion_credits_per_million = 0, request_credits = 1 }

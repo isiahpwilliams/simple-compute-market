@@ -12,7 +12,7 @@ FOUNDRY_VERSION := v1.5.1
 DIST_DIR := ${CURDIR}/.dist
 IDENTITY_WHEEL := $(DIST_DIR)/arkhai_kit_identity-0.4.0-py3-none-any.whl
 
-.PHONY: helm-values-schema e2e-dev-identities e2e-dev-identities-env e2e-vms-dev-env e2e-apicredits-dev-env e2e-apicredits-stack-env e2e-bare-metal-dev-env review-wheelhouse review-wheelhouse-scope build build-dev build-seller build-apicredits-service build-apicredits-storefront build-apicredits-sample-app build-inference-service build-inference-gateway build-inference-model-stub dist-inference-model-stub test test-core test-compute-provisioning-contracts test-compute-provisioning-client test-compute-provisioning test-compute-provisioning-ansible test-provisioning test-provisioning-iac test-registry test-storefront test-bare-metal test-compute test-api test-api-client test-api-authority test-api-selling test-api-selling-alkahest test-api-selling-arkhai-payments test-api-buying test-api-buying-alkahest test-api-buying-arkhai-payments test-api-gate test-api-gateway test-vms-domain test-vms-buyer test-apicredits test-inference test-inference-service test-inference-storefront test-inference-buyer test-inference-gateway-service test-kits dist dist-release dist-ci dist-ci-kits dist-api dist-api-contracts dist-api-client dist-api-authority dist-api-selling dist-api-selling-alkahest dist-api-selling-arkhai-payments dist-api-buying dist-api-buying-alkahest dist-api-buying-arkhai-payments dist-api-gate dist-api-gateway dist-storefront-client dist-policy dist-compute-provisioning-contracts dist-compute-provisioning-client dist-compute-provisioning dist-compute-provisioning-service dist-compute-provisioning-ansible dist-compute-provisioning-service dist-kits dist-registry-client dist-registry dist-identity dist-core dist-arkhai-core-buyer dist-arkhai-core-storefront dist-bare-metal-storefront dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront dist-apicredits-sample-app dist-apicredits-buyer dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-inference-gateway dist-alkahest dist-config dist-clean init init-prerequisites init-submodules init-zero-tier init-buyer init-storefront init-arkhai-core-registry push-runtime-artifacts push-images push-dev-image check-packaging check-uv-setup check-locks check-python-version check-project-layout lock
+.PHONY: helm-values-schema e2e-dev-identities e2e-dev-identities-env e2e-vms-dev-env e2e-apicredits-dev-env e2e-apicredits-stack-env e2e-inference-dev-env e2e-inference-stack-env e2e-bare-metal-dev-env review-wheelhouse review-wheelhouse-scope build build-dev build-seller build-apicredits-service build-apicredits-storefront build-apicredits-sample-app build-inference-service build-inference-storefront build-inference-gateway build-inference-model-stub dist-inference-model-stub test test-core test-compute-provisioning-contracts test-compute-provisioning-client test-compute-provisioning test-compute-provisioning-ansible test-provisioning test-provisioning-iac test-registry test-storefront test-bare-metal test-compute test-api test-api-client test-api-authority test-api-selling test-api-selling-alkahest test-api-selling-arkhai-payments test-api-buying test-api-buying-alkahest test-api-buying-arkhai-payments test-api-gate test-api-gateway test-vms-domain test-vms-buyer test-apicredits test-inference test-inference-service test-inference-storefront test-inference-buyer test-inference-gateway-service test-kits dist dist-release dist-ci dist-ci-kits dist-api dist-api-contracts dist-api-client dist-api-authority dist-api-selling dist-api-selling-alkahest dist-api-selling-arkhai-payments dist-api-buying dist-api-buying-alkahest dist-api-buying-arkhai-payments dist-api-gate dist-api-gateway dist-storefront-client dist-policy dist-compute-provisioning-contracts dist-compute-provisioning-client dist-compute-provisioning dist-compute-provisioning-service dist-compute-provisioning-ansible dist-compute-provisioning-service dist-kits dist-registry-client dist-registry dist-identity dist-core dist-arkhai-core-buyer dist-arkhai-core-storefront dist-bare-metal-storefront dist-apicredits-domain dist-apicredits-service dist-apicredits-storefront dist-apicredits-sample-app dist-apicredits-buyer dist-inference-domain dist-inference-service dist-inference-storefront dist-inference-buyer dist-inference-gateway dist-alkahest dist-config dist-clean init init-prerequisites init-submodules init-zero-tier init-buyer init-storefront init-arkhai-core-registry push-runtime-artifacts push-images push-dev-image check-packaging check-uv-setup check-locks check-python-version check-project-layout lock
 .PHONY: check-architecture check-architecture-layers check-architecture-scope check-architecture-dependencies check-architecture-kinds check-architecture-change architecture-report
 .PHONY: test-release-tooling test-deployment-packaging test-registry-client test-provisioning-adapter test-e2e-unit
 .PHONY: dist-arkhai-core-registry
@@ -380,8 +380,7 @@ build: ## Build the wheels, the buyer CLI binary, and every runtime image
 	$(MAKE) build-buyer
 	$(MAKE) -j4 build-registry build-storefront build-bare-metal-storefront build-provisioning
 	$(MAKE) -j3 build-apicredits-service build-apicredits-storefront build-apicredits-sample-app
-	$(MAKE) build-inference-service
-	$(MAKE) build-inference-gateway
+	$(MAKE) -j4 build-inference-service build-inference-storefront build-inference-gateway build-inference-model-stub
 
 # ---------------------------------------------------------------------------
 # e2e-*-dev-env — each stack's signer, wallet, and buyer paths from the
@@ -443,6 +442,7 @@ e2e-dev-identities-env: ## Print the full local stack's VAR=value lines for `doc
 	@$(E2E_REQUIRE_PROVISIONING_MODE)
 	@$(MAKE) -s --no-print-directory e2e-vms-dev-env
 	@$(MAKE) -s --no-print-directory e2e-apicredits-stack-env
+	@$(MAKE) -s --no-print-directory e2e-inference-stack-env
 
 e2e-vms-dev-env: ## Print the VM lane's VAR=value lines for `docker compose --env-file`
 	@$(E2E_REQUIRE_PROVISIONING_MODE)
@@ -487,6 +487,26 @@ e2e-apicredits-dev-env: ## Print the API-credit lane's VAR=value lines for `dock
 	@# The compute-schema registry the credits scenario routes discovery
 	@# across; only the lane runs it, since the full stack has VM's.
 	@echo 'APICREDITS_COMPUTE_REGISTRY_IDENTITY_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/registry-a.eip191'
+
+e2e-inference-stack-env:
+	@mkdir -p "$(E2E_BUYER_RUNTIME_DIR)/inference/profile" "$(E2E_BUYER_RUNTIME_DIR)/inference/state"
+	@echo 'INFERENCE_REGISTRY_IDENTITY_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/inference-registry.ed25519'
+	@echo 'INFERENCE_IDENTITY_ENV_FILE=$(E2E_IDENTITY_DIR)/inference.identity.env'
+	@echo 'INFERENCE_EVM_WALLET_ENV_FILE=$(E2E_IDENTITY_DIR)/inference.wallet.env'
+	@echo 'INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/inference-service.ed25519'
+	@echo 'INFERENCE_GATEWAY_IDENTITY_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/inference-gateway.ed25519'
+	@echo 'INFERENCE_BUYER_CONFIG_PATH=$(E2E_IDENTITY_DIR)/inference-buyer.config.toml'
+	@echo 'INFERENCE_BUYER_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/buyer.eip191'
+	@echo 'INFERENCE_BUYER_PROFILE_DIR=$(E2E_BUYER_RUNTIME_DIR)/inference/profile'
+	@echo 'INFERENCE_BUYER_STATE_DIR=$(E2E_BUYER_RUNTIME_DIR)/inference/state'
+
+e2e-inference-dev-env: ## Print the inference lane's VAR=value lines for `docker compose --env-file`
+	@$(MAKE) -s --no-print-directory e2e-inference-stack-env
+	@# The compute and API-credit registries the inference scenario routes
+	@# discovery across; only the lane runs them, since the full stack has
+	@# VM's and API credits'.
+	@echo 'INFERENCE_COMPUTE_REGISTRY_IDENTITY_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/registry-a.eip191'
+	@echo 'INFERENCE_API_CREDITS_REGISTRY_IDENTITY_CREDENTIAL_FILE=$(E2E_IDENTITY_DIR)/api-credits-registry.ed25519'
 
 # ---------------------------------------------------------------------------
 # e2e-bare-metal-dev-env — the bare-metal end-to-end lane's `--env-file`
@@ -643,6 +663,9 @@ build-inference-service:
 
 dist-inference-gateway: dist-inference-domain dist-api-gateway dist-storefront-client ## Build arkhai-inference-gateway-service wheel into .dist/
 	cd domains && $(MAKE) dist-inference-gateway DIST_DIR=$(DIST_DIR)
+
+build-inference-storefront: dist-inference-storefront ## Build arkhai:inference-storefront
+	docker build --ulimit nofile=65536 -f domains/inference/storefront/Dockerfile -t arkhai:inference-storefront .
 
 build-inference-gateway: dist-inference-gateway ## Build arkhai:inference-gateway
 	docker build -f domains/inference/gateway-service/Dockerfile -t arkhai:inference-gateway .

@@ -1,0 +1,172 @@
+# Inference market — domain stack.
+#
+# The seller side of the inference market: a registry instance speaking the
+# inference schema, the inference service (keys, request credits, and the quota
+# ledger), the gateway in front of a model server, the deterministic model
+# stub, and the inference storefront (self-seeds one model-card listing on
+# startup). The `vllm` profile adds a real CPU model server; the gateway fronts
+# it only when told to, since a profile cannot change another service:
+#   INFERENCE_MODEL_BASE_URL=http://model-server:8000/v1 docker compose \
+#     --env-file .e2e-inference.env --profile vllm \
+#     -f compose.inference.yml -f compose.inference-local.yml up -d
+#
+# Chain-touching services gate on `anvil`, which compose.dev.yml supplies. Bring
+# this domain up through the repository-root wrapper with its local overlay:
+#   docker compose -f compose.inference.yml -f compose.inference-local.yml up
+# The full multi-domain stack is the root `docker-compose.yml`.
+#
+# Paths below are relative to this file's directory (domains/inference/).
+
+services:
+  # The registry for the inference schema: the shared registry image with the
+  # inference filter specification it already carries.
+  inference-registry:
+    image: arkhai:registry
+    depends_on:
+      anvil:
+        condition: service_healthy
+    ports:
+      - "8100:8080"
+    env_file:
+      - ../../core/registry/.env.docker-compose
+    environment:
+      - REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml
+    volumes:
+      - ../../shared-env:/app/shared-env
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # The inference authority: keys, request-credit grants, consumption, and the
+  # quota ledger. Every caller signs, so it holds no admin key.
+  inference-service:
+    image: arkhai:inference-service
+    ports:
+      - "8106:8086"
+    environment:
+      - INFERENCE_SITE_SIGNING_KEY_FILE=/run/secrets/arkhai/inference-service/credential
+      # Who may call, by role: `seller` is the inference storefront (eip191,
+      # Anvil 0), `service` the gateway (ed25519). The public halves of the
+      # development identities in dev-env/identities/.
+      - INFERENCE_TRUSTED_PRINCIPALS=@json {"seller":[{"scheme":"eip191","identifier":"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"}],"service":[{"scheme":"ed25519","identifier":"iHX7NkwTJ0RDDsjwIpC_K4JRV3RKIxRDd-UY3Bgzmk4"}]}
+    volumes:
+      - ${INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE:?set inference service signer credential file}:/run/secrets/arkhai/inference-service/credential:ro
+      - inference-service-data:/app/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8086/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # A deterministic OpenAI-style model server: no GPU, no download.
+  model-stub:
+    image: arkhai:inference-model-stub
+    environment:
+      - MODEL_STUB_MODEL=stub-instruct
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # A real CPU model server, served under the stub's model name so the seeded
+  # listing still describes it. Point the gateway at it with
+  # INFERENCE_MODEL_BASE_URL=http://model-server:8000/v1.
+  model-server:
+    image: ${VLLM_CPU_IMAGE:-public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:v0.10.2}
+    profiles: [vllm]
+    environment:
+      - VLLM_TARGET_DEVICE=cpu
+      - VLLM_CPU_KVCACHE_SPACE=4
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --model
+      - ${VLLM_MODEL:-HuggingFaceTB/SmolLM2-135M-Instruct}
+      - --served-model-name
+      - stub-instruct
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-1024}
+    restart: unless-stopped
+
+  # The gateway in front of the model server, charging the inference service
+  # for each request. It reads its listing from the storefront and reports
+  # not ready until the storefront has published it.
+  inference-gateway:
+    image: arkhai:inference-gateway
+    depends_on:
+      inference-service:
+        condition: service_healthy
+    ports:
+      - "8105:8090"
+    environment:
+      - INFERENCE_GATEWAY_SERVICE_URL=http://inference-service:8086
+      # The inference service's public identity, whose signed answers alone
+      # the gate accepts.
+      - INFERENCE_GATEWAY_AUTHORITY_PRINCIPALS=[{"scheme":"ed25519","identifier":"nS5GC-Q7uZtXKg2sep2iHsmiDYQEx6KdmME6c4-ah6A"}]
+      # Short verify cache so a top-up is visible to the gate quickly.
+      - INFERENCE_GATEWAY_VERIFY_TTL_SECONDS=3
+      - INFERENCE_GATEWAY_STOREFRONT_URL=http://inference-storefront:8000
+      - INFERENCE_GATEWAY_REGISTRY_URL=http://inference-registry:8080
+      - INFERENCE_GATEWAY_RESOURCE_ID=stub-instruct-quota
+      - INFERENCE_GATEWAY_SERVED_MODEL_NAME=stub-instruct
+      - INFERENCE_GATEWAY_UPSTREAM_BASE_URL=${INFERENCE_MODEL_BASE_URL:-http://model-stub:8000/v1}
+    volumes:
+      - ${INFERENCE_GATEWAY_IDENTITY_CREDENTIAL_FILE:?set inference gateway signer credential file}:/run/secrets/arkhai/gateway-identity:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # The inference storefront: one quota-backed model-card listing seeded on
+  # startup, settled through Alkahest.
+  inference-storefront:
+    image: arkhai:inference-storefront
+    platform: linux/amd64
+    depends_on:
+      anvil:
+        condition: service_healthy
+      inference-registry:
+        condition: service_healthy
+      inference-service:
+        condition: service_healthy
+    ports:
+      - "8103:8000"
+    environment:
+      - XDG_CONFIG_HOME=/etc
+    volumes:
+      - ${INFERENCE_STOREFRONT_CONFIG:-./storefront/storefront.inference.toml}:/etc/arkhai/storefront.toml:ro
+      - ../../kit/alkahest/src/market_alkahest/data/alkahest_anvil_addresses.json:/app/alkahest_anvil_addresses.json:ro
+      - inference-storefront-data:/app/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  inference-service-data:
+  inference-storefront-data:

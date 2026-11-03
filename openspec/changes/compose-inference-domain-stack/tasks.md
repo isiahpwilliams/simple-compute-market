@@ -1303,6 +1303,18 @@ cards are publishable without metered consumption").
       suite passes (49), with a test that a probe which never answers ends
       within the configured one-second deadline; it fails before the fix.
 
+*Fix (found bringing the stack up in section 10):* the family's Alkahest
+seller stage published every escrow rate `per: "token"`, API credits' unit,
+and the inference schema admits only `per: "credit"`, so the storefront's
+seeded listing, and any listing the CLI publishes with an escrow, was refused.
+The stage takes the unit as `rate_unit`, defaulting to `token` so API credits'
+listings are unchanged, and the inference storefront builds it with `credit`.
+The owner chose this over loosening the inference schema or renaming API
+credits' unit. Evidence: `make test-api-selling-alkahest` (35),
+`make test-inference-storefront` (51) and `make test-apicredits` pass; the seed
+test now applies the inference contract's rate check to the stage's escrow and
+fails against the storefront before the fix.
+
 ## 6. Inference service root `arkhai-inference-service`
 
 Delivers the `arkhai:inference-service` image: the family authority composed

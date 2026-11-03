@@ -119,7 +119,6 @@ class AlkahestSellerStage:
     # build, so a selection of it is refused.
     settles_from_agreement = False
     escrow_proposal_step = staticmethod(accepted_escrow_proposal)
-    accepted_escrow = staticmethod(accepted_escrow)
     seed_escrow_settings = SEED_ESCROW_SETTINGS
 
     def __init__(
@@ -137,8 +136,11 @@ class AlkahestSellerStage:
         verify_escrow: Callable[..., Awaitable[Any]] = verify_escrow_for_settlement,
         escrow_client: Callable[..., Any] = AlkahestConditionalEscrowClient,
         worker_id: str = "alkahest-attestation",
+        rate_unit: str = "token",
     ) -> None:
         self._contributions = contributions
+        # What an escrow's rate is per; each domain's listing schema names it.
+        self.rate_unit = rate_unit
         # Required, with no default: publication drops a capacity-fulfilled
         # stage's options from a listing no admission authority backs.
         self.fulfils_through_capacity = fulfils_through_capacity
@@ -185,8 +187,11 @@ class AlkahestSellerStage:
             accepted_escrows=accepted_escrows,
         )
 
+    def accepted_escrow(self, **fields: Any) -> dict[str, Any]:
+        return accepted_escrow(**fields, rate_unit=self.rate_unit)
+
     def seed_accepted_escrows(self, seed: Mapping[str, Any]) -> list[dict[str, Any]]:
-        return seed_accepted_escrows(seed, self._chains())
+        return seed_accepted_escrows(seed, self._chains(), rate_unit=self.rate_unit)
 
     def contributed_loops(self) -> tuple[Any, ...]:
         return ()

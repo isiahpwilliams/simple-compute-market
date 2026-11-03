@@ -58,3 +58,12 @@ def test_release_conditions_refuse_an_escrow_on_an_unconfigured_chain():
         SimpleNamespace(mechanism_config=lambda _key: None), chains=CHAINS,
         wallet_address="", accepted_escrows=[],
     ) == []
+
+
+def test_an_escrow_states_its_rate_per_the_unit_the_domain_names():
+    escrow = accepted_escrow(
+        chain_name="anvil", address_config_path=BOOK, token=TOKEN, price_per_token="1", rate_unit="credit",
+    )
+    (seeded,) = seed_accepted_escrows({"chain": "anvil", "token": TOKEN}, CHAINS, rate_unit="credit")
+
+    assert escrow["rates"] == seeded["rates"] == [{"field": "amount", "per": "credit", "value": "1"}]

@@ -1863,7 +1863,7 @@ run against a deterministic model server").
       `dist-inference-model-stub` and `build-inference-model-stub`
       (the proposal's "Build" list), the latter in `build-e2e-inference`
       (section 11).
-- [ ] 9.3 `domains/inference/compose.yml` (created in section 10 if this
+- [x] 9.3 `domains/inference/compose.yml` (created in section 10 if this
       section lands first): the `model-stub` service on the default profile,
       and a `model-server` service under `profiles: [vllm]` running the CPU
       vLLM image and small instruct model `docs/cookbooks/vllm-apicredits-seller.md`
@@ -1904,7 +1904,7 @@ rule; `scripts/tests/test_lane_compose.py` and
 `e2e-tests/tests/unit/test_domain_stack_configuration.py`, which pin each
 stack's shape).
 
-- [ ] 10.1 `domains/inference/compose.yml`, topology only (D10): `inference-registry`
+- [x] 10.1 `domains/inference/compose.yml`, topology only (D10): `inference-registry`
       (`arkhai:registry` with `REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml`,
       which the image already carries, so no bind mount; its own
       `REGISTRY_AUTHORITY_*` identity and descriptor; deployment-state delta
@@ -1922,7 +1922,7 @@ stack's shape).
       and `inference-storefront-data`; every credential a `${VAR:?...}`-guarded
       mount (deployment-state delta scenario "A development credential is
       missing"); no credential value committed.
-- [ ] 10.2 `compose.inference.yml` including `compose.dev.yml` and the domain
+- [x] 10.2 `compose.inference.yml` including `compose.dev.yml` and the domain
       file; `compose.inference-local.yml` binding the identities of 10.3, the
       storefront's wallet key, and a one-shot `inference-buyer-cli` under the
       `buyer` profile on `credits-buyer-cli`'s pattern; `compose.inference-lane.yml`
@@ -1931,7 +1931,7 @@ stack's shape).
       `docker-compose.yml` includes `domains/inference/compose.yml`
       (deployment-state delta scenarios "The full stack is brought up", "The
       inference stack is brought up alone").
-- [ ] 10.3 `dev-env/identities/`: `inference-registry.ed25519`,
+- [x] 10.3 `dev-env/identities/`: `inference-registry.ed25519`,
       `inference-service.ed25519`, `inference-gateway.ed25519` derived by the
       README's rule (checking no derived identifier begins with `-`),
       `inference.identity.env` and `inference.wallet.env` on the lowest
@@ -1947,7 +1947,7 @@ stack's shape).
       README's "What this directory has to satisfy"; `AGENTS.md`, "Test
       fixtures and local development configuration": each env file states it
       is a development value never for a public network).
-- [ ] 10.4 Root `Makefile`: `e2e-inference-stack-env` printing
+- [x] 10.4 Root `Makefile`: `e2e-inference-stack-env` printing
       `INFERENCE_REGISTRY_IDENTITY_CREDENTIAL_FILE`, `INFERENCE_IDENTITY_ENV_FILE`,
       `INFERENCE_EVM_WALLET_ENV_FILE`,
       `INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE`,
@@ -1959,7 +1959,7 @@ stack's shape).
       `build-inference-gateway`, and `build-inference-model-stub` join `build`;
       `dist-inference-*` (sections 5–9) are in `dist`; `test-inference-*` in
       `test`.
-- [ ] 10.5 `scripts/tests/test_lane_compose.py`: `STACKS` gains `inference`
+- [x] 10.5 `scripts/tests/test_lane_compose.py`: `STACKS` gains `inference`
       (`e2e-inference-dev-env`, `simple-market-inference`, the three files)
       and the full stack's overlay list gains `compose.inference-local.yml`;
       cases that the inference lane composes its own compute and API-credits
@@ -1972,14 +1972,14 @@ stack's shape).
       storefront and gateway runtimes installed from the staged wheel only.
       `scripts/tests/test_multi_storefront_compose.py`: the inference
       storefront's authority pins are isolated from the others'.
-- [ ] 10.6 Bring the inference wrapper up locally with
+- [x] 10.6 Bring the inference wrapper up locally with
       `make e2e-inference-dev-env` and the three files, then the full stack
       with `make e2e-dev-identities-env`, and record in the section note that
       three registries serve three schema identities and the inference
       authority, gateway, stub, and storefront report healthy, without a GPU
       or an external fetch (deployment-state delta scenarios; the `vllm`
       profile is not brought up).
-- [ ] 10.7 **Verification.** `make test-release-tooling` (the lane-compose,
+- [x] 10.7 **Verification.** `make test-release-tooling` (the lane-compose,
       multi-storefront, and publish-matrix tests, unit level) and `make
       test-e2e-unit` (the stack-configuration tests). `make test`. No lock
       changes here; `make check-packaging` runs for `check-uv-setup`'s
@@ -1987,6 +1987,36 @@ stack's shape).
       `e2e_inference_deal` runs on this stack; the "brought up alone" and
       "full stack" scenarios are the render tests above and 10.6's record,
       and none is owed in a lane.
+
+*Section 10 note.* Host ports are 8100 (registry), 8103 (storefront), 8105
+(gateway) and 8106 (service); the model stub and the `vllm` profile's server
+are reached only on the stack's network. The gateway listens on 8090, so the
+seed card's endpoint is `http://inference-gateway:8090/v1`. A Compose profile
+cannot change another service's settings, so the `vllm` profile adds
+`model-server` (served as `stub-instruct`, so the seeded card still describes
+it) and the gateway's upstream follows `INFERENCE_MODEL_BASE_URL`, defaulting to
+the stub; the profile is not brought up by any lane. The storefront is Anvil 0,
+the lowest-numbered account no storefront uses, and the three ed25519
+identities derive from `arkhai-development-inference-{registry,service,gateway}-v1`,
+none beginning with `-`; `dev-env/identities/README.md` gains "The inference
+stack". The authority's trusted principals and the gateway's authority pin live
+in `domains/inference/compose.yml`, as the API-credits authority's do. The lane
+overlay runs a compute registry on `registry-a.eip191` and an API-credit
+registry on `api-credits-registry.ed25519`. `build-inference-storefront` is new
+here; section 5 added none. Bringing the stack up found the seeded listing
+refused for its escrow rate's unit, fixed in section 5's note above. Evidence:
+the inference lane (`make e2e-inference-dev-env`, the three files) came up with
+every service healthy, the gateway once the storefront had published; the three
+registries loaded the `inference`, `compute.market`, and `api_credits` filter
+specifications, the storefront's listing was accepted by the inference registry
+(`201`), and the gateway listed `stub-instruct`, with no GPU or external fetch.
+The full stack (`make e2e-dev-identities-env`) brought every inference and
+API-credits service up healthy; the two VM storefronts exited because the local
+`arkhai:storefront` image was built from a newer branch and refuses this
+branch's VM configuration, which this section does not touch. `make
+test-release-tooling` (1,167), `make test-e2e-unit` (83, and the stub's 5),
+`make check-packaging`, `make check-architecture`, and `make
+check-comment-hygiene` pass. `make test` has not been run in full.
 
 ## 11. End-to-end lane and the `e2e_inference_deal` scenario
 

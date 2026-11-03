@@ -29,6 +29,15 @@ STACKS = {
             "compose.apicredits-lane.yml",
         ),
     ),
+    "inference": (
+        "e2e-inference-dev-env",
+        "simple-market-inference",
+        (
+            "compose.inference.yml",
+            "compose.inference-local.yml",
+            "compose.inference-lane.yml",
+        ),
+    ),
     "bare-metal": (
         "e2e-bare-metal-dev-env",
         "simple-market-bare-metal",
@@ -37,7 +46,12 @@ STACKS = {
     "full": (
         "e2e-dev-identities-env",
         "simple-market-full",
-        ("docker-compose.yml", "compose.vms-local.yml", "compose.apicredits-local.yml"),
+        (
+            "docker-compose.yml",
+            "compose.vms-local.yml",
+            "compose.apicredits-local.yml",
+            "compose.inference-local.yml",
+        ),
     ),
 }
 
@@ -48,6 +62,17 @@ API_CREDIT_SERVICES = {
     "sample-app",
     "credits-buyer-cli",
 }
+
+INFERENCE_SERVICES = {
+    "inference-registry",
+    "inference-service",
+    "inference-gateway",
+    "inference-storefront",
+    "model-stub",
+    "inference-buyer-cli",
+}
+
+VM_SERVICES = {"registry", "registry-b", "bob-storefront", "alice-storefront", "provisioning"}
 
 # Names a storefront would read a provisioning mode under; none may reach one.
 PROVISIONING_MODE_NAMES = {
@@ -105,6 +130,7 @@ def test_the_vm_lane_composes_no_api_credit_service(tmp_path: Path) -> None:
     assert {"registry", "registry-b", "bob-storefront", "alice-storefront"} <= services
     assert {"provisioning", "alice-provisioning", "buyer-cli", "anvil"} <= services
     assert not services & API_CREDIT_SERVICES
+    assert not services & INFERENCE_SERVICES
     assert "compute-registry" not in services
 
 
@@ -126,10 +152,32 @@ def test_the_api_credit_lane_composes_its_own_compute_registry(tmp_path: Path) -
     assert storefront["APICREDITS_STOREFRONT_WALLET__PRIVATE_KEY"].startswith("@str 0x")
 
 
+def test_the_inference_lane_composes_its_own_compute_and_api_credit_registries(
+    tmp_path: Path,
+) -> None:
+    services = _render(tmp_path, "inference")["services"]
+    assert set(services) == INFERENCE_SERVICES | {"anvil", "compute-registry", "api-credits-registry"}
+    assert not set(services) & (VM_SERVICES | API_CREDIT_SERVICES - {"api-credits-registry"})
+    for name, authority in (("compute-registry", "compute-registry"), ("api-credits-registry", "api-credits-registry")):
+        registry = services[name]
+        assert registry["environment"]["REGISTRY_AUTHORITY_ID"] == authority
+        assert registry["environment"]["REGISTRY_DESCRIPTOR_BASE_URL"] == f"http://{name}:8080"
+        assert not registry.get("ports")
+    filter_spec = services["inference-registry"]["environment"]["REGISTRY_FILTER_SPEC_PATH"]
+    assert filter_spec == "/app/filter-spec-inference.yaml"
+    # Without its key the storefront publishes and negotiates but cannot settle.
+    storefront = services["inference-storefront"]["environment"]
+    assert storefront["INFERENCE_STOREFRONT_WALLET__PRIVATE_KEY"].startswith("@str 0x")
+
+
 def test_the_full_stack_has_one_chain_and_no_lane_registry(tmp_path: Path) -> None:
     model = _render(tmp_path, "full")
     services = set(model["services"])
     assert API_CREDIT_SERVICES <= services
+    assert INFERENCE_SERVICES <= services
+    registries = [name for name, service in model["services"].items()
+                  if service.get("image") == "arkhai:registry"]
+    assert sorted(registries) == ["api-credits-registry", "inference-registry", "registry", "registry-b"]
     assert {"registry", "bob-storefront", "alice-storefront"} <= services
     assert "compute-registry" not in services
     assert [name for name, service in model["services"].items()
@@ -173,3 +221,28 @@ def test_an_unknown_provisioning_mode_fails_the_environment_target(target: str) 
     produced = _environment(target, "hosted")
     assert produced.returncode != 0
     assert "PROVISIONING_MODE must be mock or real" in produced.stderr
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE",
+        "INFERENCE_GATEWAY_IDENTITY_CREDENTIAL_FILE",
+        "INFERENCE_REGISTRY_IDENTITY_CREDENTIAL_FILE",
+    ],
+)
+def test_an_unset_inference_credential_fails_the_render_naming_it(tmp_path: Path, variable: str) -> None:
+    command = _compose()
+    target, project, files = STACKS["inference"]
+    produced = _environment(target)
+    assert produced.returncode == 0, produced.stderr
+    env_file = tmp_path / "inference.env"
+    env_file.write_text("".join(
+        line + "\n" for line in produced.stdout.splitlines() if not line.startswith(variable + "=")
+    ))
+    command += ["--env-file", str(env_file), "-p", project]
+    for name in files:
+        command += ["-f", name]
+    result = subprocess.run([*command, "config"], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert variable in result.stderr

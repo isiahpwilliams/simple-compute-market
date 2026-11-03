@@ -4,7 +4,11 @@
 # inference schema, the inference service (keys, request credits, and the quota
 # ledger), the gateway in front of a model server, the deterministic model
 # stub, and the inference storefront (self-seeds one model-card listing on
-# startup). The `vllm` profile adds a real CPU model server.
+# startup). The `vllm` profile adds a real CPU model server; the gateway fronts
+# it only when told to, since a profile cannot change another service:
+#   INFERENCE_MODEL_BASE_URL=http://model-server:8000/v1 docker compose \
+#     --env-file .e2e-inference.env --profile vllm \
+#     -f compose.inference.yml -f compose.inference-local.yml up -d
 #
 # Chain-touching services gate on `anvil`, which compose.dev.yml supplies. Bring
 # this domain up through the repository-root wrapper with its local overlay:

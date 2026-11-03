@@ -1995,7 +1995,11 @@ seed card's endpoint is `http://inference-gateway:8090/v1`. A Compose profile
 cannot change another service's settings, so the `vllm` profile adds
 `model-server` (served as `stub-instruct`, so the seeded card still describes
 it) and the gateway's upstream follows `INFERENCE_MODEL_BASE_URL`, defaulting to
-the stub; the profile is not brought up by any lane. The storefront is Anvil 0,
+the stub; the profile is not brought up by any lane. This departs from 9.3's
+wording that the profile switches the upstream: the variable switches it, the
+compose file's header gives the command, and
+`test_the_gateway_fronts_the_stub_unless_the_vllm_upstream_is_named` renders
+both cases. The storefront is Anvil 0,
 the lowest-numbered account no storefront uses, and the three ed25519
 identities derive from `arkhai-development-inference-{registry,service,gateway}-v1`,
 none beginning with `-`; `dev-env/identities/README.md` gains "The inference

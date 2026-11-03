@@ -104,15 +104,19 @@ def _environment(target: str, mode: str | None = None) -> subprocess.CompletedPr
     )
 
 
-def _render(tmp_path: Path, stack: str, mode: str | None = None) -> dict:
+def _render(
+    tmp_path: Path, stack: str, mode: str | None = None, *, profiles: tuple[str, ...] = (), extra: str = "",
+) -> dict:
     command = _compose()
     target, project, files = STACKS[stack]
     # The targets emit only committed deterministic development credentials.
     produced = _environment(target, mode)
     assert produced.returncode == 0, produced.stderr
     env_file = tmp_path / f"{stack}.env"
-    env_file.write_text(produced.stdout)
+    env_file.write_text(produced.stdout + extra)
     command += ["--env-file", str(env_file), "-p", project, "--profile", "buyer"]
+    for profile in profiles:
+        command += ["--profile", profile]
     for name in files:
         command += ["-f", name]
     result = subprocess.run(
@@ -169,6 +173,23 @@ def test_the_inference_lane_composes_its_own_compute_and_api_credit_registries(
     storefront = services["inference-storefront"]["environment"]
     assert storefront["INFERENCE_STOREFRONT_WALLET__PRIVATE_KEY"].startswith("@str 0x")
 
+
+
+def test_the_gateway_fronts_the_stub_unless_the_vllm_upstream_is_named(tmp_path: Path) -> None:
+    default = _render(tmp_path, "inference")["services"]
+    assert "model-server" not in default
+    gateway = default["inference-gateway"]["environment"]
+    assert gateway["INFERENCE_GATEWAY_UPSTREAM_BASE_URL"] == "http://model-stub:8000/v1"
+
+    vllm = _render(
+        tmp_path, "inference", profiles=("vllm",),
+        extra="INFERENCE_MODEL_BASE_URL=http://model-server:8000/v1\n",
+    )["services"]
+    command = vllm["model-server"]["command"]
+    # Served under the seeded card's model name, so the listing still describes it.
+    assert command[command.index("--served-model-name") + 1] == "stub-instruct"
+    gateway = vllm["inference-gateway"]["environment"]
+    assert gateway["INFERENCE_GATEWAY_UPSTREAM_BASE_URL"] == "http://model-server:8000/v1"
 
 def test_the_full_stack_has_one_chain_and_no_lane_registry(tmp_path: Path) -> None:
     model = _render(tmp_path, "full")

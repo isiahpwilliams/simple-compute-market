@@ -114,6 +114,30 @@ service_url     = ""   # credits service (keys/credits/quota)
 storefront_url  = ""   # credits seller storefront
 
 # ---------------------------------------------------------------------------
+# Inference topology: the inference lane's services and the registries its
+# buyer pins.
+# ---------------------------------------------------------------------------
+[default.inference]
+registry_url                    = ""   # inference schema registry
+service_url                     = ""   # inference service (keys/credits/quota)
+storefront_url                  = ""   # inference seller storefront
+gateway_url                     = ""   # gateway in front of the model server
+served_model_name               = ""   # the seeded listing's model
+registry_authority_id           = ""
+registry_scheme                 = ""
+registry_identifier             = ""
+compute_registry_url            = ""   # lane-only compute schema registry
+compute_registry_authority_id   = ""
+compute_registry_scheme         = ""
+compute_registry_identifier     = ""
+api_credits_registry_url        = ""   # lane-only api_credits schema registry
+api_credits_registry_authority_id = ""
+api_credits_registry_scheme     = ""
+api_credits_registry_identifier = ""
+service_authority_identifier    = ""   # the inference service's ed25519 principal
+seller_marketplace_credential   = ""   # the storefront's seller signer, for a second listing
+
+# ---------------------------------------------------------------------------
 # Arkhai payments target shared by the payment scenarios. A blank service_url
 # means no target, and the scenarios report blocked and skip, as they do for an
 # unready one. With it set, service_identity, dispute_authority, buyer_account

@@ -20,8 +20,9 @@ MODULE ?= contracts
 # CLI instead; this variable is for local development only.
 DIST_DIR ?= ../.dist
 
-.PHONY: build venv test test-e2e test-e2e-vm test-e2e-bare-metal test-e2e-apicredits \
-	e2e-vm-down e2e-vm-logs e2e-bare-metal-down e2e-bare-metal-logs e2e-apicredits-down e2e-apicredits-logs
+.PHONY: build venv test test-e2e test-e2e-vm test-e2e-bare-metal test-e2e-apicredits test-e2e-inference \
+	e2e-vm-down e2e-vm-logs e2e-bare-metal-down e2e-bare-metal-logs e2e-apicredits-down e2e-apicredits-logs \
+	e2e-inference-down e2e-inference-logs
 
 # -----------------------------------------------------------------------
 # Setup
@@ -104,6 +105,8 @@ E2E_MODULE ?= e2e_deal or e2e_deal_buyer_cli or e2e_buy or multi_registry \
 # over the database the deal scenarios wrote.
 E2E_APICREDITS_MODULE ?= e2e_credits_deal or e2e_credits_payment_deal \
                          or e2e_credits_service_rollback
+# The inference lane's scenario.
+E2E_INFERENCE_MODULE ?= e2e_inference_deal
 # The bare-metal lane's scenarios. `e2e_bare_metal_deal` is in neither lane: it
 # needs a real whole host to SSH into, which the pipeline never has.
 E2E_BARE_METAL_MODULE ?= e2e_bare_metal_publication or e2e_bare_metal_introduction \
@@ -203,6 +206,8 @@ test-e2e:
 	$(MAKE) test-e2e-bare-metal
 	$(MAKE) e2e-bare-metal-down
 	$(MAKE) test-e2e-apicredits
+	$(MAKE) e2e-apicredits-down
+	$(MAKE) test-e2e-inference
 
 # VM lane: Bob's and Alice's storefronts and provisioning authorities, the two
 # VM registries, and the dev chain.
@@ -273,3 +278,26 @@ e2e-apicredits-down:
 e2e-apicredits-logs:
 	@cd .. && $(call e2e_env_if_missing,$(E2E_APICREDITS_ENV),e2e-apicredits-dev-env)
 	@cd .. && docker compose --env-file "$(E2E_APICREDITS_ENV)" $(E2E_APICREDITS_COMPOSE) logs --no-color
+
+# Inference lane: the inference registry, service, gateway, model stub, and
+# storefront, the lane's own compute and API-credit registries, and the dev
+# chain; see compose.inference-lane.yml.
+E2E_INFERENCE_ENV ?= $(CURDIR)/../.e2e-inference.env
+E2E_INFERENCE_PROJECT := simple-market-inference
+E2E_INFERENCE_COMPOSE := -p $(E2E_INFERENCE_PROJECT) -f compose.inference.yml \
+	-f compose.inference-local.yml -f compose.inference-lane.yml
+
+test-e2e-inference:
+	cd .. && $(MAKE) -s --no-print-directory e2e-inference-dev-env > "$(E2E_INFERENCE_ENV)"
+	cd .. && docker compose --env-file "$(E2E_INFERENCE_ENV)" $(E2E_INFERENCE_COMPOSE) down -v --remove-orphans
+	cd .. && $(MAKE) build-e2e-inference
+	cd .. && $(call e2e_up,$(E2E_INFERENCE_ENV),$(E2E_INFERENCE_COMPOSE))
+	$(MAKE) test-buyer-machine NETWORK=$(E2E_INFERENCE_PROJECT)_default BUYER_MODULE="$(E2E_INFERENCE_MODULE)"
+
+e2e-inference-down:
+	cd .. && $(call e2e_env_if_missing,$(E2E_INFERENCE_ENV),e2e-inference-dev-env)
+	cd .. && docker compose --env-file "$(E2E_INFERENCE_ENV)" $(E2E_INFERENCE_COMPOSE) down -v --remove-orphans
+
+e2e-inference-logs:
+	@cd .. && $(call e2e_env_if_missing,$(E2E_INFERENCE_ENV),e2e-inference-dev-env)
+	@cd .. && docker compose --env-file "$(E2E_INFERENCE_ENV)" $(E2E_INFERENCE_COMPOSE) logs --no-color

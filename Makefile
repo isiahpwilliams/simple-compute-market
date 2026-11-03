@@ -16,7 +16,7 @@ IDENTITY_WHEEL := $(DIST_DIR)/arkhai_kit_identity-0.4.0-py3-none-any.whl
 .PHONY: check-architecture check-architecture-layers check-architecture-scope check-architecture-dependencies check-architecture-kinds check-architecture-change architecture-report
 .PHONY: test-release-tooling test-deployment-packaging test-registry-client test-provisioning-adapter test-e2e-unit
 .PHONY: dist-arkhai-core-registry
-.PHONY: build-bare-metal-storefront build-e2e-base build-e2e-vm build-e2e-bare-metal build-e2e-apicredits build-apicredits-service-prekit
+.PHONY: build-bare-metal-storefront build-e2e-base build-e2e-vm build-e2e-bare-metal build-e2e-apicredits build-e2e-inference build-apicredits-service-prekit
 .PHONY: dist-bare-metal-buyer
 .PHONY: run-e2e fetch-e2e-logs
 .PHONY: helm-topology-up helm-topology-down helm-topology-check helm-topology-secrets
@@ -585,6 +585,9 @@ build-e2e-bare-metal: build-e2e-base ## Build the bare-metal end-to-end lane's i
 
 build-e2e-apicredits: build-e2e-base build-apicredits-service-prekit ## Build the API-credit end-to-end lane's images
 	$(MAKE) -j4 build-registry build-apicredits-service build-apicredits-storefront build-apicredits-sample-app
+
+build-e2e-inference: build-e2e-base ## Build the inference end-to-end lane's images
+	$(MAKE) -j4 build-registry build-inference-service build-inference-storefront build-inference-gateway build-inference-model-stub
 
 # The previous service release, built from the pinned base commit's own
 # wheelhouse in a temporary worktree.

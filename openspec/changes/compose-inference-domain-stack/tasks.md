@@ -2030,7 +2030,7 @@ delta "Inference end-to-end deal path"; the inference delta's gateway and buyer
 scenarios; test-compatibility requirement "A deployable domain's deal runs on
 every end-to-end run").
 
-- [ ] 11.1 `e2e-tests/Makefile`: `E2E_INFERENCE_ENV`, `E2E_INFERENCE_PROJECT :=
+- [x] 11.1 `e2e-tests/Makefile`: `E2E_INFERENCE_ENV`, `E2E_INFERENCE_PROJECT :=
       simple-market-inference`, `E2E_INFERENCE_COMPOSE` over
       `compose.inference.yml`, `compose.inference-local.yml`, and
       `compose.inference-lane.yml`, `E2E_INFERENCE_MODULE ?= e2e_inference_deal`,
@@ -2038,7 +2038,7 @@ every end-to-end run").
       the API-credits lane's pattern; root `Makefile` `build-e2e-inference`
       (`build-e2e-base`, `build-registry`, the four inference images); `.github/workflows/e2e.yml`
       gains an `e2e-inference` job mirroring `e2e-apicredits` (D11).
-- [ ] 11.2 `e2e-tests/pyproject.toml`: the marker `e2e_inference_deal` with
+- [x] 11.2 `e2e-tests/pyproject.toml`: the marker `e2e_inference_deal` with
       its one-line description, and `arkhai-inference-buyer` and
       `arkhai-inference-domain` among the image's dependencies so the `market`
       binary loads every shipped plugin (market-composition delta scenario
@@ -2048,12 +2048,12 @@ every end-to-end run").
       pins, `seller_marketplace_credential`) and
       `e2e-tests/config/config-docker.yml` the lane's values, each a committed
       development value.
-- [ ] 11.3 `e2e-tests/tests/e2e/roles/scenarios/inference/{__init__,conftest}.py`:
+- [x] 11.3 `e2e-tests/tests/e2e/roles/scenarios/inference/{__init__,conftest}.py`:
       `lane_setting` failing, never skipping, on an absent value
       (test-compatibility delta scenario "A lane setting is missing"); a
       profiled buyer from `create_profiled_buyer_cli` with the compute,
       API-credits, and inference registries all pinned (D11).
-- [ ] 11.4 `test_inference_deal_buyer_cli.py` under
+- [x] 11.4 `test_inference_deal_buyer_cli.py` under
       `e2e-tests/tests/e2e/roles/scenarios/inference/`, marked
       `e2e_inference_deal`, over `DomainDealState`, `ordered_events`,
       and `assert_market_run_succeeded`, with the inference parts its own:
@@ -2084,11 +2084,11 @@ every end-to-end run").
       scenarios "A key bought for another model is presented", "A request
       names an unlisted model", "A key is exhausted", "A completion is
       streamed"; test-compatibility delta scenario "The lane runs").
-- [ ] 11.5 `e2e-tests/tests/unit/test_domain_deal_helper.py` or a sibling: the
+- [x] 11.5 `e2e-tests/tests/unit/test_domain_deal_helper.py` or a sibling: the
       inference scenario's stage order is produced and consumed through
       `require_state` with one producer per field, on the compute lanes'
       pattern (test-compatibility requirement "Exact e2e state dependencies").
-- [ ] 11.6 Run `make -C e2e-tests test-e2e-inference` locally and record the
+- [x] 11.6 Run `make -C e2e-tests test-e2e-inference` locally and record the
       run in the section note; run `make -C e2e-tests test-e2e-apicredits`
       once as well, since sections 1–3 touched the family the API-credits
       lane exercises, and record `e2e_credits_deal` and
@@ -2096,12 +2096,38 @@ every end-to-end run").
       deployable domain's deal runs on every end-to-end run"). A host that
       cannot run the lanes records that as the blocker it is, naming the
       cause, for closeout part 8.
-- [ ] 11.7 **Verification.** `make test-e2e-unit` (the harness's unit level)
+- [x] 11.7 **Verification.** `make test-e2e-unit` (the harness's unit level)
       and `make test-release-tooling`; the system level is `make -C e2e-tests
       test-e2e-inference` (`e2e_inference_deal`) and `test-e2e-apicredits`
       (`e2e_credits_deal`, `e2e_credits_service_rollback`). `make test`. The
       e2e image's dependencies change: `make lock PROJECTS=e2e-tests` and
       `make check-packaging`.
+
+*Section 11 note.* The scenario is one test, as the API-credit deal is. Step
+(a)'s routing proof is the buyer's own report that it skipped the compute and
+API-credit registries for serving another schema, with the table widened so
+the model id prints whole; the CLI has no machine-readable listing output. The
+materialization (c) is read from the buy run's events and validated as
+`InferenceMaterialization`. Step (f) runs last, so a failure in it cannot hide
+(g)–(i): it registers a second model's quota with the inference service and
+publishes its listing through the storefront's seller route, both signed as the
+storefront's seller, buys it onto a second key, and shows the gateway refuse
+that key `403 key_out_of_scope`; the key's balance is not read, since no public
+route reports it. The lane settings add `served_model_name` and
+`service_authority_identifier`. The stage test (11.5) reads the scenario's
+source, since a single-test scenario has no `require_state` fields: each deal
+stage is completed once, in order, before `assert_complete`. `.e2e-inference.env`
+joins `.gitignore`. Evidence: `e2e_inference_deal` passed against the inference
+lane, every step; `e2e_credits_deal` and both `e2e_credits_service_rollback`
+cases passed against the API-credit lane, with `e2e_credits_payment_deal`
+skipping for want of a payments target, as it does in CI. Both lanes ran on an
+arm64 Mac by their make targets' steps rather than the targets themselves: the
+amd64 images need the platform set at build time on this host, compose needs
+`--pull never`, Foundry is not on the default PATH, and the package index timed
+out during parallel image builds, so those were built one at a time. `make
+test-e2e-unit` (85, and the stub's 5), `make test-release-tooling` (1,168),
+`make check-packaging`, `make check-architecture`, and `make
+check-comment-hygiene` pass. `make test` has not been run in full.
 
 ## 12. Closeout
 

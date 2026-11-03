@@ -146,6 +146,8 @@ def alkahest_stage(**collaborators: Any) -> AlkahestSellerStage:
         # or refund split applies, so only the recipient model is delivered.
         "fulfils_through_capacity": True,
         "release_models": frozenset({RECIPIENT_RELEASE}),
+        # The inference schema prices escrow per credit.
+        "rate_unit": "credit",
         "chains": lambda: config.CHAINS,
         "seller_wallet": lambda: resolved_seller_wallet or "",
         "composition": lambda: resolved_settlement_composition,

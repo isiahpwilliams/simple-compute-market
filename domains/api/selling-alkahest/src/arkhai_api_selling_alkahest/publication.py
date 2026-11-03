@@ -19,11 +19,13 @@ def accepted_escrow(
     token: str,
     price_per_token: str,
     escrow_address: str | None = None,
+    rate_unit: str = "token",
 ) -> dict[str, Any]:
-    """One accepted escrow paying ``price_per_token`` per credit in ``token``.
+    """One accepted escrow paying ``price_per_token`` base units of ``token`` per ``rate_unit``.
 
-    Without ``escrow_address``, the chain's address book names the ERC-20
-    escrow obligation.
+    The unit is the domain's word for what one credit buys. Without
+    ``escrow_address``, the chain's address book names the ERC-20 escrow
+    obligation.
     """
     resolved = escrow_address or get_erc20_escrow_obligation_default(
         chain_name, config_path=address_config_path
@@ -32,12 +34,12 @@ def accepted_escrow(
         "chain_name": chain_name,
         "escrow_address": str(resolved).lower(),
         "literal_fields": {"token": token},
-        "rates": [{"field": "amount", "per": "token", "value": price_per_token}],
+        "rates": [{"field": "amount", "per": rate_unit, "value": price_per_token}],
     }
 
 
 def seed_accepted_escrows(
-    seed: Mapping[str, Any], chains: Mapping[str, Any]
+    seed: Mapping[str, Any], chains: Mapping[str, Any], *, rate_unit: str = "token",
 ) -> list[dict[str, Any]]:
     """The one escrow a ``[seed]`` table's listing accepts."""
     chain = str(seed.get("chain", "anvil"))
@@ -51,6 +53,7 @@ def seed_accepted_escrows(
             token=str(seed["token"]),
             price_per_token=str(seed.get("price_per_token", "1")),
             escrow_address=seed.get("escrow_address"),
+            rate_unit=rate_unit,
         )
     ]
 

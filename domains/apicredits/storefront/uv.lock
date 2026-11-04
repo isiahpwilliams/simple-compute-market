@@ -209,7 +209,7 @@ wheels = [
 
 [[package]]
 name = "arkhai-api-selling"
-version = "0.5.0"
+version = "0.6.0"
 source = { registry = "../../../.dist" }
 dependencies = [
     { name = "arkhai-api" },
@@ -231,7 +231,7 @@ dependencies = [
     { name = "pydantic" },
 ]
 wheels = [
-    { path = "arkhai_api_selling-0.5.0-py3-none-any.whl" },
+    { path = "arkhai_api_selling-0.6.0-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -350,7 +350,7 @@ dev = [
 requires-dist = [
     { name = "alkahest-py", specifier = "==1.1.2" },
     { name = "arkhai-api-client", specifier = ">=0.1.0" },
-    { name = "arkhai-api-selling", specifier = ">=0.5.0" },
+    { name = "arkhai-api-selling", specifier = ">=0.6.0" },
     { name = "arkhai-api-selling-alkahest", specifier = ">=0.2.0" },
     { name = "arkhai-api-selling-arkhai-payments", specifier = ">=0.1.0" },
     { name = "arkhai-apicredits-domain", specifier = ">=0.11.0" },

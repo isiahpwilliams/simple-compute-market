@@ -18,6 +18,7 @@ from arkhai_api_selling.lifecycle import (
     loop_controller,
     seed_site,
     start_background_tasks,
+    stop_background_tasks,
 )
 from arkhai_api_selling.listings import ListingService
 from arkhai_api_selling.negotiation import build_negotiation_runtime
@@ -442,6 +443,7 @@ async def _start_api_credit_services(
 async def _stop_api_credit_services(
     services: ApiCreditsStorefrontServices,
 ) -> None:
+    await stop_background_tasks(_container.resolved_loop_controller)
     _container.clear_lifespan_state(domain=services.domain)
     _container.resolved_negotiation_runtime = None
     logger.info("[SHUTDOWN] API-credits storefront shutting down")

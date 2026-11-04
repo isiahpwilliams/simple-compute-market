@@ -11,7 +11,13 @@ from datetime import datetime, timedelta, timezone
 
 from market_site.authority import SiteAuthorityPort
 
-from .release import ReleaseAction, ReleaseDecision, ReleaseProgress, ReleaseStatus
+from .release import (
+    ReleaseAction,
+    ReleaseDecision,
+    ReleaseProgress,
+    ReleaseStatus,
+    TeardownRefused,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +106,23 @@ def _datetime_value(value: Any) -> str | None:
     return isoformat() if callable(isoformat) else str(value)
 
 
+def _handle_read(reservation: dict[str, Any]) -> str | None:
+    """The release handle a reservation carried when it was read, if releasing."""
+    if str(reservation.get("state")) != "releasing":
+        return None
+    handle = reservation.get("release_job_id")
+    return None if handle is None else str(handle)
+
+
 class ReleaseExecutorPort(Protocol):
     """Decides a reservation's release and begins or adopts its teardown."""
 
     async def submit_release(self, reservation: dict[str, Any]) -> ReleaseDecision: ...
 
-    async def begin_teardown(self, fulfillment_id: str) -> str: ...
+    async def begin_teardown(self, fulfillment_id: str) -> str:
+        """Raises ``TeardownRefused`` for a permanent refusal; any other error
+        is transient."""
+        ...
 
 
 class ReleaseStatusPort(Protocol):
@@ -128,7 +145,7 @@ class LeaseLifecycleService:
     """
 
     TERMINAL_SUCCESS_STATES = {"released", "force_released"}
-    TERMINAL_FAILURE_STATES = {"release_failed", "unmanaged", "provisioning_failed"}
+    TERMINAL_FAILURE_STATES = {"release_failed", "unmanaged"}
 
     def __init__(
         self,
@@ -153,6 +170,9 @@ class LeaseLifecycleService:
         self._paused = False
         self._resume_event = asyncio.Event()
         self._resume_event.set()
+        # Timer cycles past the gate and not yet finished. A pause stops new
+        # ones at the gate; one already running finishes first.
+        self._timer_cycles_in_flight = 0
 
     def pause(self) -> None:
         self._paused = True
@@ -167,6 +187,17 @@ class LeaseLifecycleService:
     @property
     def is_paused(self) -> bool:
         return not self._resume_event.is_set()
+
+    @property
+    def is_at_gate(self) -> bool:
+        """Paused with no timer cycle running, so none can run until resumed.
+
+        A timer cycle that passed the gate before the pause keeps running to
+        its end; until it does the watchdog is paused but not yet held, and a
+        caller holding it waits for this. An explicit ``force_check_leases``
+        is the caller's own and does not count.
+        """
+        return self.is_paused and self._timer_cycles_in_flight == 0
 
     def get_lease(self, lease_id: str) -> dict[str, Any]:
         reservation = self._site_authority.get_reservation(lease_id)
@@ -264,10 +295,22 @@ class LeaseLifecycleService:
         return released
 
     async def check_leases(self) -> dict:
-        if not self._resume_event.is_set():
+        """The timer's cycle: blocks at the gate while paused.
+
+        The gate is read again after each wake: a resume and a pause in quick
+        succession wake the waiter with the watchdog paused again, and a pause
+        that answered "at the gate" must hold that cycle back. Nothing awaits
+        between the last read and the count, so no pause can read the gate in
+        between.
+        """
+        while not self._resume_event.is_set():
             logger.debug("[LEASE_LIFECYCLE] Cycle blocked — watchdog is paused")
             await self._resume_event.wait()
-        return await self._run_cycle()
+        self._timer_cycles_in_flight += 1
+        try:
+            return await self._run_cycle()
+        finally:
+            self._timer_cycles_in_flight -= 1
 
     async def force_check_leases(self) -> dict:
         return await self._run_cycle()
@@ -297,6 +340,7 @@ class LeaseLifecycleService:
                         reservation,
                         reason="release_submit_error",
                         message=str(exc),
+                        expected_handle=_handle_read(reservation),
                     )
                     == "release_failed"
                 ):
@@ -367,6 +411,7 @@ class LeaseLifecycleService:
                         "nothing is left to tear down, but the reservation's "
                         "provenance does not prove that nothing was dispatched"
                     ),
+                    expected_handle=_handle_read(reservation),
                 )
         if decision.action in (ReleaseAction.TEARDOWN, ReleaseAction.CREATE_IN_FLIGHT):
             # Recorded first: a crash before teardown begins leaves a lease the
@@ -384,27 +429,39 @@ class LeaseLifecycleService:
                 decision.action.value,
             )
             if decision.action is ReleaseAction.TEARDOWN:
-                await self._begin_recorded_teardown(
-                    capacity_reservation_id, str(decision.fulfillment_id)
+                return await self._begin_recorded_teardown(
+                    reservation, str(decision.fulfillment_id)
                 )
             return "releasing"
         return self._mark_release_failed(
             reservation,
             reason=decision.reason or "release_unproven",
             message=decision.message,
+            expected_handle=_handle_read(reservation),
         )
 
     async def _begin_recorded_teardown(
-        self, capacity_reservation_id: str, fulfillment_id: str
-    ) -> None:
+        self, reservation: dict[str, Any], fulfillment_id: str
+    ) -> str:
         """Begin the teardown of a release already recorded as ``releasing``.
 
-        A failure here is not the release's failure: the release is durable,
-        and the releasing pass begins the teardown on a later cycle when the
-        aggregate still reads ``active``.
+        A refusal is permanent for the aggregate as it stands, so the release is
+        failed under ``fulfillment_id``, the handle just recorded: the
+        reservation was read before that write, so its own handle is not this
+        release's. Any other failure is not the release's failure: the release
+        is durable, and the releasing pass begins the teardown on a later cycle
+        when the aggregate is still ready for it.
         """
+        capacity_reservation_id = reservation["capacity_reservation_id"]
         try:
             await self._release_executor.begin_teardown(fulfillment_id)
+        except TeardownRefused as refused:
+            return self._mark_release_failed(
+                reservation,
+                reason=refused.reason,
+                message=refused.message,
+                expected_handle=fulfillment_id,
+            )
         except Exception as exc:
             logger.warning(
                 "[LEASE_LIFECYCLE] Teardown of fulfillment %s for reservation %s "
@@ -413,6 +470,7 @@ class LeaseLifecycleService:
                 capacity_reservation_id,
                 exc,
             )
+        return "releasing"
 
     async def _process_releasing_reservation(
         self, reservation: dict[str, Any], now: datetime, grace_seconds: int
@@ -423,6 +481,7 @@ class LeaseLifecycleService:
                 reservation,
                 reason="teardown_failed",
                 message="the releasing reservation records no release handle",
+                expected_handle=None,
             )
 
         try:
@@ -444,9 +503,18 @@ class LeaseLifecycleService:
                     reservation,
                     reason=status.reason or "teardown_failed",
                     message=status.error,
+                    expected_handle=str(fulfillment_id),
                 )
             if status.progress is ReleaseProgress.READY_FOR_TEARDOWN:
-                await self._release_executor.begin_teardown(str(fulfillment_id))
+                try:
+                    await self._release_executor.begin_teardown(str(fulfillment_id))
+                except TeardownRefused as refused:
+                    return self._mark_release_failed(
+                        reservation,
+                        reason=refused.reason,
+                        message=refused.message,
+                        expected_handle=str(fulfillment_id),
+                    )
                 return "skipped"
             if status.progress is ReleaseProgress.CREATE_IN_FLIGHT:
                 # Waiting on a create is not a stalled teardown: the grace
@@ -469,25 +537,28 @@ class LeaseLifecycleService:
             reservation,
             reason="teardown_timeout",
             message="teardown did not complete before the watchdog grace period elapsed",
+            expected_handle=str(fulfillment_id),
         )
 
     def _mark_release_failed(
-        self, reservation: dict[str, Any], *, reason: str, message: str | None,
+        self,
+        reservation: dict[str, Any],
+        *,
+        reason: str,
+        message: str | None,
+        expected_handle: str | None,
     ) -> str:
         """Record the release as failed, unless the reservation moved on.
 
-        A releasing reservation is failed only under the handle this cycle
-        read, so a failure observed for one release attempt cannot land on
-        another. The site refuses a failure for a reservation an operator took
-        over or force-released, or that was released; the lifecycle then
-        leaves it as it is.
+        A releasing reservation is failed only under ``expected_handle``, the
+        release the failure was observed for, so a failure observed for one
+        release attempt cannot land on another; ``None`` names no release, for
+        a reservation read before any. Each caller names the handle because
+        only it knows which release it observed. The site refuses a failure for
+        a reservation an operator took over or force-released, or that was
+        released; the lifecycle then leaves it as it is.
         """
         capacity_reservation_id = reservation["capacity_reservation_id"]
-        expected_handle = (
-            reservation.get("release_job_id")
-            if str(reservation.get("state")) == "releasing"
-            else None
-        )
         recorded = self._site_authority.record_release_failure(
             capacity_reservation_id,
             reason=reason,

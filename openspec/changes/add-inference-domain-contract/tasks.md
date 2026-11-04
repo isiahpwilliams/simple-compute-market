@@ -151,10 +151,10 @@ an existing key names a non-blank one; the maker no longer truncates through
 API credits there, replacing this copy with an import.
 
 - [x] 3.6 Bind the family's purchase shape. `compose-api-family-kit` extracted
-      the shape into `domains/api/src/arkhai_api/purchase.py` without the
+      the shape into `kit/api/src/arkhai_api/purchase.py` without the
       correction, so this change makes it there: a strict integer quantity, a
       new key naming no `key_id`, an existing key naming a non-blank one, and a
-      maker that does not truncate; `domains/api/tests/unit/test_purchase.py`
+      maker that does not truncate; `kit/api/tests/unit/test_purchase.py`
       carries the refusals moved from the inference tests.
       `negotiation/terms.py` becomes `provision_terms_model("inference.v1")`,
       `domains/inference/pyproject.toml` declares `arkhai-api`, and the

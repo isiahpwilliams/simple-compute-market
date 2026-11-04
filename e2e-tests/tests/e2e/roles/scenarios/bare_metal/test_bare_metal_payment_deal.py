@@ -2,6 +2,11 @@
 
 The profiled Ed25519 buyer has no wallet. Financial reversal and physical
 release are separate operations; mock access is never evidence of real SSH.
+
+The storefront's loops, fulfillment convergence, and the lease watchdog are held
+for the whole module, so publication, delivery, and release are each the step a
+stage or the supply fixture asks for, and the purchase's cleanup runs before the
+holds are released.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from typing import Any
 import pytest
 from arkhai_bare_metal import NODE_GRANT_ACCESS_ACTION, NODE_RECLAIM_ACCESS_ACTION
 from arkhai_bare_metal_buyer.fulfillment import BareMetalFulfillmentTransport
+from compute_provisioning_contracts import MockRuleCreate
 from core_buyer.profile_service import BuyerProfileService
 from core_buyer.run_log import read_run, read_run_identity
 from market_arkhai_payments import (
@@ -41,7 +47,6 @@ from tests.e2e.roles.helpers.compute_deal import (
     advance_fulfillment_to,
     advance_storefront,
     dry_run_storefront,
-    pause_storefront,
     wait_for_stage_event,
 )
 from tests.e2e.roles.helpers.domain_deal import (
@@ -68,7 +73,14 @@ from tests.e2e.roles.scenarios.bare_metal.compute_deal_driver import (
 )
 from tests.e2e.roles.scenarios.bare_metal.conftest import lane_setting
 
-pytestmark = pytest.mark.e2e_bare_metal_payment_deal
+pytestmark = [
+    # Listed first, so the holds are taken before, and released after, every
+    # other fixture of the module.
+    pytest.mark.usefixtures(
+        "storefront_loops_held", "fulfillment_convergence_held", "lease_watchdog_held"
+    ),
+    pytest.mark.e2e_bare_metal_payment_deal,
+]
 
 
 def _pins(role: str) -> TrustedIdentitySet:
@@ -206,9 +218,6 @@ def payment_supply(
     )
     overrides = SyncPoolOverrideClient(storefront_admin_client)
     try:
-        pause_storefront(storefront_admin_client)
-        assert provisioning_client.pause_fulfillment_convergence().get("paused") is True
-        assert provisioning_client.pause_lease_watchdog().get("paused") is True
         driver.seed_supply()
         overrides.put_pool_override({
             "site_id": driver.site_id, "pool_id": driver.pool_id,
@@ -226,9 +235,11 @@ def payment_supply(
             (driver.create_rule_id, NODE_GRANT_ACCESS_ACTION),
             (driver.teardown_rule_id, NODE_RECLAIM_ACCESS_ACTION),
         ):
-            provisioning_test_client.add_bare_metal_mock_rule(
-                rule_id=rule_id, match={"action": action, "host_id": driver.host_id},
-                pause_before_result=False,
+            provisioning_test_client.bare_metal_rules.add_rule(
+                MockRuleCreate(
+                    rule_id=rule_id, match={"action": action, "host_id": driver.host_id},
+                    pause_before_result=False,
+                )
             )
         preview = dry_run_storefront(storefront_admin_client, "publication")
         assert any(
@@ -264,28 +275,19 @@ def payment_supply(
             ),
             retryable=refund_may_clear,
         )
-        # Resuming held loops runs last and always, so a failing step above it
-        # cannot leave them stopped for the lane's next module.
         run_cleanup(
             [
                 *compensation.steps(settled=payment_deal_state.teardown is not None),
                 # Deleting a rule that is already gone reports it not deleted;
                 # only a real failure raises, and it is reported like any step's.
                 ("remove the access-grant mock rule", lambda: provisioning_test_client
-                 .delete_bare_metal_mock_rule(driver.create_rule_id)),
+                 .bare_metal_rules.delete_rule(driver.create_rule_id)),
                 ("remove the access-reclaim mock rule", lambda: provisioning_test_client
-                 .delete_bare_metal_mock_rule(driver.teardown_rule_id)),
+                 .bare_metal_rules.delete_rule(driver.teardown_rule_id)),
                 ("drain provisioning", lambda: provisioning_test_client.drain(timeout=30)),
                 ("remove the pool override", lambda: overrides.delete_pool_override(
                     driver.site_id, driver.pool_id, "bare_metal",
                 )),
-            ],
-            always=[
-                ("resume the lease watchdog", provisioning_client.resume_lease_watchdog),
-                ("resume fulfillment convergence",
-                 provisioning_client.resume_fulfillment_convergence),
-                ("resume the storefront's loops",
-                 storefront_admin_client.admin_resume_lifecycle_loops),
             ],
         )
 

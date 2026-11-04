@@ -1,0 +1,23 @@
+# Public buyer configuration for the inference compose stack's buyer service.
+#
+# Well-known deterministic development values. Nothing here is secret; the
+# buyer's signing credential is supplied separately through
+# INFERENCE_BUYER_CREDENTIAL_FILE and never appears in this file. MUST NOT be
+# used against a public network. See README.md in this directory.
+#
+# The registry pinned below is the inference registry, which signs ed25519 as
+# the identity compose.inference-local.yml binds it to.
+
+[BuyerProfile]
+store_path = "/var/lib/arkhai-buyer/arkhai/buyer/profiles.json"
+
+[registry]
+urls = ["http://inference-registry:8080"]
+
+[registry.authorities."http://inference-registry:8080"]
+authority = "inference-registry"
+principals = [{ scheme = "ed25519", identifier = "QpkX0mKYYK2PMdhAweeYEpDGzdX_htGTGmZq-L0e9r8" }]
+
+[Chains.anvil]
+rpc_url = "ws://anvil:8545"
+chain_id = 31337

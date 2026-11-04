@@ -1,7 +1,7 @@
 # VM seller quickstart
 
 How to bring up a compute storefront, publish typed settlement options under a
-canonical marketplace identity, and optionally provision real KVM VMs.
+canonical marketplace identity, and provision KVM VMs on your own hosts.
 
 For the buyer side see [`buyer-quickstart.md`](./buyer-quickstart.md).
 To run your own listing registry instead of pointing at an existing one,
@@ -27,9 +27,9 @@ buyer-side escrow requirements.
   token required to publish.
 - For Alkahest settlement only: an EVM wallet funded with gas and the accepted
   token, an RPC URL, and the deployed Alkahest address file.
-- **Live provisioning only** — KVM-capable host: `egrep -c "(vmx|svm)"
-  /proc/cpuinfo > 0`, `libvirtd` running, your ansible user has
-  passwordless sudo and is in the `libvirt` group.
+- A KVM-capable host: `egrep -c "(vmx|svm)" /proc/cpuinfo > 0`, `libvirtd`
+  running, your ansible user has passwordless sudo and is in the `libvirt`
+  group.
 
 ## 1. Get the code and build
 
@@ -63,7 +63,6 @@ identifier = "<unpadded-base64url-public-key>"
 
 [provisioning]
 service_url = "http://seller-provisioning:8081"
-mode = "http"                            # "mock" for a dry run
 
 [capacity.sites]
 # Each site the storefront sells from, by stable ID, and its authority's origin.
@@ -101,11 +100,17 @@ priority = ["alkahest.v1"]
 
 [Settlement.alkahest]
 enabled = true
-address_config_path = "/path/to/alkahest.json"
+
+[Settlement.alkahest.address_books]
+# One entry per chain whose Alkahest contracts are a deployment of your own;
+# a chain not listed uses the SDK's built-in addresses.
+# base_sepolia = "/path/to/alkahest.json"
 
 [wallet]
-address = "0x<YOUR_SELLER_ADDRESS>"
-# Supply private_key through the deployment Secret overlay.
+# Supply private_key through the deployment Secret overlay. The address is
+# derived from it; state one only to check it, since an address naming another
+# account leaves Alkahest unready.
+# address = "0x<YOUR_SELLER_ADDRESS>"
 
 [chains.base_sepolia]
 chain_id = 84532
@@ -187,7 +192,8 @@ A listing's commercial terms come from three places, highest first:
 
 Region is a physical fact, so only the pool states it; no override does. A
 pool that states no region publishes nothing new and leaves the listings it
-already published unrefreshed; system status names it under `regionless_pools`.
+already published unrefreshed; system status reports it among its site's
+`publication_derivation` holds as `pool_region_missing`.
 `DEPLOYMENT_AND_CONFIG.md`'s "Storefront listing shapes and pool overrides"
 describes each term. Capacity admission, physical selection, prepared
 execution, and teardown are owned by the selected provisioning site.
@@ -198,17 +204,33 @@ VM pools declare provider `vm.ansible`. Provisioning migrations canonicalize
 stored `ansible` routing names while preserving pool configuration and existing
 fulfillment state. Use `vm.ansible` in mounted pool documents and operator
 requests before starting the upgraded service; the old name is not a runtime
-alias. A fresh site with a mounted pool document creates its default from that
-document before importing host inventory. Without a document, migration supplies
-the configured VM default.
+alias.
+
+A fresh site starts with pools from the provisioning service's seed: with no
+pool document mounted and no pool stored, startup creates `vm-default`
+(`vm.ansible`) and `bare-metal-default` (`bare_metal.ansible`), each backed and
+delivering and advertising its own mode. They sell nothing until you declare
+capacity into them. A VM pool, seeded or your own, may omit `playbook_path`:
+its jobs then run the service's `vm_playbook_path`, fixed into each job when it
+is prepared. A mounted pool document replaces the seed, and creates its own
+pools before host definitions are imported; no pool name, `default` included, is
+required. To start a fresh site with other pools while keeping pools
+administrable through the API, point `pool_seed_path` at your own pool
+document: under compose, mount the file into `seller-provisioning` and set
+`PROVISIONING_POOL_SEED_PATH` to its path in an override file. An empty
+`pool_seed_path` starts a fresh site with no pool. The seed is applied once, to
+a site storing no pool; a site that already holds pools is never seeded. The
+operator handbook's ["Pool definitions"](operator-handbook.md#pool-definitions)
+covers the pool document and the seed, under Helm too.
 
 A site sells what its capacity declarations say. A declaration names its Resource
 Pool, a `capacity` map of the dimensions it sells (`gpu_count`, `vcpu_count`,
 `ram_gb`, …), the categorical `attributes` claims match (`gpu_model`, `region`),
 and, when it is delivered through a host, that host's `host_id`. A host that no
-declaration names is not published.
+declaration names is not published, whatever pool it is placed in: registering
+or importing a host declares none of its capacity.
 
-There are three ways to declare, and they describe the same declaration:
+There are two ways to declare, and they describe the same declaration:
 
 - `PUT /api/v1/capacity/resources/{resource_id}` for one declaration.
 - A capacity-definitions document, submitted with
@@ -219,47 +241,175 @@ There are three ways to declare, and they describe the same declaration:
   ```yaml
   resources:
     - resource_id: compute-kvm1
-      pool_id: default
+      pool_id: vm-default
       resource_type: compute.gpu
       host_id: kvm1
       capacity: {gpu_count: 8, vcpu_count: 192, ram_gb: 2048}
       attributes: {gpu_model: H200, region: "California, US"}
   ```
 
-- Host inventory, once: see step 3 of "Live KVM provisioning".
-
 Every entry replaces the whole declaration it names, so restate everything you
 want to keep. Declarations a document does not name are left as they are. Every
-declared attribute is published to storefronts. `DEPLOYMENT_AND_CONFIG.md`'s
-"Capacity definitions" describes the document's rules in full.
+declared attribute is published to storefronts. The operator handbook's
+["Capacity definitions"](operator-handbook.md#capacity-definitions) describes the
+document's rules in full.
 
-A declaration wins over any GPU count recorded on its host. That can be
-surprising: once a declaration names a host, editing the host's inventory no
-longer changes what is sold. Change the declaration instead.
+A host record describes how to reach a machine, never its hardware: editing a
+host's entry leaves its declaration as it is. Change the declaration instead.
 
-## 4. Bring it up
+A machine without GPUs omits `gpu_count` and `gpu_model` from its declaration;
+the two are stated together or not at all. Its pool then states the shapes it
+sells, such as `listing_shapes: {vm: [{cpu: {count: 8}, memory: {gib: 32}}]}`,
+because the VM default generates GPU shapes only: a VM pool that states no
+shapes and has enabled members, none declaring GPUs, publishes nothing, and the
+storefront's system status names it (`listing_shapes_required`). A stated shape
+without GPUs may also land on a GPU host's spare vCPUs and memory.
 
-`compose/seller.yml` bundles the storefront and provisioning services.
-For mock mode it needs one operator-provided file, `config.seller.toml`. Pass
-an absolute path via env to avoid docker compose's
+## 4. Prepare your KVM hosts
+
+The provisioning service creates VMs by running Ansible against your KVM hosts
+over SSH, so the stack needs a key that reaches them and a host definitions
+document declaring them before it starts.
+
+1. Generate an SSH keypair the provisioning container will use to reach
+   your KVM hosts, install the pubkey on each host, and put the privkey
+   at `./keys/id_ed25519`:
+
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f ./keys/id_ed25519
+   ssh-copy-id -i ./keys/id_ed25519 <ansible_user>@<ssh_host>
+   chmod 600 ./keys/id_ed25519
+   ```
+
+2. Declare the execution hosts the service registers, in a host definitions
+   document, for example `./host-definitions.yaml`:
+
+   ```yaml
+   hosts:
+     - host_id: kvm1
+       pool_id: vm-default
+       connection:
+         kind: ssh
+         version: 2
+         public:
+           ssh_host: 10.0.0.5
+           public_host: 203.0.113.9
+           ssh_user: ubuntu
+           key_path: /home/appuser/.ssh/id_ed25519
+   ```
+
+   The provisioning service reconciles this document at startup whenever it
+   changes: edit it and restart the service, and the hosts it names are
+   registered or replaced as it states them; a restart with the document
+   unchanged leaves alone whatever you have changed through the API. Each entry
+   declares its whole host: an omitted `pool_id` unplaces the host, and an
+   omitted `enabled` enables it. A host the document does not name is left as it
+   is, and the service logs it as not named. `key_path` is the key's path inside
+   the container — compose mounts `./keys/id_ed25519` there — and the document
+   never carries a key. A document the service cannot apply, such as one naming
+   a pool that does not exist, stops the service from starting, naming the
+   problem; check a changed document first with `POST
+   /api/v1/hosts/definitions/import` and `"validate_only": true`. The operator
+   handbook's ["Host definitions"](operator-handbook.md#host-definitions)
+   describes the document's rules in full.
+
+   List only execution hosts. `ssh_host` is how the provisioning service
+   reaches the host over SSH. If buyers reach that host on a **different**
+   address than the provisioner does (e.g. the provisioner is on a
+   private/overlay network but the VM port-forwards are exposed on a public IP),
+   state `public_host` — that's the address put in the tenant's connection
+   details; without it, they fall back to `ssh_host`. The port a VM's buyer is
+   given is always that guest's own forwarded or relay port, never the host's: a
+   host's `public_port` is a bare-metal tenant's route, and a VM create ignores
+   it. Storefront listings reference trusted projected `pool_id`/`resource_id`;
+   they do not carry a `host_id`. Work runs only against registered hosts, and
+   a host named only in a file the service has not applied is refused at
+   dispatch.
+
+   A host entry describes how to reach the machine, not its hardware: neither
+   the document, `POST /api/v1/hosts`, nor the INI import creates a capacity
+   declaration. Declare each host's capacity yourself, as "Declaring capacity"
+   describes, naming the host's `host_id`. A host that existed when its site
+   upgraded to declared capacity received a declaration derived from its GPUs
+   then (`resource_id` and `host_id` both the host's name, `capacity`
+   `{gpu_count: <gpus>}`, `gpu_model` as an attribute, in the host's pool); that
+   declaration is an ordinary one, and stays reservable if the code is rolled
+   back.
+
+   The Ansible INI inventory is Ansible's own host list, for preparing hosts
+   with the IaC playbooks from your own machine; the service does not read it
+   at startup, and the provisioning image does not include it:
+
+   ```bash
+   cd domains/vms/provisioning/iac/ansible/inventory
+   cp provisioning-hosts.example provisioning-hosts.ini
+   # edit provisioning-hosts.ini with the same KVM host(s)
+   ```
+
+   Relay proxies and other infrastructure you manage with the IaC playbooks go
+   in `hosts` in the same directory (`cp hosts.example hosts`). To register
+   hosts from an INI file on a running deployment instead, submit it to
+   `POST /api/v1/hosts/import`.
+
+   **Upgrading a seller stack whose provisioning service already registers
+   hosts.** The service refuses to start while `inventory_path` or
+   `inventory_ini` is stated, even empty, and keeps every registered host once
+   upgraded: start it once with a document holding `hosts: []`, then turn its
+   export into your document. The operator handbook's
+   ["Upgrading from an INI inventory"](operator-handbook.md#upgrading-from-an-ini-inventory)
+   gives the steps.
+
+3. KVM host prerequisites: ansible user has passwordless sudo
+   (`sudo -n true && echo ok`), is in the `libvirt` group, and
+   `libvirtd` is running. The playbook handles cloud-init, virt-install,
+   and SSH port-forward NAT.
+
+   The host is x86-64 with hardware virtualization (`vmx` or `svm` in its CPU
+   flags) and outbound network access. A scratch create uses one pinned, dated
+   release of the Ubuntu Noble x86-64 cloud image and checks its SHA-256 before it
+   backs any disk, so it refuses another architecture before touching the host, and
+   refuses an image file at the pinned path whose digest differs until you remove
+   it. The VM IaC README's "Prerequisites" says how to move the pin.
+
+## 5. Bring it up
+
+`compose/seller.yml` bundles the storefront and provisioning services. It needs
+three operator-provided files: `config.seller.toml`, and the SSH private key and
+host definitions document from the previous section, which it mounts into the
+provisioning service and names with `PROVISIONING_HOST_DEFINITIONS_PATH`. Pass
+absolute paths via env to avoid docker compose's
 relative-path-resolves-from-the-compose-file gotcha:
 
 ```bash
 SELLER_CONFIG_PATH="$PWD/config.seller.toml" \
+SELLER_SSH_PRIVKEY="$PWD/keys/id_ed25519" \
+SELLER_HOST_DEFINITIONS="$PWD/host-definitions.yaml" \
 docker compose -f compose/seller.yml up -d
 
 docker compose -f compose/seller.yml logs -f seller-storefront
 ```
 
+Smoke-test that the provisioning container reaches each host with the mounted
+key, naming the host's `ssh_host` and `ssh_user` from its entry:
+
+```bash
+docker compose -f compose/seller.yml exec seller-provisioning ansible all \
+  -i '<ssh_host>,' -u <ssh_user> \
+  --private-key /home/appuser/.ssh/id_ed25519 -m ping
+```
+
+`SUCCESS / ping: pong` means a settled deal will create a VM on that host.
+
 Keep `admin_api_key`, `ARKHAI_IDENTITY_CREDENTIAL`, and any Alkahest wallet
 private key in the deployment's secret boundary rather than a committed
-configuration. `[provisioning].mode` selects mock versus live behavior.
+configuration. The storefront has no provisioning mode: whether a deal's
+delivery is mocked or live is the provisioning service's to decide.
 
 There is no publisher preregistration step. Every publication is signed by the
 configured canonical marketplace principal, and the registry creates the
 stable publisher subject on its first valid publication.
 
-## 5. Preview and publish
+## 6. Preview and publish
 
 Legacy settlement configuration and publication pricing require separate,
 explicit migrations:
@@ -294,106 +444,26 @@ be run or previewed while held. Inspect readiness without publishing:
 market-storefront settlement status --json
 ```
 
+The storefront does not wait for its registry, chain, or site at startup: a
+registry it cannot reach marks its system status `degraded`, a chain its Alkahest
+probe cannot reach leaves Alkahest unready until a probe reaches it, and a site
+it cannot reach holds that site's listings. An Alkahest section that cannot
+settle — no trusted oracle for `oracle_gated`, an oracle equal to the seller
+wallet, no wallet key, a wallet address naming another account than the key's, an
+address book for a chain not under `[Chains]`, no `[Chains]` — leaves Alkahest unready rather
+than stopping the storefront; system status's `settlement` names each mechanism's
+blockers. `GET /api/v1/system/status` also reports, under `publication_derivation`,
+each site's `holds`, `refusals`, and `reports` from the last publication cycle,
+each a reason code with the pool it concerns: `pool_region_missing` for a pool
+stating no region; `no_settlement_option` for a pool whose configuration rules
+out every settlement mechanism its clauses name, whose open listings then close
+until an option returns; `settlement_mechanism_unknown` while such a mechanism
+only cannot be reached, its open listings held. A site no cycle has derived since
+start is absent, and an entry is logged when it first appears and when it clears.
+
 A buyer can now run
 `market buy --resource 'gpu_model=H200' --settlement 'mechanism=alkahest.v1'`
-and, in mock mode, receive simulated VM credentials.
-
-## 6. Live KVM provisioning
-
-Mock mode validates the storefront ↔ chain ↔ registry surface without
-touching libvirt. To create real VMs:
-
-1. Set `[provisioning].mode = "http"` in the TOML (the default for fresh
-   configs).
-
-2. Generate an SSH keypair the provisioning container will use to reach
-   your KVM hosts, install the pubkey on each host, and put the privkey
-   at `./keys/id_ed25519`:
-
-   ```bash
-   ssh-keygen -t ed25519 -N "" -f ./keys/id_ed25519
-   ssh-copy-id -i ./keys/id_ed25519 <ansible_user>@<ssh_host>
-   chmod 600 ./keys/id_ed25519
-   ```
-
-3. List the hosts you sell:
-
-   ```bash
-   cd domains/vms/provisioning/iac/ansible/inventory
-   cp provisioning-hosts.example provisioning-hosts.ini
-   # edit provisioning-hosts.ini with your real KVM host(s)
-   ```
-
-   The provisioning service registers every host entry in this file into its
-   authoritative Host and Resource Pool tables, whatever section it is listed
-   under. List only hosts to sell: relay proxies and other infrastructure you
-   manage with the IaC playbooks go in `hosts` in the same directory
-   (`cp hosts.example hosts`), which the service is never given. Storefront listings reference trusted projected
-   `pool_id`/`resource_id`; they do not carry a `host_id`. Each host line's
-   `ansible_host` is how the provisioning service reaches the host over SSH.
-   If buyers reach that host
-   on a **different** address than the provisioner does (e.g. the provisioner
-   is on a private/overlay network but the VM port-forwards are exposed on a
-   public IP), add a `public_host=` var — that's the address put in the
-   tenant's connection details:
-
-   ```ini
-   [kvm_hosts]
-   kvm1  ansible_host=10.0.0.5  public_host=203.0.113.9  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
-   ```
-
-   Without `public_host`, the connection details fall back to `ansible_host`.
-
-   `provisioning-hosts.ini` seeds the host registry when the provisioning service starts with
-   no hosts registered. Work then runs only against registered hosts, never
-   against the file. To add a host to a running deployment, import the file
-   again (`POST /api/v1/hosts/import`) or register the host (`POST
-   /api/v1/hosts`). A host that is only in the file is refused at dispatch.
-
-   An inventory line's `gpus=` and `gpu_model=` declare capacity **once**: when
-   the inventory is applied, a host with GPUs that no capacity declaration names
-   gets one (`resource_id` and `host_id` both the host's name, `capacity`
-   `{gpu_count: <gpus>}`, `gpu_model` as an attribute, in the host's pool).
-   After that, later values on the line are still stored on the host but no
-   longer affect capacity; change the declaration instead. Hosts added through
-   `POST /api/v1/hosts` never derive one. These inventory values are slated for
-   removal once every deployment declares capacity directly. Upgrading derives
-   declarations the same way for hosts that already exist. Rolling back past the
-   upgrade is a code rollback: the derived declarations remain, and stay
-   reservable.
-   The provisioning image bakes the inventory in at build time — rebuild
-   after edits:
-
-   ```bash
-   make build-seller
-   ```
-
-4. Bring the stack up with the live overlay — adds the SSH-key
-   bind-mount that mock mode doesn't need:
-
-   ```bash
-   SELLER_CONFIG_PATH="$PWD/config.seller.toml" \
-   SELLER_SSH_PRIVKEY="$PWD/keys/id_ed25519" \
-   docker compose -f compose/seller.yml -f compose/seller.live.yml \
-     up -d --force-recreate seller-provisioning
-   ```
-
-5. KVM host prerequisites: ansible user has passwordless sudo
-   (`sudo -n true && echo ok`), is in the `libvirt` group, and
-   `libvirtd` is running. The playbook handles cloud-init, virt-install,
-   and SSH port-forward NAT.
-
-6. Smoke-test reachability:
-
-   ```bash
-   docker compose -f compose/seller.yml -f compose/seller.live.yml exec \
-     seller-provisioning ansible \
-     -i /opt/domains/vms/provisioning/iac/ansible/inventory/provisioning-hosts.ini \
-     <your_host_alias> -m ping
-   ```
-
-   `SUCCESS / ping: pong` means the next buy will actually create a VM.
-
+and receive the connection details of a VM created on one of your hosts.
 
 ## Upgrading from CSV inventory
 
@@ -408,8 +478,9 @@ nothing. The upgrade is one-way; there is no supported downgrade.
 
 Before upgrading, declare at provisioning everything the CSV described:
 
-1. **Hosts and capacity.** Register each host in the provisioning service's
-   host inventory and declare what it sells as capacity, as "Declaring
+1. **Hosts and capacity.** Register each host with the provisioning service, in
+   its host definitions document or through the host API, and declare what it
+   sells as capacity, as "Declaring
    capacity" above describes. A CSV row's `attribute.vm_host` names the host,
    and its `value` and `attribute.vcpu_count`, `ram_gb`, and `disk_gb` become
    the declaration's `capacity`.

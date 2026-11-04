@@ -38,20 +38,20 @@ and "API credits delivers without an extension" scenarios).
 
 - [x] 1.1 Confirm by inspection, before writing anything, that the design's
       "What exists" still holds on the target branch: `IssuanceSubject`
-      (`domains/api/selling/src/arkhai_api_selling/contributions.py`) has
+      (`kit/api/selling/src/arkhai_api_selling/contributions.py`) has
       `service`, `resource_id`, `endpoint` only; `_request_digest` in
-      `domains/api/src/arkhai_api/issuance.py` digests exactly the eight keys it
-      lists; `IssuanceEvidenceBodyV1` in `domains/api/src/arkhai_api/evidence.py`
+      `kit/api/src/arkhai_api/issuance.py` digests exactly the eight keys it
+      lists; `IssuanceEvidenceBodyV1` in `kit/api/src/arkhai_api/evidence.py`
       carries no terms field; `VerifyResponse` in
-      `domains/api/contracts/src/arkhai_api_contracts/models.py` is `valid`,
-      `status`, `balance`; and `domains/apicredits/tests/fixtures/pins/issuance_pins.json`
+      `kit/api/contracts/src/arkhai_api_contracts/models.py` is `valid`,
+      `status`, `balance`; and `kit/api/tests/fixtures/pins/issuance_pins.json`
       holds only API-credits cases. Record drift in `design.md` rather than
       working around it (`AGENTS.md`, "Discuss").
       *Note:* confirmed on the branch at 9f21a6c9e: the subject, the eight-key
       digest, the evidence body, `VerifyResponse`, and the API-credits-only pins were
       as described. Drift found later: `IssuanceRequest` is also a component of the
       API-credits service's recorded OpenAPI baseline (re-recorded in 1.8).
-- [x] 1.2 `domains/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
+- [x] 1.2 `kit/api/src/arkhai_api/issuance.py`: `IssuanceRequest` gains
       optional `accepted_terms` (a JSON object, canonical on the wire),
       `terms_digest` (`DIGEST_PATTERN`), and `request_charge` (`ge=1`,
       `le=2**53 - 1`, the canonical JSON integer domain; plan review 06 F3 as
@@ -73,7 +73,7 @@ and "API credits delivers without an extension" scenarios).
       same `RequestCharge` bound before computing a digest, so `2**53` is refused
       as a validation error rather than by canonical JSON; a wire request with `0`
       or `2**53` is refused by the label-bound model.
-- [x] 1.3 `domains/api/src/arkhai_api/evidence.py`: `IssuanceEvidenceBodyV1`
+- [x] 1.3 `kit/api/src/arkhai_api/evidence.py`: `IssuanceEvidenceBodyV1`
       and `ExpectedIssuanceEvidenceV1` gain optional `terms_digest` and
       `request_charge`, omitted when unset, so `_signing_bytes` and
       `issuance_evidence_digest` are unchanged for a body without them;
@@ -84,10 +84,10 @@ and "API credits delivers without an extension" scenarios).
       verification binds each only when the expectation carries it, and the
       request digest already binds both. `IssuanceEvidenceService`'s self-consistency
       check now carries them into its expectation.
-- [x] 1.4 `domains/api/selling/src/arkhai_api_selling/contributions.py`:
+- [x] 1.4 `kit/api/selling/src/arkhai_api_selling/contributions.py`:
       `IssuanceSubject` gains optional `accepted_terms`, `terms_digest`, and
       `request_charge`, documented as what the domain's projection reads from
-      the accepted listing. `domains/api/selling/src/arkhai_api_selling/issuance.py`:
+      the accepted listing. `kit/api/selling/src/arkhai_api_selling/issuance.py`:
       `prepare_issuance_request` copies the three from the subject onto the
       request, and the evidence body the storefront signs carries the digest
       and charge when the subject has them (review 02 F1, as amended by review
@@ -98,11 +98,11 @@ and "API credits delivers without an extension" scenarios).
       returns the issued request beside the result (`issuance_request`), and the
       stage spreads `evidence_terms(request)` into the body, so the signed terms are
       the ones the answered request digest covers. No other stage signs evidence.
-- [x] 1.5 `domains/api/selling/src/arkhai_api_selling/contributions.py`: a
+- [x] 1.5 `kit/api/selling/src/arkhai_api_selling/contributions.py`: a
       frozen `DeliveryContext(mechanism: str, settlement_ref: str | None)`,
       and `PublicResultExtension` becomes
       `Callable[[Mapping[str, Any], IssuanceResult, DeliveryContext], Mapping[str, Any]]`.
-      `domains/api/selling/src/arkhai_api_selling/issuance.py`: `fulfill`
+      `kit/api/selling/src/arkhai_api_selling/issuance.py`: `fulfill`
       passes `DeliveryContext(evidence.mechanism, evidence.settlement_ref)`
       as the extension's third argument; nothing else in the delivery moves
       (D3 "The third input is new to the kit"; api-family delta "The
@@ -112,14 +112,14 @@ and "API credits delivers without an extension" scenarios).
       *Note:* `bundles.py`'s `with_extension` only replaces the bundle's
       extension, so the change there is its docstring; the existing extension tests'
       lambdas take the third parameter. `with_terms` was added beside it.
-- [x] 1.6 Unit tests, vocabulary (`domains/api/tests/unit/test_issuance_pins.py`,
+- [x] 1.6 Unit tests, vocabulary (`kit/api/tests/unit/test_issuance_pins.py`,
       `test_evidence.py`): a request without terms digests and signs to the
       same bytes as before the fields existed; a request with terms digests
       the digest and charge and not the payload; a digest that does not match
       the payload is refused; a `request_charge` of `2**53 - 1` is accepted
       and `2**53` refused by the request model before any digest is computed
       (plan review 07 F4); evidence verification binds the digest and
-      charge. Unit tests, selling (`domains/api/selling/tests/unit/test_issuance.py`):
+      charge. Unit tests, selling (`kit/api/selling/tests/unit/test_issuance.py`):
       the subject's three values reach the request and evidence, and a subject
       without them produces today's request; an extension receives the
       evidence's mechanism and reference beside the listing and result, and a
@@ -141,7 +141,7 @@ and "API credits delivers without an extension" scenarios).
       whose body carries the terms digest and charge beside the answered request
       digest, and an unpinned one publishes none) against real storefront
       persistence and the settlement journal.
-- [x] 1.7 `domains/apicredits/tests/fixtures/pins/issuance_pins.json` and
+- [x] 1.7 `kit/api/tests/fixtures/pins/issuance_pins.json` and
       `domains/apicredits/tests/test_issuance_pins.py`: the recorded API-credits
       cases are unchanged byte for byte, and the fixture gains one inference
       case under `IssuanceLabel("inference")` with the three fields present,
@@ -181,7 +181,7 @@ and "API credits delivers without an extension" scenarios).
       **Baseline re-record:** the three optional `IssuanceRequest` properties
       (`accepted_terms`, `terms_digest`, `request_charge`, each nullable) are
       new in the API-credits service's served OpenAPI, so
-      `domains/apicredits/service/tests/fixtures/baseline/openapi.json` was
+      `kit/api/contracts/tests/fixtures/baseline/openapi.json` was
       re-recorded once, in place, from the running service; its diff is those
       three properties alone, and every other baseline record is unchanged (the
       owner's decision, `interventions.jsonl`). The compliance check's findings
@@ -214,7 +214,7 @@ refusals (review 01 F4; review 03 F1; review 03 F3 as amended by review 04 F1
 and F2; api-family delta "The issuance subject may carry accepted terms" and
 "A key is scoped to its first grant").
 
-- [x] 2.1 `domains/api/contracts/src/arkhai_api_contracts/models.py`:
+- [x] 2.1 `kit/api/contracts/src/arkhai_api_contracts/models.py`:
       `VerifyRequest` and `ConsumeRequest` gain optional `service` and
       `resource_id`; `VerifyResponse` gains optional `accepted_terms`,
       `terms_digest`, and `request_charge`, serialised only when set (the
@@ -234,7 +234,7 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       contracts' `CONSUME_REFUSALS` gains `key_out_of_scope`; the refusal baseline
       records only what an unscoped caller can receive, and `test_refusals.py`
       says so.
-- [x] 2.2 `domains/api/authority/src/arkhai_api_authority/models.py`: a
+- [x] 2.2 `kit/api/authority/src/arkhai_api_authority/models.py`: a
       `GrantTerms` model on table `grant_terms` — `grant_id` (foreign key to
       `credit_grants.id`, primary key), `accepted_terms` (canonical JSON text),
       `terms_digest`, `request_charge` — and `CreditGrant` untouched, so
@@ -243,17 +243,17 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       key's pinned values are its first grant's row.
       *Note:* `grant_terms.request_charge` is an integer column; the charge's
       `2**53 - 1` bound is the request model's, checked before anything is written.
-- [x] 2.3 `domains/api/authority/src/arkhai_api_authority/migrations.py`: one
+- [x] 2.3 `kit/api/authority/src/arkhai_api_authority/migrations.py`: one
       new `Migration` at the end of `_MIGRATIONS`, in the chain's identifier
       pattern, creating `grant_terms` when absent; `_validate_grant_schema` and
       every earlier step unchanged (review 03 F3 "Validation ordering"; D15 —
       the inference database runs this chain from its first step).
-      *Note:* step `20261030_006_grant_terms` creates the table in explicit DDL,
+      *Note:* step `20261030_007_grant_terms` creates the table in explicit DDL,
       as the chain's other steps write theirs, so it does not follow later edits
       to the model; `run_migrations`' `create_all` creates the table first on a
       fresh or upgraded database, and the step creates it where the chain runs
       alone (`apply_schema_migrations`), which the migration test exercises.
-- [x] 2.4 `domains/api/authority/src/arkhai_api_authority/keys_service.py`:
+- [x] 2.4 `kit/api/authority/src/arkhai_api_authority/keys_service.py`:
       `issue` takes `accepted_terms`, `terms_digest`, `request_charge`,
       verifies the digest against the canonical payload before writing (a
       mismatch is an `IssuanceError`), records a `GrantTerms` row with the
@@ -300,7 +300,7 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       terms, read in one query and re-verified against their digest. A terms row
       that no longer matches its digest fails the read (an internal error), since
       it is a corrupt store rather than a refusal.
-- [x] 2.6 `domains/api/authority/src/arkhai_api_authority/route_services.py`:
+- [x] 2.6 `kit/api/authority/src/arkhai_api_authority/route_services.py`:
       `AuthorityRouteService.issue` accepts the three request fields and
       returns the unchanged response, `verify` and `consume` carry the new
       fields; `_ISSUANCE_STATUS` and `_CONSUME_STATUS` map `key_out_of_scope`
@@ -314,7 +314,7 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       controller forwards the optional fields; forwarding is proven through the
       typed clients in 2.8.
 - [x] 2.7 Library-integration tests
-      (`domains/api/authority/tests/integration/test_keys_service.py`): a
+      (`kit/api/authority/tests/integration/test_keys_service.py`): a
       pinned issuance stores the three values and its result carries none of
       them, so the strict issuance response still parses; a digest mismatch is
       refused; an existing-key top-up under another `(service, resource_id)` or
@@ -363,17 +363,17 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       note). **Baseline re-records:** the served OpenAPI gained the optional `service`
       and `resource_id` on `VerifyRequest` and `ConsumeRequest`, and the schema
       baseline (`schema.json`) gained the `grant_terms` table and migration
-      `20261030_006_grant_terms`; both were re-recorded once, in place, from the
+      `20261030_007_grant_terms`; both were re-recorded once, in place, from the
       running service, each diff additions only, on the owner's section 1 decision
       for additive changes.
 - [x] 2.9 **Verification.** `make test-api-authority` (library integration),
       `make test-api` (the contracts' unit level), `make test-apicredits`
       (the service's application integration through `AuthorityClient` and
       the gate's `TokensClient`, and its compatibility baselines). `make test`.
-      `domains/api/contracts` and `domains/api/authority` versions bump for the
-      wire and schema additions, so `make lock PROJECTS="domains/api/contracts
-      domains/api/authority domains/apicredits/service domains/api/gate
-      domains/api/client domains/api/selling"` and `make check-packaging`.
+      `kit/api/contracts` and `kit/api/authority` versions bump for the
+      wire and schema additions, so `make lock PROJECTS="kit/api/contracts
+      kit/api/authority domains/apicredits/service kit/api/gate
+      kit/api/client kit/api/selling"` and `make check-packaging`.
       Once deployed, `e2e_credits_service_rollback` is the live half of the
       upgrade-and-rollback scenario: the previous image
       (`arkhai:apicredits-service-prekit`) starts against a database the new
@@ -404,7 +404,7 @@ the scope the gate sends, with the conformance trace unchanged (review 01 F3;
 review 03 F1; api-family delta "The gate verifies and charges in separable
 steps"; D16's ordering, verification before charge).
 
-- [x] 3.1 `domains/api/gate/src/arkhai_api_gate/client.py`: `VerifyResult`
+- [x] 3.1 `kit/api/gate/src/arkhai_api_gate/client.py`: `VerifyResult`
       gains optional `accepted_terms`, `terms_digest`, and `request_charge`
       read from the response when present; `TokensClient.verify` and
       `consume` take optional `service` and `resource_id` and send them only
@@ -419,14 +419,14 @@ steps"; D16's ordering, verification before charge).
       body to hold every required field and no unset optional one, and a scoped
       client to send its scope and parse a pinned key's terms;
       `KEY_OUT_OF_SCOPE` joins the declared consume refusals.
-- [x] 3.2 `domains/api/gate/src/arkhai_api_gate/config.py`: `GateConfig`
+- [x] 3.2 `kit/api/gate/src/arkhai_api_gate/config.py`: `GateConfig`
       gains optional `scope_service` and `scope_resource_id`, read by
       `from_env` as `SCOPE_SERVICE` and `SCOPE_RESOURCE_ID` under the
       deployment's prefix, unset by default (the sample app and every
       API-credits deployment set neither).
       *Note:* unit (`tests/test_config.py`): both unset by default, read under
       the prefix when set.
-- [x] 3.3 `domains/api/gate/src/arkhai_api_gate/gate.py`: `TokenGate.verify(authorization)`
+- [x] 3.3 `kit/api/gate/src/arkhai_api_gate/gate.py`: `TokenGate.verify(authorization)`
       returns either a deny `GateDecision` (401 missing or invalid, 403
       revoked, 403 `key_out_of_scope` when the authority refuses by scope) or
       a verified key value carrying `key_id`, the cached `VerifyResult`'s
@@ -451,10 +451,10 @@ steps"; D16's ordering, verification before charge).
       unavailable batch keeps each item's own amount rather than the configured
       one, the same value whenever no charge is pinned. A consume refused
       `key_out_of_scope` is answered `403` like the verify refusal.
-- [x] 3.4 `domains/api/gate/src/arkhai_api_gate/asgi.py`: `TokenGateMiddleware`
+- [x] 3.4 `kit/api/gate/src/arkhai_api_gate/asgi.py`: `TokenGateMiddleware`
       keeps calling `authorize`; its behaviour is unchanged.
       *Note:* `asgi.py` is untouched.
-- [x] 3.5 Unit tests (`domains/api/gate/tests/test_gate.py`): verify then
+- [x] 3.5 Unit tests (`kit/api/gate/tests/test_gate.py`): verify then
       refuse leaves the balance unchanged and the fake authority saw only the
       verification; verify then charge equals `authorize` call for call; a
       verified `request_charge` is the amount consumed and its absence falls
@@ -462,7 +462,7 @@ steps"; D16's ordering, verification before charge).
       and `resource_id` on verify and consume and an unscoped one sends
       neither; an authority `key_out_of_scope` status is answered `403`
       uncharged. `tests/test_conformance.py` replays
-      `domains/apicredits/middleware/conformance/session.json` unchanged, and
+      `kit/api/gate-ports/conformance/session.json` unchanged, and
       the TypeScript and Rust gates and the trace are not edited (api-family
       delta "with the same authority exchanges and cached state"; the
       `api-family` capability's "The conformance trace is replayed" scenario).
@@ -479,8 +479,8 @@ steps"; D16's ordering, verification before charge).
 - [x] 3.6 **Verification.** `make test-api-gate` (unit, the conformance
       replay, and the contract parity); `make test-apicredits` for the sample
       app's unit tests (`domains/apicredits/sample-app/tests/test_sample_app.py`),
-      which must pass unchanged. `make test`. `domains/api/gate` bumps for the
-      new public methods: `make lock PROJECTS="domains/api/gate
+      which must pass unchanged. `make test`. `kit/api/gate` bumps for the
+      new public methods: `make lock PROJECTS="kit/api/gate
       domains/apicredits/sample-app domains/apicredits/service"` and `make
       check-packaging`. Once deployed, `e2e_credits_deal` exercises the
       unchanged `authorize` path through the sample app and
@@ -732,14 +732,14 @@ D16; api-family delta "A gateway in front of a model server is one family
 library"; inference delta "The buyer's credential stops at the gateway" and
 "Streaming responses are forwarded unbuffered").
 
-- [x] 4.1 Create `domains/api/gateway/` with `pyproject.toml`
+- [x] 4.1 Create `kit/api/gateway/` with `pyproject.toml`
       (`arkhai-api-gateway`, hatchling, `packages = ["src/arkhai_api_gateway"]`),
       depending on `arkhai-api-gate[signed]` and `httpx` and on the ASGI
       framework the API-credits sample app already uses (`fastapi`,
       `uvicorn`), a `Makefile` with the one-line `reinit` target
       (`docs/development/BUILD_AND_PACKAGING.md`, "Project environments"), and
       `tests/unit/` and `tests/integration/` roots. The architecture check
-      reads `domains/api/gateway` as a family library under `domains/api`
+      reads `kit/api/gateway` as a family library under `kit/api`
       (`docs/development/ARCHITECTURE.md`, "Package and dependency layers");
       the library declares and imports no domain distribution (api-family delta
       scenario "A domain is imported by the library", which `make
@@ -750,9 +750,9 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       streaming test is its one user; the executable that runs the app (8.1)
       declares the server. The first lock was created with `uv lock --find-links
       .dist` in the project, since `make lock` relocks only an existing lock; `make
-      lock PROJECTS=domains/api/gateway` then normalised it. `make
+      lock PROJECTS=kit/api/gateway` then normalised it. `make
       check-architecture` reads the project as an api-family library and passes.
-- [x] 4.2 `domains/api/gateway/src/arkhai_api_gateway/offering.py`:
+- [x] 4.2 `kit/api/gateway/src/arkhai_api_gateway/offering.py`:
       `GatewayOffering`, a frozen value of the service name the gateway admits
       in a request's `model`, the key scope it enforces (`service`,
       `resource_id`), the default per-request charge, the gate's
@@ -769,7 +769,7 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       be); and `read_upstream_credential(path)` reads the mounted secret, stripped,
       refusing a missing, non-regular, or empty file. `current_terms` is left out
       of the frozen value's hash, being a mapping.
-- [x] 4.3 `domains/api/gateway/src/arkhai_api_gateway/verification.py`: the
+- [x] 4.3 `kit/api/gateway/src/arkhai_api_gateway/verification.py`: the
       `VerificationHook` protocol — called with the offering's current
       canonical terms, the key's accepted terms payload, and their digest as
       `verify` returned them, returning a refusal (status and error code) or
@@ -778,7 +778,7 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       *Note:* the hook is asynchronous, since a proof format may need to fetch
       what it verifies against; a refusal is a `VerificationRefusal(status,
       error)`, answered as `{"error": error}`.
-- [x] 4.4 `domains/api/gateway/src/arkhai_api_gateway/app.py` and `proxy.py`:
+- [x] 4.4 `kit/api/gateway/src/arkhai_api_gateway/app.py` and `proxy.py`:
       `create_gateway_app(offering, gate, *, verification=admit_all, http=None)`
       serving `POST /v1/chat/completions` and `POST /v1/completions`,
       `GET /v1/models` listing only the offering's service, and `/health`
@@ -814,7 +814,7 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       the first chunk. An unreachable upstream is `502 upstream_unavailable`. The
       charge precedes the forward, so a request the upstream then fails is still
       charged, as a retried request is (D4).
-- [x] 4.5 Unit tests (`domains/api/gateway/tests/unit/`): with a fake gate
+- [x] 4.5 Unit tests (`kit/api/gateway/tests/unit/`): with a fake gate
       and a fake upstream, an unlisted model is `404` and the gate is not
       called; a verify denial is returned uncharged; a refusing hook is
       answered uncharged with the gate's charge never called; the hook
@@ -840,7 +840,7 @@ library"; inference delta "The buyer's credential stops at the gateway" and
       default is used when none" cannot be shown against a fake gate: the gate's
       fallback is proven at integration (4.6) and the configured default by
       `test_offering.py`'s `gate_config` case.
-- [x] 4.6 Integration tests (`domains/api/gateway/tests/integration/`): the
+- [x] 4.6 Integration tests (`kit/api/gateway/tests/integration/`): the
       real gateway app over `httpx.ASGITransport` with a scripted authority
       (the gate's `TokensClient` against a recorded verify and consume
       service, as the gate's conformance runner scripts one) and a controlled
@@ -885,13 +885,13 @@ library"; inference delta "The buyer's credential stops at the gateway" and
 - [x] 4.8 **Verification.** `make test-api-gateway` (unit and the library's
       integration level); `make test-release-tooling` for the publish-matrix
       tests; `make check-architecture` for the domain-import rule. `make
-      test`. New project: `make lock PROJECTS=domains/api/gateway` and `make
+      test`. New project: `make lock PROJECTS=kit/api/gateway` and `make
       check-packaging`. Once deployed, `e2e_inference_deal` exercises the
       library through the inference gateway image (sections 8 and 11); no
       API-credits deployment composes it, and none is owed by this change.
       *Note:* `make test-api-gateway` passed (28: unit 21, integration 7);
       `make test-release-tooling` passed (1141, 11 skipped); `make
-      check-architecture` passed; `make lock PROJECTS=domains/api/gateway` and `make
+      check-architecture` passed; `make lock PROJECTS=kit/api/gateway` and `make
       check-packaging` passed; `make check-change` passed. `make -k test` passed
       every target but the provisioning unit test that fails only in its suite
       (section 1's note), the gateway's suite among them.
@@ -1303,6 +1303,18 @@ cards are publishable without metered consumption").
       suite passes (49), with a test that a probe which never answers ends
       within the configured one-second deadline; it fails before the fix.
 
+*Fix (found bringing the stack up in section 10):* the family's Alkahest
+seller stage published every escrow rate `per: "token"`, API credits' unit,
+and the inference schema admits only `per: "credit"`, so the storefront's
+seeded listing, and any listing the CLI publishes with an escrow, was refused.
+The stage takes the unit as `rate_unit`, defaulting to `token` so API credits'
+listings are unchanged, and the inference storefront builds it with `credit`.
+The owner chose this over loosening the inference schema or renaming API
+credits' unit. Evidence: `make test-api-selling-alkahest` (35),
+`make test-inference-storefront` (51) and `make test-apicredits` pass; the seed
+test now applies the inference contract's rate check to the stage's escrow and
+fails against the storefront before the fix.
+
 ## 6. Inference service root `arkhai-inference-service`
 
 Delivers the `arkhai:inference-service` image: the family authority composed
@@ -1697,7 +1709,7 @@ F3; D14; D16; inference delta "The gateway admits only paid requests for
 listed models", "The gateway and buyer carry verification seams for a later
 proof").
 
-- [ ] 8.1 Create `domains/inference/gateway-service/` with `pyproject.toml`
+- [x] 8.1 Create `domains/inference/gateway-service/` with `pyproject.toml`
       (`arkhai-inference-gateway-service`, hatchling, `packages =
       ["src/inference_gateway_service"]`) depending on `arkhai-api-gateway`,
       `arkhai-api-gate[signed]`, `arkhai-inference-domain`, the client of the
@@ -1705,7 +1717,7 @@ proof").
       `tests/integration/`. The architecture check reads the directory as an
       executable through the role word after its last hyphen (D2; `ARCHITECTURE.md`,
       "Package and dependency layers").
-- [ ] 8.2 `src/inference_gateway_service/config.py`: settings under the prefix
+- [x] 8.2 `src/inference_gateway_service/config.py`: settings under the prefix
       `INFERENCE_GATEWAY_` — the gate's `GateConfig.from_env(prefix,
       authority_label="inference-service")` set (authority URL, the
       `service`-role identity credential file, authority principals, verify
@@ -1715,7 +1727,7 @@ proof").
       The listing is read from the inference storefront, the listing's
       origin, through the core storefront client (D2: the storefront is the
       default source; a registry read is admitted but not built here).
-- [ ] 8.3 `src/inference_gateway_service/offering.py`: `load_offering(settings)`
+- [x] 8.3 `src/inference_gateway_service/offering.py`: `load_offering(settings)`
       selects the listing — the configured id when set, otherwise the
       storefront's open listings, every page at the route's largest size
       until a short page, filtered to the one whose card names the
@@ -1737,7 +1749,7 @@ proof").
       comparison is like for like (review 01 F1; review 02 F3; review 02 F2).
       Readiness refuses a listing that cannot be read or a card that is not
       request-priced, naming the cause.
-- [ ] 8.4 `src/inference_gateway_service/main.py`: reads the gate
+- [x] 8.4 `src/inference_gateway_service/main.py`: reads the gate
       configuration, whose `scope_service`, `scope_resource_id` and
       `amount_per_request` the gateway library takes from the offering, signs
       toward the authority as the `service` role with the gateway's own
@@ -1745,7 +1757,7 @@ proof").
       verification=admit_all)` (D16), which builds the `TokenGate` from the
       offering, and serves it under uvicorn; `/health`
       reports the offering loaded.
-- [ ] 8.5 `domains/inference/gateway-service/Dockerfile`: the lock-driven
+- [x] 8.5 `domains/inference/gateway-service/Dockerfile`: the lock-driven
       two-stage pattern with every `FROM` in the form
       `python:${PYTHON_VERSION}-slim@sha256:<digest>` — the tag the
       Python-version check requires, pinned to the digest it resolved to when
@@ -1755,7 +1767,7 @@ proof").
       mounted secret (D16 "built reproducibly from a digest-pinned base";
       inference delta "the gateway image MUST be built from digest-pinned
       inputs"; `BUILD_AND_PACKAGING.md`, "Images").
-- [ ] 8.6 Unit tests (`tests/unit/`): the projection of a fixture listing
+- [x] 8.6 Unit tests (`tests/unit/`): the projection of a fixture listing
       (`test_offering.py`) — service, scope, default charge, purchase pointer,
       and the canonical terms payload equal to the storefront projection's
       digest input for the same card; the selection over a scripted listing
@@ -1768,7 +1780,7 @@ proof").
       and charge
       (`test_config.py`); every `FROM` in the Dockerfile carries `@sha256:`
       (`test_dockerfile.py`).
-- [ ] 8.7 Integration tests (`tests/integration/test_gateway_against_authority.py`,
+- [x] 8.7 Integration tests (`tests/integration/test_gateway_against_authority.py`,
       the gateway app projected from a fixture listing, the real inference
       service root in process as the authority with a quota registered and a
       pinned key issued through `AuthorityClient`, and a controlled upstream at
@@ -1783,19 +1795,57 @@ proof").
       sale", in process); a streamed response reaches the client before the
       upstream finishes, this case against the app on a socket as 4.6 runs it
       (plan review 06 F4).
-- [ ] 8.8 Build and release: `domains/Makefile` and the root `Makefile` gain
+- [x] 8.8 Build and release: `domains/Makefile` and the root `Makefile` gain
       `dist-inference-gateway` (after `dist-api-gateway`) and
       `test-inference-gateway-service` in the aggregates;
       `build-inference-gateway` (`arkhai:inference-gateway`) in the root
       `Makefile` and in `build`; `.github/workflows/tests.yml` gains
       `inference-gateway-service`; the manifest, publish workflow, and
       `RELEASING.md` gain `arkhai-inference-gateway-service`.
-- [ ] 8.9 **Verification.** `make test-inference-gateway-service` (unit and
+- [x] 8.9 **Verification.** `make test-inference-gateway-service` (unit and
       the application's integration level against the in-process authority).
       `make test`. New project: `make lock PROJECTS=domains/inference/gateway-service`
       and `make check-packaging`. Once deployed, `e2e_inference_deal`
       exercises every status this section names through the real stub and
       authority.
+
+*Section 8 note.* The settings are `GatewaySettings` (`config.py`), read under
+`INFERENCE_GATEWAY_` with `LISTING_RETRY_SECONDS` (default 5) and an optional
+`REGISTRY_URL` for the purchase pointer; `RESOURCE_ID` and `SERVED_MODEL_NAME`
+stay required with `LISTING_ID`, and a configured listing naming another model
+or quota is refused, so a stale id cannot front the wrong offering. `main.py`'s
+`GatewayService` answers `503` with the refusal's reason until a load
+succeeds, retrying, then enters the gateway app's own lifespan and serves it;
+the image runs it as `uvicorn --factory inference_gateway_service.main:create_app`
+on port 8090, the identity credential read from
+`/run/secrets/arkhai/gateway-identity` and the upstream credential from the file
+`UPSTREAM_CREDENTIAL_FILE` names, which section 10 mounts. A missing identity
+credential fails at construction rather than retrying. Both bases are pinned
+to the digests their tags resolved to on 2026-11-02. The terms test compares
+the offering's terms digest with `accepted_terms_digest(accepted_terms(card))`,
+the function the storefront's `issuance_projection` pins with; the storefront,
+a sibling composition, is not installed for the comparison. The integration
+harness `tests/integration/authority.py` repeats the service's signed test
+composition, whose tests are not installed. Evidence: `make
+test-inference-gateway-service` (25: unit 18, integration 7) passes, including
+the not-ready-until-published case and the streamed case on a socket; `make
+check-packaging` and `make check-architecture` pass; `make
+build-inference-gateway` builds (its first attempt timed out downloading a
+wheel from the package index and passed on retry), and the image imports the
+gateway. The first lock was created with `uv lock`, since `make lock` relocks
+only an existing one, then relocked with `make lock`. `make test` has not been
+run in full.
+
+*Fix (implementation review 21 F1):* the loader retried every error, so a
+malformed signing credential, a bad model server URL, or an unreadable
+upstream credential left the gateway unready forever after startup had
+completed, and each retry built a fresh authority client. `create_app` now
+builds the signed authority client once and checks the model server URL and
+upstream credential before serving, so such an error stops startup; only
+`OfferingUnavailable` is retried, and any other load error ends the loading
+with `/health` reporting it. Evidence: `make test-inference-gateway-service`
+(30) passes; the five tests in `tests/unit/test_main.py` fail against the
+gateway before the fix.
 
 ## 9. Deterministic model stub and the `vllm` profile
 
@@ -1805,7 +1855,7 @@ deployment-state delta "Local inference stack composition", scenario "A real
 model server is wanted locally"; test-compatibility delta "The scenario MUST
 run against a deterministic model server").
 
-- [ ] 9.1 Create `e2e-tests/model-stub/` beside the end-to-end image, outside
+- [x] 9.1 Create `e2e-tests/model-stub/` beside the end-to-end image, outside
       the architecture check (`ARCHITECTURE.toml` skips `e2e-tests`): a
       `pyproject.toml` (one package under `src/`, `fastapi` and `uvicorn`), a
       `Makefile` with `reinit` and `test`, and `src/inference_model_stub/app.py`
@@ -1815,28 +1865,42 @@ run against a deterministic model server").
       when `stream` is set, and `/health` (D5). It is not a published
       distribution: like the end-to-end image, it is test tooling, so it joins
       neither the manifest nor the publish workflow.
-- [ ] 9.2 `e2e-tests/model-stub/Dockerfile` building `arkhai:inference-model-stub`
+- [x] 9.2 `e2e-tests/model-stub/Dockerfile` building `arkhai:inference-model-stub`
       on the lock-driven pattern; root `Makefile` targets
       `dist-inference-model-stub` and `build-inference-model-stub`
       (the proposal's "Build" list), the latter in `build-e2e-inference`
       (section 11).
-- [ ] 9.3 `domains/inference/compose.yml` (created in section 10 if this
+- [x] 9.3 `domains/inference/compose.yml` (created in section 10 if this
       section lands first): the `model-stub` service on the default profile,
       and a `model-server` service under `profiles: [vllm]` running the CPU
       vLLM image and small instruct model `docs/cookbooks/vllm-apicredits-seller.md`
       names, with the gateway's upstream switched to it by the profile and no
       other service's configuration changed (D5; deployment-state delta
       scenario "A real model server is wanted locally").
-- [ ] 9.4 Unit tests (`test_app.py` under `e2e-tests/model-stub/tests/`, the
+- [x] 9.4 Unit tests (`test_app.py` under `e2e-tests/model-stub/tests/`, the
       stub over ASGI): the model list, an exact non-streamed completion for a known
       prompt, and a streamed one whose first event precedes the last; the
       stub rejects a `model` it is not configured for with `404`, so the
       gateway's own check is observable as the one that answers first.
-- [ ] 9.5 **Verification.** `make -C e2e-tests/model-stub test` (unit),
+- [x] 9.5 **Verification.** `make -C e2e-tests/model-stub test` (unit),
       wired into `make test-e2e-unit`. `make test`. New project: `make lock
       PROJECTS=e2e-tests/model-stub` and `make check-packaging`. Once deployed,
       `e2e_inference_deal` runs against the stub; the `vllm` profile is not
       exercised by any lane, by D5, and none is owed.
+
+*Section 9 note.* The stub is `arkhai-inference-model-stub`
+(`inference_model_stub.app`), its model and inter-chunk delay set by
+`MODEL_STUB_MODEL` and `MODEL_STUB_CHUNK_DELAY_SECONDS`; a reply is a digest of
+the prompt, so the same prompt always gets the same text. 9.3 is left to
+section 10, which creates `domains/inference/compose.yml`: the stub and the
+`vllm` profile's server are reachable only through the gateway, storefront,
+and authority that file composes, so a file with the model servers alone would
+compose nothing runnable. `dist-inference-model-stub` builds the wheel into
+`.dist` only for the image, and `test-e2e-unit` runs the stub's tests. The
+first lock was created with `uv lock`, since `make lock` relocks only an
+existing one. Evidence: `make -C e2e-tests/model-stub test` (5) passes;
+`make build-inference-model-stub` builds, and the image answers `/v1/models`;
+`make check-packaging` passes. `make test` has not been run in full.
 
 ## 10. Compose stack, development identities, and build targets
 
@@ -1847,7 +1911,7 @@ rule; `scripts/tests/test_lane_compose.py` and
 `e2e-tests/tests/unit/test_domain_stack_configuration.py`, which pin each
 stack's shape).
 
-- [ ] 10.1 `domains/inference/compose.yml`, topology only (D10): `inference-registry`
+- [x] 10.1 `domains/inference/compose.yml`, topology only (D10): `inference-registry`
       (`arkhai:registry` with `REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml`,
       which the image already carries, so no bind mount; its own
       `REGISTRY_AUTHORITY_*` identity and descriptor; deployment-state delta
@@ -1865,7 +1929,7 @@ stack's shape).
       and `inference-storefront-data`; every credential a `${VAR:?...}`-guarded
       mount (deployment-state delta scenario "A development credential is
       missing"); no credential value committed.
-- [ ] 10.2 `compose.inference.yml` including `compose.dev.yml` and the domain
+- [x] 10.2 `compose.inference.yml` including `compose.dev.yml` and the domain
       file; `compose.inference-local.yml` binding the identities of 10.3, the
       storefront's wallet key, and a one-shot `inference-buyer-cli` under the
       `buyer` profile on `credits-buyer-cli`'s pattern; `compose.inference-lane.yml`
@@ -1874,7 +1938,7 @@ stack's shape).
       `docker-compose.yml` includes `domains/inference/compose.yml`
       (deployment-state delta scenarios "The full stack is brought up", "The
       inference stack is brought up alone").
-- [ ] 10.3 `dev-env/identities/`: `inference-registry.ed25519`,
+- [x] 10.3 `dev-env/identities/`: `inference-registry.ed25519`,
       `inference-service.ed25519`, `inference-gateway.ed25519` derived by the
       README's rule (checking no derived identifier begins with `-`),
       `inference.identity.env` and `inference.wallet.env` on the lowest
@@ -1890,7 +1954,7 @@ stack's shape).
       README's "What this directory has to satisfy"; `AGENTS.md`, "Test
       fixtures and local development configuration": each env file states it
       is a development value never for a public network).
-- [ ] 10.4 Root `Makefile`: `e2e-inference-stack-env` printing
+- [x] 10.4 Root `Makefile`: `e2e-inference-stack-env` printing
       `INFERENCE_REGISTRY_IDENTITY_CREDENTIAL_FILE`, `INFERENCE_IDENTITY_ENV_FILE`,
       `INFERENCE_EVM_WALLET_ENV_FILE`,
       `INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE`,
@@ -1902,7 +1966,7 @@ stack's shape).
       `build-inference-gateway`, and `build-inference-model-stub` join `build`;
       `dist-inference-*` (sections 5–9) are in `dist`; `test-inference-*` in
       `test`.
-- [ ] 10.5 `scripts/tests/test_lane_compose.py`: `STACKS` gains `inference`
+- [x] 10.5 `scripts/tests/test_lane_compose.py`: `STACKS` gains `inference`
       (`e2e-inference-dev-env`, `simple-market-inference`, the three files)
       and the full stack's overlay list gains `compose.inference-local.yml`;
       cases that the inference lane composes its own compute and API-credits
@@ -1915,14 +1979,14 @@ stack's shape).
       storefront and gateway runtimes installed from the staged wheel only.
       `scripts/tests/test_multi_storefront_compose.py`: the inference
       storefront's authority pins are isolated from the others'.
-- [ ] 10.6 Bring the inference wrapper up locally with
+- [x] 10.6 Bring the inference wrapper up locally with
       `make e2e-inference-dev-env` and the three files, then the full stack
       with `make e2e-dev-identities-env`, and record in the section note that
       three registries serve three schema identities and the inference
       authority, gateway, stub, and storefront report healthy, without a GPU
       or an external fetch (deployment-state delta scenarios; the `vllm`
       profile is not brought up).
-- [ ] 10.7 **Verification.** `make test-release-tooling` (the lane-compose,
+- [x] 10.7 **Verification.** `make test-release-tooling` (the lane-compose,
       multi-storefront, and publish-matrix tests, unit level) and `make
       test-e2e-unit` (the stack-configuration tests). `make test`. No lock
       changes here; `make check-packaging` runs for `check-uv-setup`'s
@@ -1930,6 +1994,40 @@ stack's shape).
       `e2e_inference_deal` runs on this stack; the "brought up alone" and
       "full stack" scenarios are the render tests above and 10.6's record,
       and none is owed in a lane.
+
+*Section 10 note.* Host ports are 8100 (registry), 8103 (storefront), 8105
+(gateway) and 8106 (service); the model stub and the `vllm` profile's server
+are reached only on the stack's network. The gateway listens on 8090, so the
+seed card's endpoint is `http://inference-gateway:8090/v1`. A Compose profile
+cannot change another service's settings, so the `vllm` profile adds
+`model-server` (served as `stub-instruct`, so the seeded card still describes
+it) and the gateway's upstream follows `INFERENCE_MODEL_BASE_URL`, defaulting to
+the stub; the profile is not brought up by any lane. This departs from 9.3's
+wording that the profile switches the upstream: the variable switches it, the
+compose file's header gives the command, and
+`test_the_gateway_fronts_the_stub_unless_the_vllm_upstream_is_named` renders
+both cases. The storefront is Anvil 0,
+the lowest-numbered account no storefront uses, and the three ed25519
+identities derive from `arkhai-development-inference-{registry,service,gateway}-v1`,
+none beginning with `-`; `dev-env/identities/README.md` gains "The inference
+stack". The authority's trusted principals and the gateway's authority pin live
+in `domains/inference/compose.yml`, as the API-credits authority's do. The lane
+overlay runs a compute registry on `registry-a.eip191` and an API-credit
+registry on `api-credits-registry.ed25519`. `build-inference-storefront` is new
+here; section 5 added none. Bringing the stack up found the seeded listing
+refused for its escrow rate's unit, fixed in section 5's note above. Evidence:
+the inference lane (`make e2e-inference-dev-env`, the three files) came up with
+every service healthy, the gateway once the storefront had published; the three
+registries loaded the `inference`, `compute.market`, and `api_credits` filter
+specifications, the storefront's listing was accepted by the inference registry
+(`201`), and the gateway listed `stub-instruct`, with no GPU or external fetch.
+The full stack (`make e2e-dev-identities-env`) brought every inference and
+API-credits service up healthy; the two VM storefronts exited because the local
+`arkhai:storefront` image was built from a newer branch and refuses this
+branch's VM configuration, which this section does not touch. `make
+test-release-tooling` (1,167), `make test-e2e-unit` (83, and the stub's 5),
+`make check-packaging`, `make check-architecture`, and `make
+check-comment-hygiene` pass. `make test` has not been run in full.
 
 ## 11. End-to-end lane and the `e2e_inference_deal` scenario
 
@@ -1939,7 +2037,7 @@ delta "Inference end-to-end deal path"; the inference delta's gateway and buyer
 scenarios; test-compatibility requirement "A deployable domain's deal runs on
 every end-to-end run").
 
-- [ ] 11.1 `e2e-tests/Makefile`: `E2E_INFERENCE_ENV`, `E2E_INFERENCE_PROJECT :=
+- [x] 11.1 `e2e-tests/Makefile`: `E2E_INFERENCE_ENV`, `E2E_INFERENCE_PROJECT :=
       simple-market-inference`, `E2E_INFERENCE_COMPOSE` over
       `compose.inference.yml`, `compose.inference-local.yml`, and
       `compose.inference-lane.yml`, `E2E_INFERENCE_MODULE ?= e2e_inference_deal`,
@@ -1947,7 +2045,7 @@ every end-to-end run").
       the API-credits lane's pattern; root `Makefile` `build-e2e-inference`
       (`build-e2e-base`, `build-registry`, the four inference images); `.github/workflows/e2e.yml`
       gains an `e2e-inference` job mirroring `e2e-apicredits` (D11).
-- [ ] 11.2 `e2e-tests/pyproject.toml`: the marker `e2e_inference_deal` with
+- [x] 11.2 `e2e-tests/pyproject.toml`: the marker `e2e_inference_deal` with
       its one-line description, and `arkhai-inference-buyer` and
       `arkhai-inference-domain` among the image's dependencies so the `market`
       binary loads every shipped plugin (market-composition delta scenario
@@ -1957,12 +2055,12 @@ every end-to-end run").
       pins, `seller_marketplace_credential`) and
       `e2e-tests/config/config-docker.yml` the lane's values, each a committed
       development value.
-- [ ] 11.3 `e2e-tests/tests/e2e/roles/scenarios/inference/{__init__,conftest}.py`:
+- [x] 11.3 `e2e-tests/tests/e2e/roles/scenarios/inference/{__init__,conftest}.py`:
       `lane_setting` failing, never skipping, on an absent value
       (test-compatibility delta scenario "A lane setting is missing"); a
       profiled buyer from `create_profiled_buyer_cli` with the compute,
       API-credits, and inference registries all pinned (D11).
-- [ ] 11.4 `test_inference_deal_buyer_cli.py` under
+- [x] 11.4 `test_inference_deal_buyer_cli.py` under
       `e2e-tests/tests/e2e/roles/scenarios/inference/`, marked
       `e2e_inference_deal`, over `DomainDealState`, `ordered_events`,
       and `assert_market_run_succeeded`, with the inference parts its own:
@@ -1993,11 +2091,11 @@ every end-to-end run").
       scenarios "A key bought for another model is presented", "A request
       names an unlisted model", "A key is exhausted", "A completion is
       streamed"; test-compatibility delta scenario "The lane runs").
-- [ ] 11.5 `e2e-tests/tests/unit/test_domain_deal_helper.py` or a sibling: the
+- [x] 11.5 `e2e-tests/tests/unit/test_domain_deal_helper.py` or a sibling: the
       inference scenario's stage order is produced and consumed through
       `require_state` with one producer per field, on the compute lanes'
       pattern (test-compatibility requirement "Exact e2e state dependencies").
-- [ ] 11.6 Run `make -C e2e-tests test-e2e-inference` locally and record the
+- [x] 11.6 Run `make -C e2e-tests test-e2e-inference` locally and record the
       run in the section note; run `make -C e2e-tests test-e2e-apicredits`
       once as well, since sections 1–3 touched the family the API-credits
       lane exercises, and record `e2e_credits_deal` and
@@ -2005,12 +2103,50 @@ every end-to-end run").
       deployable domain's deal runs on every end-to-end run"). A host that
       cannot run the lanes records that as the blocker it is, naming the
       cause, for closeout part 8.
-- [ ] 11.7 **Verification.** `make test-e2e-unit` (the harness's unit level)
+- [x] 11.7 **Verification.** `make test-e2e-unit` (the harness's unit level)
       and `make test-release-tooling`; the system level is `make -C e2e-tests
       test-e2e-inference` (`e2e_inference_deal`) and `test-e2e-apicredits`
       (`e2e_credits_deal`, `e2e_credits_service_rollback`). `make test`. The
       e2e image's dependencies change: `make lock PROJECTS=e2e-tests` and
       `make check-packaging`.
+
+*Section 11 note.* The scenario is one test, as the API-credit deal is. Step
+(a)'s routing proof is the buyer's own report that it skipped the compute and
+API-credit registries for serving another schema, with the table widened so
+the model id prints whole; the CLI has no machine-readable listing output. The
+materialization (c) is read from the buy run's events and validated as
+`InferenceMaterialization`. Step (f) runs last, so a failure in it cannot hide
+(g)–(i): it registers a second model's quota with the inference service and
+publishes its listing through the storefront's seller route, both signed as the
+storefront's seller, buys it onto a second key, and shows the gateway refuse
+that key `403 key_out_of_scope`; the key's balance is not read, since no public
+route reports it. The lane settings add `served_model_name` and
+`service_authority_identifier`. The stage test (11.5) reads the scenario's
+source, since a single-test scenario has no `require_state` fields: each deal
+stage is completed once, in order, before `assert_complete`. `.e2e-inference.env`
+joins `.gitignore`. Evidence: `e2e_inference_deal` passed against the inference
+lane, every step; `e2e_credits_deal` and both `e2e_credits_service_rollback`
+cases passed against the API-credit lane, with `e2e_credits_payment_deal`
+skipping for want of a payments target, as it does in CI. Both lanes ran on an
+arm64 Mac by their make targets' steps rather than the targets themselves: the
+amd64 images need the platform set at build time on this host, compose needs
+`--pull never`, Foundry is not on the default PATH, and the package index timed
+out during parallel image builds, so those were built one at a time. `make
+test-e2e-unit` (85, and the stub's 5), `make test-release-tooling` (1,168),
+`make check-packaging`, `make check-architecture`, and `make
+check-comment-hygiene` pass. `make test` has not been run in full.
+
+*Fix (implementation review 22 F1–F3):* the second key's `403` did not show it
+uncharged; it is now topped up by one credit after the refusal, and the
+delivery reports the authority's balance as three, both credits it was bought
+with intact. The streaming check held for a buffered response; the lane sets
+the stub's pause between chunks to 0.3 s (`compose.inference-lane.yml`), and
+the first event must precede the last by at least half the reply's total pause,
+which a buffered relay collapses. The gateway's integration test still holds
+the controlled-upstream case. The model filter met no other listing; the second
+model's listing is now published before step (a), which shows it absent from
+the filtered list and present in the unfiltered one, and step (f) buys it.
+Evidence: `e2e_inference_deal` passed against a fresh inference lane.
 
 ## 12. Closeout
 

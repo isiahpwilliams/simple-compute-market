@@ -36,8 +36,9 @@ stack has its own environment target, which supplies all of them:
 |---|---|---|
 | VM lane | `compose.vms.yml` (with `compose.dev.yml` and `domains/vms/compose.yml`), `compose.vms-local.yml` | `make e2e-vms-dev-env` |
 | API-credit lane | `compose.apicredits.yml` (with `compose.dev.yml` and `domains/apicredits/compose.yml`), `compose.apicredits-local.yml`, `compose.apicredits-lane.yml` | `make e2e-apicredits-dev-env` |
+| Inference lane | `compose.inference.yml` (with `compose.dev.yml` and `domains/inference/compose.yml`), `compose.inference-local.yml`, `compose.inference-lane.yml` | `make e2e-inference-dev-env` |
 | Bare-metal lane | `compose.bare-metal.yml`, `compose.dev.yml`, `compose.bare-metal-local.yml` | `make e2e-bare-metal-dev-env` |
-| Full local stack | `docker-compose.yml`, `compose.vms-local.yml`, `compose.apicredits-local.yml` | `make e2e-dev-identities-env` |
+| Full local stack | `docker-compose.yml`, `compose.vms-local.yml`, `compose.apicredits-local.yml`, `compose.inference-local.yml` | `make e2e-dev-identities-env` |
 
 Not all are paths. `VMS_REGISTRY_ADMIN_API_KEY` and
 `VMS_REGISTRY_BOOTSTRAP_API_KEY` are bearer tokens for `registry-b`, which runs
@@ -72,6 +73,8 @@ interchangeable:
 | `api-credits.identity.env` | 3 (`0x90f79bf6…`) | `[identity]` in `storefront.credits.toml` |
 | `api-credits.wallet.env` | 3 (`0x90F79bf6…`) | `[wallet].address` in `storefront.credits.toml` |
 | `bare-metal.storefront.secrets.toml` | 2 (`0x3C44CdDd…`) | `[Wallet].address` in `domains/bare_metal/storefront/storefront.dev.toml` |
+| `inference.identity.env` | 0 (`0xf39fd6e5…`) | `[identity]` in `storefront.inference.toml` |
+| `inference.wallet.env` | 0 (`0xf39Fd6e5…`) | `[wallet].address` in `storefront.inference.toml` |
 
 The three administrator credentials are separate principals from the sellers
 and services they administer. A storefront's `Identity.principal` publishes
@@ -176,7 +179,7 @@ the same identifiers:
 
 The names are the VM stack's; the roles are the same kind in both stacks, which
 is what makes the reuse safe. `dev-env/bare-metal/` holds the lane's other
-development files — an empty host inventory, a pool document containing only the
+development files — an empty host definitions document, a pool document containing only the
 required `default` pool with no deliverable or advertisable modes (scenarios
 declare their own pools against the provisioning mock profile), and placeholders
 for files the stack requires but the lane never uses — each explaining itself
@@ -201,6 +204,38 @@ stand in for the other. `make e2e-apicredits-dev-env` binds the credential, and
 the lane's settings in `e2e-tests/config/config-docker.yml` pin the same
 identifier. The full local stack has VM's compute registry and never layers
 `compose.apicredits-lane.yml`.
+
+## The inference stack
+
+The inference stack's three ed25519 identities are derived the same way as the
+API-credits ones, from the labels `arkhai-development-inference-registry-v1`,
+`arkhai-development-inference-service-v1`, and
+`arkhai-development-inference-gateway-v1`; none derives a seed or identifier
+beginning with `-`:
+
+| Credential | Public identifier | Role |
+|---|---|---|
+| `inference-registry.ed25519` | `QpkX0mKYYK2PMdhAweeYEpDGzdX_htGTGmZq-L0e9r8` | the inference registry, authority `inference-registry` |
+| `inference-service.ed25519` | `nS5GC-Q7uZtXKg2sep2iHsmiDYQEx6KdmME6c4-ah6A` | the inference authority itself — signs every response |
+| `inference-gateway.ed25519` | `iHX7NkwTJ0RDDsjwIpC_K4JRV3RKIxRDd-UY3Bgzmk4` | `service` — the gateway, which consumes and verifies credits |
+
+The registry's identifier is pinned in `compose.inference-local.yml`,
+`storefront.inference.toml`'s registry authority, and
+`inference-buyer.config.toml`; the authority's in `domains/inference/compose.yml`
+(the gateway's trust set) and in `storefront.inference.toml`'s
+`[credits.expected_authorities]` and capacity site; the gateway's in the
+authority's `service` trust set in `domains/inference/compose.yml`.
+
+The inference **storefront** is Anvil 0, the lowest-numbered account no
+storefront uses; it is also the VM site authority's signer in the full stack,
+which authenticates a different role, so sharing the development key lets
+neither stand in for the other. It signs toward the inference authority as
+`seller`, so the stack has no admin key.
+
+The inference lane (`compose.inference-lane.yml`) runs a compute registry and an
+API-credit registry of its own for the schema-filter scenario, reusing
+`registry-a.eip191` and `api-credits-registry.ed25519` as the API-credit lane
+does; the full local stack has VM's and API credits' and never layers it.
 
 ## Alice's provisioning authority
 

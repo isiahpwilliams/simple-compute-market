@@ -1,9 +1,9 @@
-"""Hosts present at upgrade gain the declaration INI application derives.
+"""Hosts present at upgrade gain a declaration derived from their legacy GPUs.
 
-The migration is frozen SQL; a parity test holds it equal to the runtime
-derivation until it ships.
+The migration is frozen SQL, and the only derivation of capacity from hosts:
+no host write declares capacity.
 
-These tests start from the schema the chain before this change leaves, where a
+These tests start from the schema the chain through 20260911_001 leaves, where a
 declaration named its host through a ``vm_host`` attribute, and run the whole
 chain as a deployment does.
 """
@@ -18,12 +18,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from compute_provisioning_service.db.migrations import apply_schema_migrations
-from compute_provisioning_service.services.capacity_derivation import (
-    LegacyHostCapacityDerivation,
-)
+from compute_provisioning_service.db.migrations import MIGRATIONS, apply_schema_migrations
 
 _PREVIOUS_SCHEMA = Path(__file__).parent / "fixtures" / "schema_through_20260911_001.sql"
+_ENTRY = "20260921_004_legacy_host_capacity_declarations"
 
 
 def _engine():
@@ -104,24 +102,27 @@ def test_hosts_with_gpus_and_no_declaration_are_declared():
 
 
 def test_host_rows_are_not_changed():
-    """Run the chain, then run this entry again from the state just before
-    it, so the comparison isolates what it writes."""
+    """Run the chain up to this entry, then this entry alone, so the
+    comparison isolates what it writes; later entries drop the host's GPU
+    columns."""
     engine = _engine()
-    apply_schema_migrations(engine)
+    position = [migration.id for migration in MIGRATIONS].index(_ENTRY)
     with engine.begin() as connection:
-        connection.execute(text(
-            "DELETE FROM schema_migrations "
-            "WHERE id = '20260921_004_legacy_host_capacity_declarations'"
-        ))
-        connection.execute(text(
-            "DELETE FROM capacity_buckets WHERE backing_resource_id IN ('kvm1', 'kvm4')"
-        ))
+        for migration in MIGRATIONS[position:]:
+            connection.execute(
+                text("INSERT INTO schema_migrations (id) VALUES (:id)"), {"id": migration.id}
+            )
+    apply_schema_migrations(engine)
     hosts_before = _host_rows(engine)
 
-    apply_schema_migrations(engine)
+    MIGRATIONS[position].apply(engine)
 
     assert _host_rows(engine) == hosts_before
-    assert {"kvm1", "kvm4"} <= set(_resources(engine))
+    with engine.begin() as connection:
+        declared = connection.execute(text(
+            "SELECT backing_resource_id FROM capacity_buckets"
+        )).scalars().all()
+    assert {"kvm1", "kvm4"} <= set(declared)
 
 
 def test_rerunning_changes_nothing():
@@ -138,43 +139,3 @@ def test_rerunning_changes_nothing():
     assert _resources(engine) == before
     assert events_after == events_before
 
-
-def _events(engine, resource_ids) -> list[tuple]:
-    with engine.begin() as connection:
-        rows = connection.execute(text(
-            "SELECT kind, resource_id, dimensions FROM capacity_events ORDER BY version"
-        )).all()
-    return [
-        (kind, resource_id, json.loads(dimensions) if isinstance(dimensions, str) else dimensions)
-        for kind, resource_id, dimensions in rows
-        if resource_id in resource_ids
-    ]
-
-
-def test_the_migration_derives_what_the_runtime_derivation_derives():
-    """Until the migration ships, the two derivations must agree on the same
-    hosts: the same declarations and the same events."""
-    migrated = _engine()
-    apply_schema_migrations(migrated)
-    derived_ids = {"kvm1", "kvm4"}
-
-    runtime = _engine()
-    apply_schema_migrations(runtime)
-    with runtime.begin() as connection:
-        connection.execute(text(
-            "DELETE FROM capacity_buckets WHERE backing_resource_id IN ('kvm1', 'kvm4')"
-        ))
-        connection.execute(text(
-            "DELETE FROM capacity_events WHERE resource_id IN ('kvm1', 'kvm4')"
-        ))
-    session_factory = sessionmaker(bind=runtime, autoflush=False)
-    ledger = CapacityLedgerService(
-        session_factory, unit_claim_keys=("units", "gpu_count"),
-        mirror_dimension="gpu_count",
-    )
-    derivation = LegacyHostCapacityDerivation(ledger)
-    with derivation.serialized(), session_factory() as db, db.begin():
-        assert set(derivation.derive_in_session(db)) == derived_ids
-
-    assert _resources(runtime) == _resources(migrated)
-    assert _events(runtime, derived_ids) == _events(migrated, derived_ids)

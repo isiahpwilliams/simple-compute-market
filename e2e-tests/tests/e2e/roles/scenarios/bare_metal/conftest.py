@@ -32,11 +32,8 @@ from market_resource_pools_client import SyncResourcePoolClient
 
 from e2e_harness.provisioning_test_client import ProvisioningTestClient
 from e2e_harness.settings import settings
-from tests.e2e.roles.helpers.compute_deal import (
-    SiteCapacity,
-    convergence_paused,
-    pause_storefront,
-)
+from tests.e2e.roles.helpers import compute_deal
+from tests.e2e.roles.helpers.compute_deal import SiteCapacity
 from tests.e2e.roles.helpers.compute_deal_stages import ComputeDealState
 from tests.e2e.roles.scenarios.bare_metal.compute_deal_driver import (
     BareMetalComputeDealDriver,
@@ -220,15 +217,21 @@ def site_capacity() -> SiteCapacity:
     )
 
 
-@pytest.fixture(scope="module")
-def buyer_config() -> dict[str, str]:
-    """The buyer's wallet, for the on-chain escrow; its key is its signer's."""
+def buyer_wallet_config(ssh_public_key: str) -> dict[str, str]:
+    """EVM settlement wallet inputs, independent of marketplace signing."""
+    private_key = settings.get("BARE_METAL_LANE", {}).get("buyer_wallet_private_key")
     return {
-        "private_key": lane_setting("buyer_credential"),
+        "private_key": str(private_key) if private_key else lane_setting("buyer_credential"),
         "wallet_address": lane_setting("buyer_wallet_address"),
         "rpc_url": lane_setting("buyer_rpc_url"),
-        "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForE2E test@e2e",
+        "ssh_public_key": ssh_public_key,
     }
+
+
+@pytest.fixture(scope="module")
+def buyer_config() -> dict[str, str]:
+    # Offline placeholder for mock provisioning only; never use on a public network.
+    return buyer_wallet_config("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForE2E test@e2e")
 
 
 @pytest.fixture(scope="module")
@@ -278,29 +281,37 @@ def deal_driver(
     )
 
 
-@pytest.fixture(scope="module")
-def convergence_advanced_explicitly(provisioning_client):
-    """This module drives fulfillment convergence; the timer does not.
-
-    See `convergence_paused` for why it is opt-in and resumed in the finaliser.
-    """
-    yield from convergence_paused(provisioning_client)
+# Module holds of the lane's shared services. Each is a module-scoped fixture
+# over one of `helpers/compute_deal.py`'s hold helpers, which state the
+# module-hold rule. A module takes the holds it needs with
+# `pytest.mark.usefixtures`, listed first; none is autouse, since a scenario that
+# relies on a timer would be stalled rather than made deterministic by it.
 
 
 @pytest.fixture(scope="module")
-def bare_metal_loops_held(bare_metal_storefront_admin):
-    """Hold the storefront's timer loops for this module and resume afterwards.
+def storefront_loops_held(bare_metal_storefront_admin):
+    """The bare-metal storefront's lifecycle loops, held for the module.
 
-    The storefront publishes and polls its site on timers, so a module that
-    steps those loops itself holds them first: a timer cycle would otherwise
-    race the cycle the scenario is about to observe. Wherever a site changes,
-    the scenario steps ``site-projections`` before publication, since the held
-    poller will not see the change. Opt-in, taken with ``pytest.mark.usefixtures``
-    by each module that drives the loops, and resumed in a finaliser so a
-    failing stage does not leave the next module with the loops stopped.
+    The storefront publishes and polls its site on timers, so wherever a site
+    changes a held module steps ``site-projections`` before publication: the
+    held poller will not see the change.
     """
-    held = pause_storefront(bare_metal_storefront_admin)
-    assert held
-    yield
-    bare_metal_storefront_admin.admin_resume_lifecycle_loops()
+    with compute_deal.storefront_loops_held(bare_metal_storefront_admin) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
+def fulfillment_convergence_held(provisioning_client):
+    """The site's fulfillment convergence, held for a module that advances it
+    itself."""
+    with compute_deal.fulfillment_convergence_held(provisioning_client) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
+def lease_watchdog_held(provisioning_client):
+    """The site's lease watchdog, held for a module that steps lease expiry
+    itself; stages read the hold back through system status."""
+    with compute_deal.lease_watchdog_held(provisioning_client) as held:
+        yield held
 

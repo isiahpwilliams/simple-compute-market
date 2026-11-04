@@ -69,12 +69,34 @@ def _resolve_market_binary() -> Optional[Path]:
     return None
 
 
+#: The options by which a ``market`` command names the run it reads. VM commands
+#: take ``--from``; bare-metal recovery takes ``--run-id``.
+_RUN_OPTIONS = ("--from", "--run", "--run-id")
+
+
+def run_id_from_args(args: Iterable[str]) -> Optional[str]:
+    """The run a ``market`` command reads, as its arguments name it.
+
+    A command naming a run is bound to it, so its events are read from that run's
+    log rather than from whichever log it may write. Each option is read in both
+    forms Typer accepts, ``--run-id <id>`` and ``--run-id=<id>``.
+    """
+    args_list = list(args)
+    for i, a in enumerate(args_list):
+        if a in (*_RUN_OPTIONS, "-r") and i + 1 < len(args_list):
+            return args_list[i + 1]
+        for option in _RUN_OPTIONS:
+            if a.startswith(option + "=") and len(a) > len(option) + 1:
+                return a[len(option) + 1:]
+    return None
+
+
 @dataclass
 class MarketRun:
     """One invocation of ``market <subcommand>``.
 
     Carries the resolved run-id (looked up by listing the JSONL dir
-    or extracted from a ``--from`` flag on the args) and the
+    or extracted from the run option on the args) and the
     subprocess handle. Helpers tail the run-log so the test can
     coordinate with the CLI between event milestones.
     """
@@ -284,11 +306,7 @@ class BuyerCli:
         return self.state_dir / "arkhai" / "buy-runs"
 
     def _resolve_run_id_from_args(self, args: Iterable[str]) -> Optional[str]:
-        args_list = list(args)
-        for i, a in enumerate(args_list):
-            if a in ("--from", "--run", "-r") and i + 1 < len(args_list):
-                return args_list[i + 1]
-        return None
+        return run_id_from_args(args)
 
     def run(
         self,
@@ -591,7 +609,6 @@ def buyer_cli(buyer_cli_binary: Path, tmp_path_factory) -> BuyerCli:
         "",
         "[chains.anvil]",
         f"rpc_url = {_toml_quote(rpc_url)}",
-        f"alkahest_address_config_path = {_toml_quote(alkahest_path)}",
         "",
         "[negotiation]",
         'policies = ["buyer_escrow_shape_guard", "bisection"]',
@@ -608,10 +625,9 @@ def buyer_cli(buyer_cli_binary: Path, tmp_path_factory) -> BuyerCli:
         "",
         "[Settlement.alkahest]",
         "enabled = true",
-        # The same addresses file the chain section names. Alkahest resolves
-        # contract addresses through the mechanism section here, not through
-        # the chain entry, so both have to point at it.
-        f"address_config_path = {_toml_quote(alkahest_path)}",
+        # The anvil chain's address book, which every Alkahest read on that
+        # chain resolves through this table.
+        f"address_books = {{ anvil = {_toml_quote(alkahest_path)} }}",
         "oracle_gated = false",
         "trusted_oracle_addresses = []",
         "interruptible = false",

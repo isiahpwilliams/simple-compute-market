@@ -26,6 +26,12 @@ from arkhai_api_selling.system import SystemSettings
 from dynaconf import Dynaconf
 from core_storefront.identity_config import IdentityConfig, resolve_storefront_signer
 from core_storefront.multi_registry_client import RegistryAuthorityTrust
+from market_alkahest import (
+    AlkahestSettlementConfig,
+    alkahest_address_book,
+    retired_address_book_keys,
+    retired_address_book_refusal,
+)
 from market_identity import Identity, IdentityScheme, Signer, TrustedIdentitySet
 from market_config.config_loader import (
     ChainConfig,
@@ -107,6 +113,29 @@ def settlement_config_mapping(source: Dynaconf | None = None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Settlement must be a table")
     return value
+
+
+def chain_address_books() -> dict[str, str | None]:
+    """Each configured chain's Alkahest address book, by chain name.
+
+    Resolved from `[Settlement.alkahest.address_books]` through the Alkahest
+    kit, ``None`` for a chain the table names no book for, which uses the SDK's
+    built-in addresses. Raises ``ValueError`` naming each retired address-book
+    key the configuration states, since nothing reads those keys.
+    """
+    try:
+        settlement = settlement_config_mapping()
+    except ValueError:
+        # A [Settlement] that is not a table is refused when it is resolved.
+        settlement = {}
+    retired = retired_address_book_keys(settlement, settings.get("chains"))
+    if retired:
+        raise ValueError("; ".join(map(retired_address_book_refusal, retired)))
+    raw = settlement.get("alkahest")
+    section = (
+        AlkahestSettlementConfig.model_validate(raw) if isinstance(raw, dict) else None
+    )
+    return {name: alkahest_address_book(section, name) for name in CHAINS}
 
 
 def settlement_publication_defaults(
@@ -344,9 +373,7 @@ def round_settings() -> RoundSettings:
     return RoundSettings(
         floor_key="pricing.default_min_price",
         negotiation_config=settings.get("negotiation"),
-        chain_config_paths={
-            name: chain.alkahest_address_config_path for name, chain in CHAINS.items()
-        },
+        chain_config_paths=chain_address_books(),
         default_min_price=settings.get("pricing.default_min_price"),
     )
 

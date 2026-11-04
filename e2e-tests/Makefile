@@ -20,8 +20,9 @@ MODULE ?= contracts
 # CLI instead; this variable is for local development only.
 DIST_DIR ?= ../.dist
 
-.PHONY: build venv test test-e2e test-e2e-vm test-e2e-bare-metal test-e2e-apicredits \
-	e2e-vm-down e2e-vm-logs e2e-bare-metal-down e2e-bare-metal-logs e2e-apicredits-down e2e-apicredits-logs
+.PHONY: build venv test test-e2e test-e2e-vm test-e2e-bare-metal test-e2e-apicredits test-e2e-inference \
+	e2e-vm-down e2e-vm-logs e2e-bare-metal-down e2e-bare-metal-logs e2e-apicredits-down e2e-apicredits-logs \
+	e2e-inference-down e2e-inference-logs
 
 # -----------------------------------------------------------------------
 # Setup
@@ -42,12 +43,16 @@ reinit: init-venv
 IMAGE_NAME ?= arkhai
 IMAGE_TAG  ?= e2e-tests
 GIT_SUFFIX := $(shell git rev-parse --short HEAD)
+# Appended to the image's tag; the root Makefile's IMAGE_SUFFIX. A suffixed build
+# is tagged per change alone: a commit tag would keep one image per validated commit.
+# The targets that run the image use the bare tag, as the pipeline lanes do.
+IMAGE_SUFFIX ?=
 
 build: build-images
 
 build-images: reinit
-	cd .. && docker build -t $(IMAGE_NAME):$(IMAGE_TAG) -f e2e-tests/Dockerfile .
-	docker tag $(IMAGE_NAME):$(IMAGE_TAG) $(IMAGE_NAME):$(IMAGE_TAG)-$(GIT_SUFFIX)
+	cd .. && docker build -t $(IMAGE_NAME):$(IMAGE_TAG)$(IMAGE_SUFFIX) -f e2e-tests/Dockerfile .
+	$(if $(IMAGE_SUFFIX),,docker tag $(IMAGE_NAME):$(IMAGE_TAG) $(IMAGE_NAME):$(IMAGE_TAG)-$(GIT_SUFFIX))
 
 test:
 	ACTIVE_PROFILES=$(ACTIVE_PROFILES) \
@@ -91,12 +96,16 @@ NETWORK ?= simple-market-service_default
 BUYER_MODULE ?= e2e_deal_buyer_cli or e2e_buy
 # The engine socket to mount into the test container; empty mounts none.
 BUYER_MACHINE_DOCKER_SOCKET ?=
-# The VM lane's scenarios. `e2e_alkahest_escrow_codecs` needs only the chain and
-# stays here; `multi_registry` reads VM's two registries;
+# The VM lane's scenarios. `e2e_alkahest_escrow_codecs` and
+# `e2e_alkahest_trusted_oracle` need only the chain and its funded buyer and
+# seller wallets, and stay here; `multi_registry` reads VM's two registries;
 # `e2e_non_erc20_settlement` settles native-token and ERC1155 escrows against
-# the dev chain's own deployments.
+# the dev chain's own deployments. `e2e_vm_real_provisioning` is in no lane: it
+# provisions on a real KVM host an operator provides, which the pipeline never
+# has, and runs from the operator's machine through `test-module`.
 E2E_MODULE ?= e2e_deal or e2e_deal_buyer_cli or e2e_buy or multi_registry \
               or e2e_compute_dynamic_listings or e2e_alkahest_escrow_codecs \
+              or e2e_alkahest_trusted_oracle \
               or e2e_listing_shapes or e2e_vm_introduction \
               or e2e_non_erc20_settlement
 # The API-credit lane's scenarios. The payment deal is blocked without a
@@ -104,10 +113,13 @@ E2E_MODULE ?= e2e_deal or e2e_deal_buyer_cli or e2e_buy or multi_registry \
 # over the database the deal scenarios wrote.
 E2E_APICREDITS_MODULE ?= e2e_credits_deal or e2e_credits_payment_deal \
                          or e2e_credits_service_rollback
+# The inference lane's scenario.
+E2E_INFERENCE_MODULE ?= e2e_inference_deal
 # The bare-metal lane's scenarios. `e2e_bare_metal_deal` is in neither lane: it
 # needs a real whole host to SSH into, which the pipeline never has.
 E2E_BARE_METAL_MODULE ?= e2e_bare_metal_publication or e2e_bare_metal_introduction \
-                         or e2e_bare_metal_mock_deal or e2e_bare_metal_payment_deal
+                         or e2e_bare_metal_unbacked_introduction or e2e_bare_metal_mock_deal \
+                         or e2e_bare_metal_payment_deal
 
 test-buyer-machine:
 	docker run --rm \
@@ -203,6 +215,8 @@ test-e2e:
 	$(MAKE) test-e2e-bare-metal
 	$(MAKE) e2e-bare-metal-down
 	$(MAKE) test-e2e-apicredits
+	$(MAKE) e2e-apicredits-down
+	$(MAKE) test-e2e-inference
 
 # VM lane: Bob's and Alice's storefronts and provisioning authorities, the two
 # VM registries, and the dev chain.
@@ -273,3 +287,26 @@ e2e-apicredits-down:
 e2e-apicredits-logs:
 	@cd .. && $(call e2e_env_if_missing,$(E2E_APICREDITS_ENV),e2e-apicredits-dev-env)
 	@cd .. && docker compose --env-file "$(E2E_APICREDITS_ENV)" $(E2E_APICREDITS_COMPOSE) logs --no-color
+
+# Inference lane: the inference registry, service, gateway, model stub, and
+# storefront, the lane's own compute and API-credit registries, and the dev
+# chain; see compose.inference-lane.yml.
+E2E_INFERENCE_ENV ?= $(CURDIR)/../.e2e-inference.env
+E2E_INFERENCE_PROJECT := simple-market-inference
+E2E_INFERENCE_COMPOSE := -p $(E2E_INFERENCE_PROJECT) -f compose.inference.yml \
+	-f compose.inference-local.yml -f compose.inference-lane.yml
+
+test-e2e-inference:
+	cd .. && $(MAKE) -s --no-print-directory e2e-inference-dev-env > "$(E2E_INFERENCE_ENV)"
+	cd .. && docker compose --env-file "$(E2E_INFERENCE_ENV)" $(E2E_INFERENCE_COMPOSE) down -v --remove-orphans
+	cd .. && $(MAKE) build-e2e-inference
+	cd .. && $(call e2e_up,$(E2E_INFERENCE_ENV),$(E2E_INFERENCE_COMPOSE))
+	$(MAKE) test-buyer-machine NETWORK=$(E2E_INFERENCE_PROJECT)_default BUYER_MODULE="$(E2E_INFERENCE_MODULE)"
+
+e2e-inference-down:
+	cd .. && $(call e2e_env_if_missing,$(E2E_INFERENCE_ENV),e2e-inference-dev-env)
+	cd .. && docker compose --env-file "$(E2E_INFERENCE_ENV)" $(E2E_INFERENCE_COMPOSE) down -v --remove-orphans
+
+e2e-inference-logs:
+	@cd .. && $(call e2e_env_if_missing,$(E2E_INFERENCE_ENV),e2e-inference-dev-env)
+	@cd .. && docker compose --env-file "$(E2E_INFERENCE_ENV)" $(E2E_INFERENCE_COMPOSE) logs --no-color

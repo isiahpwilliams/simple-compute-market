@@ -11,7 +11,7 @@ from typing import Any, TypeVar
 
 from arkhai_bare_metal import (
     BARE_METAL_OFFERING_MODE,
-    BareMetalLeaseReadyEvidence,
+    BareMetalLeaseReadyEvidenceDocument,
     BareMetalListing,
     BareMetalMaterialization,
     BareMetalMessage,
@@ -232,10 +232,15 @@ class SQLiteClient(CoreSQLiteClient):
             "site_id": site_id,
             "pool_id": pool_id,
             "physical_resource_id": physical_resource_id,
-            "host_id": normalized.host_id,
-            "physical_host_id": normalized.physical_host_id,
             "shape_digest": shape_digest,
         }
+        # Host identity is recorded only where the listing carries it: an
+        # unbacked listing names no host, and its source is its Physical
+        # Resource alone.
+        for name in ("host_id", "physical_host_id"):
+            value = getattr(normalized, name)
+            if value is not None:
+                source_envelope[name] = value
         binding = StorefrontListingBinding.from_source_envelope(
             listing_id=listing_id,
             site_id=site_id,
@@ -339,6 +344,56 @@ class SQLiteClient(CoreSQLiteClient):
             artifact="message",
             normalize=self._market_domain.codecs.message,
         )
+
+    async def save_bare_metal_opening_listing(
+        self, *, negotiation_id: str, listing_record: Mapping[str, Any]
+    ) -> None:
+        """Record the listing record a negotiation's opening was authorized against.
+
+        Written once: a repeated write for the same negotiation keeps the first.
+        """
+        encoded = json.dumps(
+            dict(listing_record),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+            default=str,
+        )
+
+        def _save() -> None:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                with conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO bare_metal_opening_listings("
+                        "negotiation_id, listing_json) VALUES (?, ?)",
+                        (negotiation_id, encoded),
+                    )
+            finally:
+                conn.close()
+
+        await asyncio.to_thread(_save)
+
+    async def load_bare_metal_opening_listing(
+        self, *, negotiation_id: str
+    ) -> dict[str, Any] | None:
+        """The listing record the negotiation's opening was authorized against."""
+
+        def _load() -> str | None:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                row = conn.execute(
+                    "SELECT listing_json FROM bare_metal_opening_listings "
+                    "WHERE negotiation_id = ?",
+                    (negotiation_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            return None if row is None else str(row[0])
+
+        raw = await asyncio.to_thread(_load)
+        return None if raw is None else json.loads(raw)
 
     async def save_bare_metal_terms(
         self,
@@ -945,10 +1000,10 @@ class SQLiteClient(CoreSQLiteClient):
         self,
         *,
         evidence_digest: str,
-    ) -> BareMetalLeaseReadyEvidence | None:
+    ) -> BareMetalLeaseReadyEvidenceDocument | None:
         """Resolve one content-addressed lease-ready document, for an Alkahest deal."""
 
-        def _load() -> BareMetalLeaseReadyEvidence | None:
+        def _load() -> BareMetalLeaseReadyEvidenceDocument | None:
             conn = sqlite3.connect(self.db_path)
             try:
                 row = conn.execute(
@@ -956,9 +1011,13 @@ class SQLiteClient(CoreSQLiteClient):
                     "WHERE lease_ready_evidence_digest = ?",
                     (evidence_digest,),
                 ).fetchone()
-                if row is None or row[0] is None:
+                if row is None:
                     return None
-                return BareMetalLeaseReadyEvidence.model_validate_json(str(row[0]))
+                if not isinstance(row[0], str):
+                    raise ValueError("stored lease-ready evidence is not canonical TEXT")
+                return BareMetalLeaseReadyEvidenceDocument(
+                    row[0].encode("utf-8"), evidence_digest
+                )
             finally:
                 conn.close()
 
@@ -995,15 +1054,15 @@ class SQLiteClient(CoreSQLiteClient):
         self,
         *,
         negotiation_id: str,
-        evidence: BareMetalLeaseReadyEvidence,
-    ) -> BareMetalLeaseReadyEvidence:
+        evidence: BareMetalLeaseReadyEvidenceDocument,
+    ) -> BareMetalLeaseReadyEvidenceDocument:
         """Record an Alkahest fulfillment's evidence once; a retry finds it.
 
         The first evidence recorded is the one whose digest may already be on
         chain, so a later attempt reuses it rather than writing a different one.
         """
 
-        def _save() -> BareMetalLeaseReadyEvidence:
+        def _save() -> BareMetalLeaseReadyEvidenceDocument:
             conn = sqlite3.connect(self.db_path)
             try:
                 with conn:
@@ -1012,17 +1071,23 @@ class SQLiteClient(CoreSQLiteClient):
                         "lease_ready_evidence_json = ?, "
                         "lease_ready_evidence_digest = ?, "
                         "updated_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                        "WHERE negotiation_id = ? AND lease_ready_evidence_json IS NULL",
+                        "WHERE negotiation_id = ? AND lease_ready_evidence_json IS NULL "
+                        "AND lease_ready_evidence_digest IS NULL",
                         (evidence.canonical_json(), evidence.evidence_digest, negotiation_id),
                     )
-                row = conn.execute(
-                    "SELECT lease_ready_evidence_json FROM bare_metal_fulfillment_lifecycle "
-                    "WHERE negotiation_id = ?",
-                    (negotiation_id,),
-                ).fetchone()
-                if row is None:
-                    raise RuntimeError("bare-metal fulfillment lifecycle is missing")
-                return BareMetalLeaseReadyEvidence.model_validate_json(str(row[0]))
+                    row = conn.execute(
+                        "SELECT lease_ready_evidence_json, lease_ready_evidence_digest "
+                        "FROM bare_metal_fulfillment_lifecycle WHERE negotiation_id = ?",
+                        (negotiation_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise RuntimeError("bare-metal fulfillment lifecycle is missing")
+                    if not isinstance(row[0], str):
+                        raise ValueError("stored lease-ready evidence is not canonical TEXT")
+                    stored = BareMetalLeaseReadyEvidenceDocument(
+                        row[0].encode("utf-8"), row[1]
+                    )
+                return stored
             finally:
                 conn.close()
 

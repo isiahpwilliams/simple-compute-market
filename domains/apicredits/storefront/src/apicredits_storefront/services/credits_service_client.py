@@ -5,6 +5,8 @@ from __future__ import annotations
 from arkhai_api_client import AuthorityClient
 from arkhai_apicredits.label import API_CREDITS_LABEL
 
+from apicredits_storefront.utils import config
+
 _client: AuthorityClient | None = None
 
 
@@ -23,8 +25,6 @@ def get_credits_service_client() -> AuthorityClient:
     """
     global _client
     if _client is None:
-        from apicredits_storefront.utils import config
-
         authorities = config.credits_expected_authorities()
         _client = AuthorityClient(
             config.credits_service_url(),

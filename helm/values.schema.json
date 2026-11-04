@@ -130,7 +130,10 @@
             "relay_token": false,
             "ssh_decryption_key": false,
             "inventory_ini": false,
-            "storefront_admin_key": false
+            "inventory_path": false,
+            "storefront_admin_key": false,
+            "relay_definitions_path": false,
+            "host_definitions_path": false
           }
         },
         "storefront": {
@@ -1409,14 +1412,16 @@
                     "null"
                   ]
                 },
-                "^[aA][dD][dD][rR][eE][sS][sS]_[cC][oO][nN][fF][iI][gG]_[pP][aA][tT][hH]$": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                "^[aA][dD][dD][rR][eE][sS][sS]_[bB][oO][oO][kK][sS]$": {
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": [
+                    "object",
+                    "null"
                   ]
                 },
                 "^[oO][rR][aA][cC][lL][eE]_[gG][aA][tT][eE][dD]$": {
@@ -1446,6 +1451,22 @@
                   },
                   "type": [
                     "array",
+                    "null"
+                  ]
+                },
+                "^[pP][rR][oO][bB][eE]_[iI][nN][tT][eE][rR][vV][aA][lL]_[sS][eE][cC][oO][nN][dD][sS]$": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 62135596800.0,
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "^[rR][pP][cC]_[tT][iI][mM][eE][oO][uU][tT]_[sS][eE][cC][oO][nN][dD][sS]$": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 62135596800.0,
+                  "type": [
+                    "number",
                     "null"
                   ]
                 }
@@ -1712,7 +1733,9 @@
             "null"
           ],
           "patternProperties": {
-            "^[iI][dD][eE][nN][tT][iI][tT][yY]$": false
+            "^[iI][dD][eE][nN][tT][iI][tT][yY]$": false,
+            "^[fF][aA][iI][lL]_[oO][nN]_[uU][nN][rR][eE][aA][cC][hH][aA][bB][lL][eE]$": false,
+            "^[pP][rR][eE][fF][lL][iI][gG][hH][tT]_[tT][iI][mM][eE][oO][uU][tT]$": false
           }
         }
       }

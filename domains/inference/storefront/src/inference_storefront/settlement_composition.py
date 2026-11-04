@@ -25,7 +25,7 @@ from market_settlement_runtime import (
     SettlementSQLiteRepository,
 )
 
-from inference_storefront.container import SELLER_STAGES, SELLING_CONTRIBUTIONS
+from inference_storefront.container import ALKAHEST_STAGE, SELLER_STAGES, SELLING_CONTRIBUTIONS
 from inference_storefront.services.credits_service_client import get_credits_service_client
 from inference_storefront.utils import config as storefront_config
 
@@ -69,6 +69,7 @@ def build_inference_settlement_composition(
         "get_client": lambda chain: chain_clients.get(chain or ""),
         "chains": storefront_config.CHAINS,
         "default_chain": next(iter(storefront_config.CHAINS), None),
+        **ALKAHEST_STAGE.composition_resources(),
     }
     mechanism_clients = servicing_mechanism_clients(
         SELLER_STAGES, registry, settlement_config, resources

@@ -169,7 +169,7 @@ class HealthResponse:
     chain_id: int | None = None  # EVM chain ID; present on /api/v1/system/status
     site_projections: dict[str, Any] | None = None  # per-site/family projection load state; present on /api/v1/system/status
     listing_cardinality_mode_explanations: dict[str, Any] | None = None  # per-site/pool cardinality-hint notices; present on /api/v1/system/status
-    publication_derivation: dict[str, Any] | None = None  # per-site held pools and publication notices; present on /api/v1/system/status
+    publication_derivation: dict[str, Any] | None = None  # per site, the latest publication cycle's holds, refusals, and reports, each a reason code with its pool or resource; a site no cycle has derived is absent; present on /api/v1/system/status
     #: The storefront-to-provisioning contract major this storefront speaks,
     #: from its own installed wheel. Not the peer's, and not the same axis as
     #: a domain contribution's `contract_version`: this is the wire a cutover
@@ -188,6 +188,11 @@ class HealthResponse:
     lifecycle: dict[str, Any] | None = None
     #: The storefront's own marketplace principal; present on /api/v1/system/status.
     principal: Identity | None = None
+    #: Each composed settlement mechanism's readiness as its registration
+    #: projects it -- ``mechanism``, ``ready``, and each blocker's ``code`` and
+    #: ``kind`` among it; present on /api/v1/system/status where the storefront
+    #: reports it.
+    settlement: list[dict[str, Any]] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -202,7 +207,9 @@ class HealthResponse:
             "settlement_manual_required",
             "lifecycle",
             "principal",
+            "settlement",
         }
+        raw_settlement = d.get("settlement")
         raw_chain_id = d.get("chain_id")
         raw_manual = d.get("settlement_manual_required")
         return cls(
@@ -224,6 +231,11 @@ class HealthResponse:
             lifecycle=d.get("lifecycle"),
             principal=(
                 Identity.model_validate(d["principal"]) if d.get("principal") is not None else None
+            ),
+            settlement=(
+                [dict(item) for item in raw_settlement]
+                if raw_settlement is not None
+                else None
             ),
             extra={k: v for k, v in d.items() if k not in known},
         )
@@ -706,7 +718,8 @@ class ReserveCapacityResponse:
     #: was unsatisfiable for every reservation rather than only for pooled
     #: ones -- a caller reading it got `""` and could not tell that apart from
     #: an answer. `pool_id` and `member_id` are what the boundary does report.
-    gpu_count: int = 0
+    #: ``gpu_count`` is ``None`` for a reservation that allocates no GPUs.
+    gpu_count: int | None = None
     resource_state: str | None = None
     closed_listing_ids: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -725,7 +738,7 @@ class ReserveCapacityResponse:
             capacity_reservation_id=str(d.get("capacity_reservation_id") or ""),
             pool_id=d.get("pool_id"),
             member_id=d.get("member_id"),
-            gpu_count=int(d.get("gpu_count") or 0),
+            gpu_count=None if d.get("gpu_count") is None else int(d["gpu_count"]),
             resource_state=d.get("resource_state"),
             closed_listing_ids=list(d.get("closed_listing_ids") or []),
             extra={k: v for k, v in d.items() if k not in known},
@@ -934,6 +947,7 @@ class SettleWaitResponse:
     status: str = ""
     provisioning_job_id: str | None = None
     elapsed_ms: int = 0
+    last_error: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "SettleWaitResponse":
@@ -942,4 +956,5 @@ class SettleWaitResponse:
             status=str(d.get("status", "")),
             provisioning_job_id=d.get("provisioning_job_id"),
             elapsed_ms=int(d.get("elapsed_ms", 0)),
+            last_error=d.get("last_error"),
         )

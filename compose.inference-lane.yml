@@ -1,0 +1,79 @@
+# The inference end-to-end lane's compute-schema and API-credit-schema registries.
+#
+# The inference scenario's schema filter is shown routing discovery to the
+# inference registry and leaving the other two alone. In the full local stack
+# those registries are VM's and API credits'; the lane runs neither domain, so
+# it runs these, layered after compose.inference.yml and
+# compose.inference-local.yml:
+#
+#     docker compose -p simple-market-inference --env-file <file> \
+#       -f compose.inference.yml -f compose.inference-local.yml \
+#       -f compose.inference-lane.yml up -d
+#
+# The full local stack never layers this file. The compute registry reuses the
+# committed `registry-a.eip191` and the API-credit registry the committed
+# `api-credits-registry.ed25519`, well-known development values that must never
+# be used on a public network; see dev-env/identities/README.md, "The inference
+# lane". Paths are relative to the repository root.
+services:
+  # A pause between streamed chunks long enough that the scenario can tell a
+  # relayed stream from a buffered one.
+  model-stub:
+    environment:
+      - MODEL_STUB_CHUNK_DELAY_SECONDS=0.3
+  compute-registry:
+    # The registry image's default filter specification is the compute one.
+    image: arkhai:registry
+    env_file:
+      - core/registry/.env.docker-compose
+    environment:
+      - REGISTRY_AUTHORITY_ID=compute-registry
+      - REGISTRY_AUTHORITY_SCHEME=eip191
+      - REGISTRY_AUTHORITY_IDENTIFIER=0x90f79bf6eb2c4f870365e785982e1f101e93b906
+      - REGISTRY_AUTHORITY_CREDENTIAL_FILE=/run/secrets/arkhai/registry-identity/credential
+      # No host port: the buyer reaches it on the lane's network, at the
+      # address its descriptor advertises.
+      - REGISTRY_DESCRIPTOR_BASE_URL=http://compute-registry:8080
+      - REGISTRY_DESCRIPTOR_DISPLAY_NAME=Local Inference Lane Compute Registry
+      - REGISTRY_DESCRIPTOR_OPERATOR_IDENTITY=Arkhai local development
+    volumes:
+      - ./shared-env:/app/shared-env
+      - ${INFERENCE_COMPUTE_REGISTRY_IDENTITY_CREDENTIAL_FILE:?set the inference lane compute registry signer credential file}:/run/secrets/arkhai/registry-identity/credential:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  api-credits-registry:
+    image: arkhai:registry
+    env_file:
+      - core/registry/.env.docker-compose
+    environment:
+      - REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-apicredits.yaml
+      - REGISTRY_AUTHORITY_ID=api-credits-registry
+      - REGISTRY_AUTHORITY_SCHEME=ed25519
+      - REGISTRY_AUTHORITY_IDENTIFIER=_NUDENxVX6u4cMd0xzoYyQAt10QDI47bfnYnu2lTVho
+      - REGISTRY_AUTHORITY_CREDENTIAL_FILE=/run/secrets/arkhai/registry-identity/credential
+      - REGISTRY_DESCRIPTOR_BASE_URL=http://api-credits-registry:8080
+      - REGISTRY_DESCRIPTOR_DISPLAY_NAME=Local Inference Lane API-Credit Registry
+      - REGISTRY_DESCRIPTOR_OPERATOR_IDENTITY=Arkhai local development
+    volumes:
+      - ./shared-env:/app/shared-env
+      - ${INFERENCE_API_CREDITS_REGISTRY_IDENTITY_CREDENTIAL_FILE:?set the inference lane API-credit registry signer credential file}:/run/secrets/arkhai/registry-identity/credential:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

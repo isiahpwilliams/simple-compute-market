@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -53,6 +56,41 @@ def test_api_credit_storefront_runtime_uses_staged_wheel_only():
     assert 'ENV PYTHONPATH="/app"' not in dockerfile
 
 
+
+def test_inference_stack_has_no_admin_credential_and_requires_every_signer():
+    compose = (_REPO_ROOT / "domains/inference/compose.yml").read_text(encoding="utf-8")
+    storefront = (
+        _REPO_ROOT / "domains/inference/storefront/storefront.inference.toml"
+    ).read_text(encoding="utf-8")
+
+    # Every caller of the inference service signs, so nothing holds an admin key.
+    assert "ADMIN_KEY" not in compose
+    assert "admin_key" not in storefront
+    for variable in (
+        "INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE",
+        "INFERENCE_GATEWAY_IDENTITY_CREDENTIAL_FILE",
+    ):
+        assert "${" + variable + ":?" in compose
+
+
+def test_inference_state_uses_independent_named_volumes():
+    compose = (_REPO_ROOT / "domains/inference/compose.yml").read_text(encoding="utf-8")
+
+    assert "inference-service-data:/app/data" in compose
+    assert "inference-storefront-data:/app/data" in compose
+
+
+def test_inference_storefront_and_gateway_runtimes_use_their_staged_wheels_only():
+    for project, distribution in (
+        ("domains/inference/storefront", "arkhai-inference-storefront"),
+        ("domains/inference/gateway-service", "arkhai-inference-gateway-service"),
+    ):
+        dockerfile = (_REPO_ROOT / project / "Dockerfile").read_text(encoding="utf-8")
+        assert f"uv_project.py install-wheel --project /repo/{project}" in dockerfile
+        assert f"{distribution}==" not in dockerfile
+        assert f"COPY {project}/src" not in dockerfile
+
+
 def test_bare_metal_stack_requires_real_selected_site_inputs():
     domain_compose = (_REPO_ROOT / "domains/bare_metal/compose.yml").read_text(
         encoding="utf-8"
@@ -68,8 +106,44 @@ def test_bare_metal_stack_requires_real_selected_site_inputs():
     # The storefront's sites, registries, and terms are its mounted configuration.
     assert "${BARE_METAL_STOREFRONT_CONFIG_FILE:?" in domain_compose
     assert "${BARE_METAL_POOL_DEFINITIONS_FILE:?" in domain_compose
-    assert "${BARE_METAL_PROVISIONING_INVENTORY_FILE:?" in domain_compose
+    assert "${BARE_METAL_PROVISIONING_HOST_DEFINITIONS_FILE:?" in domain_compose
+    assert "PROVISIONING_HOST_DEFINITIONS_PATH=/run/config/host-definitions.yaml" in domain_compose
+    # The service refuses either retired inventory setting at startup.
+    assert "INVENTORY" not in rendered
     assert "${BARE_METAL_PROVISIONING_SSH_PRIVATE_KEY_FILE:?" in domain_compose
+
+
+def test_bare_metal_lane_delivers_seller_mail_to_its_mail_sink():
+    """The lane's storefront mails each revealed buyer contact to a Mailpit the
+    lane runs, at the host its delivery configuration names, which the
+    introduction scenarios read back through ``MAILPIT.API_URL``."""
+    overlay = yaml.safe_load(
+        (_REPO_ROOT / "compose.bare-metal-local.yml").read_text(encoding="utf-8")
+    )
+    storefront = tomllib.loads(
+        (_REPO_ROOT / "domains/bare_metal/storefront/storefront.dev.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    settings = yaml.safe_load(
+        (_REPO_ROOT / "e2e-tests/config/config-docker.yml").read_text(encoding="utf-8")
+    )
+
+    services = overlay["services"]
+    assert services["mailpit"]["image"].startswith("docker.io/axllent/mailpit:")
+    assert services["bare-metal-storefront"]["depends_on"]["mailpit"] == {
+        "condition": "service_healthy"
+    }
+    delivery = storefront["Delivery"]
+    assert delivery["enabled"] == ["seller-mail"]
+    mail = delivery["seller-mail"]
+    assert (mail["sink"], mail["host"], mail["port"]) == ("smtp", "mailpit", 1025)
+    # The seller is mailed at the contact the storefront reveals for its site.
+    assert mail["recipients"] == [
+        storefront["Settlement"]["contact"]["contact_payload"]["email"]
+    ]
+    assert mail["recipients"] == [settings["bare_metal_lane"]["seller_contact_email"]]
+    assert settings["mailpit"]["api_url"] == "http://mailpit:8025"
 
 
 def test_bare_metal_stack_keeps_role_credentials_and_state_separate():

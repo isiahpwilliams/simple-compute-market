@@ -48,6 +48,7 @@ problem through and writing the answer that fits it.
 - `openspec/specs/<subsystem>/spec.md` contains authoritative current subsystem behavior, invariants, ownership, and lifecycle semantics.
 - `openspec/specs/<subsystem>/architecture.md` may contain durable current-state conceptual models, design motivation, trade-offs, relationships, and limitations. It does not replace normative requirements.
 - `openspec/specs/README.md` is the canonical capability documentation index.
+- `docs/development/DEPLOYMENT_AND_CONFIG.md` holds configuration resolution and deployment conventions; `docs/operator-handbook.md` holds what an operator needs to run a deployment: document formats, procedures, and upgrade and recovery steps. Neither replaces a specification's normative requirements.
 - `openspec/changes/` contains proposed deltas, design exploration, migration notes, implementation tasks, and temporary compatibility concerns.
 - Git history and pull requests contain provenance and change history.
 
@@ -201,6 +202,12 @@ through `make` or a slash command, or carried from step to step by one
 orchestrating session, `make orchestrate CHANGE=<change>`. See
 `docs/agents/change-workflow.md` for which skill each step uses, orchestrating a
 change, the review files, and the intervention ledger.
+
+A change worked in its own clone keeps its records there until archive cleanup
+copies them into the owner's workspace, which holds the history of every
+cleaned-up change. A change's records are untracked: find them with `python3
+scripts/find_change.py --records <change>`, which looks in the current checkout,
+then in the owner's workspace.
 
 ### Issue tracker
 

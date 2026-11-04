@@ -8,6 +8,7 @@ mount after the module-level app exists.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -35,7 +36,13 @@ from core_storefront.domain_registry import (
 )
 from core_storefront.services.negotiation_service import NegotiationService
 from core_storefront.stage_log import set_stage_event_db_path, stage_event
-from market_alkahest import ALKAHEST_CONFIG_KEY
+from market_alkahest import (
+    ALKAHEST_CONFIG_KEY,
+    AlkahestChainProbe,
+    JsonRpcCall,
+    ProbedChain,
+    json_rpc_call,
+)
 from market_core import MarketDomainContract
 from market_settlement_runtime import SettlementJobCoordinator
 from market_storefront_kit import (
@@ -44,7 +51,7 @@ from market_storefront_kit import (
     StorefrontComposition,
     StorefrontRouteHooks,
     StorefrontServiceHooks,
-    build_alkahest_clients,
+    alkahest_client_constructor,
     build_composed_storefront_app,
 )
 
@@ -59,7 +66,6 @@ from apicredits_storefront.services.fulfillment_service import (
     build_api_credit_failure_policy,
 )
 from apicredits_storefront.services.keys_lookup import lookup_key_record
-from apicredits_storefront.startup import preflight_credits_service
 from apicredits_storefront.startup_refusal import require_startable_storefront
 from apicredits_storefront.settlement_composition import (
     build_api_credit_settlement_composition,
@@ -70,6 +76,7 @@ from apicredits_storefront.utils.config import (
     BASE_URL_OVERRIDE,
     CHAINS,
     capacity_sites,
+    chain_address_books,
     resolve_admin_identities,
     resolve_identity_signer,
     resolve_registry_authorities,
@@ -79,6 +86,10 @@ from apicredits_storefront.utils.config import (
     settlement_config_mapping,
     settlement_publication_defaults,
     system_settings,
+)
+
+logging.basicConfig(
+    level=getattr(logging, str(settings.get("log_level", "INFO")).upper(), logging.INFO)
 )
 
 logger = logging.getLogger(__name__)
@@ -96,6 +107,24 @@ def run_serve(host: str = "0.0.0.0", port: int | None = None) -> None:
     )
 
 
+AlkahestClientConstructor = Callable[
+    [AlkahestClientPolicy], Callable[[str], Any] | None
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ApiCreditCompositionSeams:
+    """What the composition root reaches its Alkahest chains through.
+
+    The defaults are production's: the SDK's per-chain client construction and
+    JSON-RPC over each chain's ``rpc_url``. A test of the root's wiring supplies
+    compatible objects instead of patching the module.
+    """
+
+    alkahest_client_constructor: AlkahestClientConstructor = alkahest_client_constructor
+    alkahest_json_rpc: JsonRpcCall = json_rpc_call
+
+
 @dataclass(frozen=True, slots=True)
 class ApiCreditsStorefrontServices:
     """Lifespan-owned API-credit services bound to one domain contract."""
@@ -104,6 +133,7 @@ class ApiCreditsStorefrontServices:
     sqlite_client: Any
     marketplace_signer: Any
     alkahest_clients: dict[str, Any]
+    alkahest_chain_probe: AlkahestChainProbe | None
     settlement_repository: Any
     settlement_runtime: Any
     settlement_worker: Any
@@ -177,6 +207,7 @@ def build_system_service(sqlite_client: Any) -> SystemService:
         settings=system_settings,
         mechanism_checks=lambda: mechanism_health(_container.SELLER_STAGES),
         signer=lambda: _container.resolved_marketplace_signer,
+        settlement_composition=lambda: _container.resolved_settlement_composition,
     )
 
 
@@ -194,10 +225,6 @@ def listing_seed() -> ListingSeed:
         # The credits authority seeds its quota pool as `default`.
         pool_id="default",
     )
-
-
-async def _seed_demo_listing() -> None:
-    await listing_seed().run(seed_settings())
 
 
 async def _startup_tasks(
@@ -219,40 +246,65 @@ async def _startup_tasks(
         loops,
         sqlite_client=_container.resolved_sqlite_client,
         storefront_url=BASE_URL_OVERRIDE or f"http://localhost:{settings.port}",
-        preflight=preflight_credits_service,
-        seed=_seed_demo_listing,
         startup_steps=mechanism_startup_steps(_container.SELLER_STAGES),
         capacity_runtime=capacity_runtime,
     )
 
 
-def _build_alkahest_clients() -> dict[str, Any]:
+def _alkahest_client_policy() -> AlkahestClientPolicy:
     private_key = (settings.wallet.private_key or "").strip()
     missing = () if private_key else ("wallet.private_key",)
-    return build_alkahest_clients(
-        AlkahestClientPolicy(
-            private_key=private_key,
-            chains=tuple(
-                AlkahestChain(
-                    name=name,
-                    rpc_url=chain.rpc_url,
-                    address_config_path=chain.alkahest_address_config_path,
-                )
-                for name, chain in CHAINS.items()
-            ),
-            missing_requirements=missing,
-            warn_if_no_chains=True,
+    books = chain_address_books()
+    return AlkahestClientPolicy(
+        private_key=private_key,
+        chains=tuple(
+            AlkahestChain(
+                name=name,
+                rpc_url=chain.rpc_url,
+                address_book=books[name],
+            )
+            for name, chain in CHAINS.items()
         ),
-        logger=logger,
+        missing_requirements=missing,
+    )
+
+
+def _build_alkahest_chain_probe(
+    section: Any,
+    alkahest_clients: dict[str, Any],
+    *,
+    constructor: AlkahestClientConstructor,
+    json_rpc: JsonRpcCall,
+) -> AlkahestChainProbe:
+    """The chain probe over every configured chain, owning ``alkahest_clients``.
+
+    ``constructor`` and ``json_rpc`` are its two boundaries, the SDK and the
+    chain's JSON-RPC endpoint.
+    """
+    books = chain_address_books()
+    return AlkahestChainProbe(
+        [
+            ProbedChain.from_config(name, chain, address_book=books[name])
+            for name, chain in CHAINS.items()
+        ],
+        build_client=constructor(_alkahest_client_policy()),
+        clients=alkahest_clients,
+        interval_seconds=section.probe_interval_seconds,
+        rpc_timeout_seconds=section.rpc_timeout_seconds,
+        json_rpc=json_rpc,
     )
 
 
 def _build_api_credit_services(
     domain: MarketDomainContract,
+    seams: ApiCreditCompositionSeams = ApiCreditCompositionSeams(),
 ) -> ApiCreditsStorefrontServices:
-    # Before anything is constructed: a renamed setting, a capacity
-    # configuration that cannot be read, or a mechanism configuration a
-    # composed stage cannot honour, stops startup.
+    # Before anything is constructed: a renamed or removed setting (the
+    # retired credits-service preflight settings among them), an unset
+    # `[credits].service_url`, a capacity configuration that cannot be read,
+    # or a mechanism configuration that contradicts itself stops startup. A
+    # coherent configuration a composed stage cannot deliver makes its
+    # mechanism unready instead.
     require_startable_storefront()
     validate_mechanism_configuration()
     marketplace_signer = resolve_identity_signer()
@@ -265,11 +317,21 @@ def _build_api_credit_services(
         role="seller",
     )
     # A configured section services the deals accepted under it whether or not
-    # it publishes, so its chain clients are built either way.
-    if settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY) is not None:
-        alkahest_clients = _build_alkahest_clients()
-    else:
-        alkahest_clients = {}
+    # it publishes, so its chain probe is composed either way. The probe owns
+    # the client map, empty until its first step constructs each client,
+    # bounded: a websocket client connects while it is built, and startup must
+    # not wait on a chain. Every consumer below is handed this one dict, which
+    # the probe updates in place.
+    alkahest_section = settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY)
+    alkahest_clients: dict[str, Any] = {}
+    alkahest_chain_probe: AlkahestChainProbe | None = None
+    if alkahest_section is not None:
+        alkahest_chain_probe = _build_alkahest_chain_probe(
+            alkahest_section,
+            alkahest_clients,
+            constructor=seams.alkahest_client_constructor,
+            json_rpc=seams.alkahest_json_rpc,
+        )
     sqlite_client = get_sqlite_client(
         local_listing_principal=marketplace_signer.identity,
         expected_legacy_sellers=(BASE_URL_OVERRIDE,),
@@ -282,6 +344,7 @@ def _build_api_credit_services(
         chain_clients=alkahest_clients,
         marketplace_signer=marketplace_signer,
         failure_policy=failure_policy,
+        chain_probe=alkahest_chain_probe,
     )
     negotiation_runtime = build_api_credit_negotiation_runtime(
         domain,
@@ -320,6 +383,7 @@ def _build_api_credit_services(
         sqlite_client=sqlite_client,
         marketplace_signer=marketplace_signer,
         alkahest_clients=alkahest_clients,
+        alkahest_chain_probe=alkahest_chain_probe,
         settlement_repository=settlement_repository,
         settlement_runtime=settlement_runtime,
         settlement_worker=settlement_worker,
@@ -350,6 +414,7 @@ async def _start_api_credit_services(
 
     _container.resolved_market_domain = services.domain
     _container.resolved_sqlite_client = services.sqlite_client
+    _container.resolved_alkahest_chain_probe = services.alkahest_chain_probe
     _container.resolved_settlement_repository = services.settlement_repository
     _container.resolved_settlement_runtime = services.settlement_runtime
     _container.resolved_settlement_worker = services.settlement_worker
@@ -360,6 +425,9 @@ async def _start_api_credit_services(
     _container.resolved_marketplace_signer = services.marketplace_signer
     _container.resolved_failure_policy = services.failure_policy
     _container.resolved_listing_service = services.listing_service
+    # The seed is created by its loop step, never here: a mechanism it uses
+    # may not have been reached yet.
+    _container.resolved_listing_seed = listing_seed().progress(seed_settings())
     _container.resolved_negotiation_runtime = services.negotiation_runtime
     _container.resolved_negotiation_service = services.negotiation_service
     _container.resolved_system_service = services.system_service
@@ -420,8 +488,13 @@ def build_api_credits_storefront_registry(
 def build_api_credits_storefront_app(
     *,
     registry: StorefrontDomainRegistry,
+    seams: ApiCreditCompositionSeams = ApiCreditCompositionSeams(),
 ) -> Any:
-    """Build the API-credit app from one frozen domain registration."""
+    """Build the API-credit app from one frozen domain registration.
+
+    ``seams`` defaults to production's Alkahest client construction and chain
+    transport.
+    """
 
     registration = registry.resolve_mode("api_credits")
     domain = registration.contract
@@ -431,7 +504,7 @@ def build_api_credits_storefront_app(
             raise RuntimeError(
                 "storefront kit supplied a domain outside the API-credit registration"
             )
-        return _build_api_credit_services(selected)
+        return _build_api_credit_services(selected, seams)
 
     return build_composed_storefront_app(
         StorefrontComposition(

@@ -8,6 +8,7 @@ by aggregate state, are ``test_release.py``'s.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from compute_provisioning.release import (
     ReleaseDecision,
     ReleaseProgress,
     ReleaseStatus,
+    TeardownRefused,
 )
 
 _PAST = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -65,7 +67,7 @@ class FakeSiteAuthority:
             if reservation.get("release_job_id") not in (None, release_job_id):
                 return None
             return reservation
-        if reservation["state"] not in {"reserved", "provisioning", "leased", "release_failed"}:
+        if reservation["state"] not in {"reserved", "leased", "release_failed"}:
             return None
         reservation["release_requested_at"] = datetime.now(timezone.utc).isoformat()
         reservation.update(state="releasing", release_job_id=release_job_id)
@@ -75,7 +77,7 @@ class FakeSiteAuthority:
         self, capacity_reservation_id, *, reason, message=None, release_job_id=None
     ):
         reservation = self.reservations[capacity_reservation_id]
-        if reservation["state"] not in {"reserved", "provisioning", "leased", "releasing"}:
+        if reservation["state"] not in {"reserved", "leased", "releasing"}:
             return None
         if (
             reservation["state"] == "releasing"
@@ -107,15 +109,26 @@ class FakeSiteAuthority:
 class ScriptedExecutor:
     """Returns its decisions in turn, repeating the last; records teardowns
     begun, and the reservation's state at each, which shows whether the
-    release was recorded first. ``teardown_fails`` makes beginning one raise."""
+    release was recorded first. ``teardown_fails`` makes beginning one raise;
+    ``refusal`` makes it refuse; ``before_refusal`` runs first, on the site's
+    reservation."""
 
-    def __init__(self, *decisions: ReleaseDecision, site=None, teardown_fails: bool = False):
+    def __init__(
+        self,
+        *decisions: ReleaseDecision,
+        site=None,
+        teardown_fails: bool = False,
+        refusal: TeardownRefused | None = None,
+        before_refusal=None,
+    ):
         self.decisions = list(decisions)
         self.asked = 0
         self.teardowns: list[str] = []
         self.states_at_teardown: list[str] = []
         self.site = site
         self.teardown_fails = teardown_fails
+        self.refusal = refusal
+        self.before_refusal = before_refusal
 
     async def submit_release(self, reservation):
         decision = self.decisions[min(self.asked, len(self.decisions) - 1)]
@@ -127,6 +140,10 @@ class ScriptedExecutor:
             self.states_at_teardown.append(self.site.reservations["alloc-1"]["state"])
         if self.teardown_fails:
             raise ConnectionError("fulfillment unreachable")
+        if self.refusal is not None:
+            if self.before_refusal is not None:
+                self.before_refusal(self.site.reservations["alloc-1"])
+            raise self.refusal
         self.teardowns.append(fulfillment_id)
         return fulfillment_id
 
@@ -190,6 +207,81 @@ async def test_a_teardown_that_fails_to_begin_leaves_the_release_for_the_next_cy
     status = ScriptedStatus(ReleaseStatus(ReleaseProgress.READY_FOR_TEARDOWN))
     await _lifecycle(site, executor, status).check_leases()
     assert executor.teardowns == ["f-1"]
+
+
+def _refused():
+    return TeardownRefused("compensation_refused", "create job job-1 was not found")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_compensation_fails_the_release_under_the_handle_just_recorded():
+    """The lease was read ``leased``, with no handle; the refusal is recorded
+    under the fulfillment the release just recorded, and capacity stays held."""
+    site = FakeSiteAuthority(lease_end=_FUTURE)
+    executor = ScriptedExecutor(_decision(ReleaseAction.TEARDOWN), site=site, refusal=_refused())
+    recorded = []
+    original = site.record_release_failure
+
+    def recording(capacity_reservation_id, **fields):
+        recorded.append(fields["release_job_id"])
+        return original(capacity_reservation_id, **fields)
+
+    site.record_release_failure = recording
+
+    lease = await _lifecycle(site, executor).terminate_lease("alloc-1")
+
+    assert recorded == ["f-1"]
+    assert (lease["state"], lease["failure_reason"]) == ("release_failed", "compensation_refused")
+    assert lease["failure_message"] == "create job job-1 was not found"
+    assert lease["release_job_id"] == "f-1"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_for_a_release_another_has_replaced_is_left_to_that_release():
+    """Between recording ``releasing`` and the refusal, another release took
+    the reservation under its own handle. The site refuses the failure, and the
+    other release is left as it is."""
+    site = FakeSiteAuthority(lease_end=_FUTURE)
+    executor = ScriptedExecutor(
+        _decision(ReleaseAction.TEARDOWN),
+        site=site,
+        refusal=_refused(),
+        before_refusal=lambda reservation: reservation.update(release_job_id="f-2"),
+    )
+
+    lease = await _lifecycle(site, executor).terminate_lease("alloc-1")
+
+    assert (lease["state"], lease["release_job_id"]) == ("releasing", "f-2")
+    assert "failure_reason" not in lease
+
+
+@pytest.mark.asyncio
+async def test_the_releasing_pass_records_a_refused_compensation():
+    """A create in flight at termination then failed compensably; the status
+    reads ready, and the compensation is refused when it begins."""
+    site = FakeSiteAuthority(state="releasing")
+    site.reservations["alloc-1"]["release_job_id"] = "f-1"
+    executor = ScriptedExecutor(_decision(ReleaseAction.TEARDOWN), site=site, refusal=_refused())
+    status = ScriptedStatus(ReleaseStatus(ReleaseProgress.READY_FOR_TEARDOWN))
+
+    summary = await _lifecycle(site, executor, status).check_leases()
+
+    assert summary["release_failed"] == 1
+    assert site.reservations["alloc-1"]["state"] == "release_failed"
+    assert site.reservations["alloc-1"]["failure_reason"] == "compensation_refused"
+
+
+@pytest.mark.asyncio
+async def test_a_transient_failure_to_begin_in_the_releasing_pass_is_retried():
+    site = FakeSiteAuthority(state="releasing")
+    site.reservations["alloc-1"]["release_job_id"] = "f-1"
+    executor = ScriptedExecutor(_decision(ReleaseAction.TEARDOWN), teardown_fails=True)
+    status = ScriptedStatus(ReleaseStatus(ReleaseProgress.READY_FOR_TEARDOWN))
+
+    summary = await _lifecycle(site, executor, status).check_leases()
+
+    assert summary["skipped"] == 1
+    assert site.reservations["alloc-1"]["state"] == "releasing"
 
 
 @pytest.mark.asyncio
@@ -485,3 +577,85 @@ async def test_oversight_of_a_lease_the_lifecycle_began_releasing_is_a_conflict(
         lifecycle.release_oversight("alloc-1", SimpleNamespace(reason="manual"))
 
     assert site.reservations["alloc-1"]["state"] == "releasing"
+
+
+class _GatedExecutor(ScriptedExecutor):
+    """Holds each release decision until ``release`` is set; ``waiting`` is set
+    once a cycle is waiting on it."""
+
+    def __init__(self, *decisions: ReleaseDecision) -> None:
+        super().__init__(*decisions)
+        self.waiting = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def submit_release(self, reservation):
+        self.waiting.set()
+        await self.release.wait()
+        return await super().submit_release(reservation)
+
+
+@pytest.mark.asyncio
+async def test_an_idle_watchdog_is_at_its_gate_once_paused():
+    lifecycle = _lifecycle(FakeSiteAuthority(), ScriptedExecutor(_decision(ReleaseAction.FREE)))
+
+    assert (lifecycle.is_paused, lifecycle.is_at_gate) == (False, False)
+    lifecycle.pause()
+    assert (lifecycle.is_paused, lifecycle.is_at_gate) == (True, True)
+    lifecycle.resume()
+    assert (lifecycle.is_paused, lifecycle.is_at_gate) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_a_timer_cycle_in_flight_keeps_a_paused_watchdog_off_its_gate():
+    """A pause stops the next timer cycle, not one already running: until that
+    one ends the watchdog is paused but not held. An explicit check is the
+    caller's own and never counts."""
+    site = FakeSiteAuthority()
+    site.due = [site.reservations["alloc-1"]]
+    executor = _GatedExecutor(_decision(ReleaseAction.FREE))
+    lifecycle = _lifecycle(site, executor)
+
+    cycle = asyncio.create_task(lifecycle.check_leases())
+    await asyncio.wait_for(executor.waiting.wait(), timeout=1)
+    lifecycle.pause()
+    assert (lifecycle.is_paused, lifecycle.is_at_gate) == (True, False)
+    executor.release.set()
+    await asyncio.wait_for(cycle, timeout=1)
+    assert lifecycle.is_at_gate is True
+
+    site.reservations["alloc-1"]["state"] = "leased"
+    executor.waiting.clear()
+    executor.release.clear()
+    explicit = asyncio.create_task(lifecycle.force_check_leases())
+    await asyncio.wait_for(executor.waiting.wait(), timeout=1)
+    assert lifecycle.is_at_gate is True
+    executor.release.set()
+    await asyncio.wait_for(explicit, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_a_pause_straight_after_a_resume_holds_the_cycle_the_resume_woke():
+    """A resume wakes the timer cycle waiting at the gate; a pause before that
+    cycle runs answers "at the gate", so the woken cycle must wait again rather
+    than run inside the hold."""
+    site = FakeSiteAuthority()
+    site.due = [site.reservations["alloc-1"]]
+    executor = _GatedExecutor(_decision(ReleaseAction.FREE))
+    lifecycle = _lifecycle(site, executor)
+    lifecycle.pause()
+    cycle = asyncio.create_task(lifecycle.check_leases())
+    await asyncio.sleep(0)
+
+    lifecycle.resume()
+    lifecycle.pause()
+    assert lifecycle.is_at_gate is True
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert not executor.waiting.is_set()
+    assert not cycle.done()
+    assert lifecycle.is_at_gate is True
+    lifecycle.resume()
+    await asyncio.wait_for(executor.waiting.wait(), timeout=1)
+    executor.release.set()
+    await asyncio.wait_for(cycle, timeout=1)

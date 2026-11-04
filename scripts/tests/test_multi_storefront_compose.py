@@ -19,6 +19,7 @@ def test_storefront_authorities_are_isolated(tmp_path):
         ["docker", "compose", "--env-file", str(env_file),
          "-f", "docker-compose.yml", "-f", "compose.vms-local.yml",
          "-f", "compose.apicredits-local.yml",
+         "-f", "compose.inference-local.yml",
          "config", "--format", "json"],
         cwd=REPO_ROOT, capture_output=True, text=True, check=True,
     )
@@ -58,3 +59,21 @@ def test_storefront_authorities_are_isolated(tmp_path):
     assert services["alice-provisioning"]["environment"]["PROVISIONING_DATABASE_URL"] == (
         "sqlite:////app/data/provisioning.db"
     )
+
+
+
+def test_the_inference_storefront_pins_only_the_inference_authority():
+    inference = tomllib.loads(
+        (REPO_ROOT / "domains/inference/storefront/storefront.inference.toml").read_text()
+    )
+    credits = tomllib.loads(
+        (REPO_ROOT / "domains/apicredits/storefront/storefront.credits.toml").read_text()
+    )
+    compose = (REPO_ROOT / "domains/inference/compose.yml").read_text()
+    pinned = inference["credits"]["expected_authorities"]["identities"]
+    assert pinned == inference["capacity"]["sites"]["default"]["expected_authorities"]["identities"]
+    assert len(pinned) == 1
+    # The gateway trusts the same authority identity the storefront pins.
+    assert pinned[0]["identifier"] in compose
+    assert pinned != credits["credits"]["expected_authorities"]["identities"]
+    assert inference["identity"]["identifier"] != credits["identity"]["identifier"]

@@ -41,6 +41,20 @@ seam; patching around it defeats the purpose of the seam and produces
 tests that break when internal call structure changes even though
 behavior didn't.
 
+**Command-module convention:** a command module — a storefront's operator
+commands or a domain's buyer commands — has no constructor: the framework calls
+its module-level functions. It is its own composition root instead, and builds
+its collaborators through module-level factory functions it defines, named for
+what they provide; those factories are its one seam. A test replaces a factory
+on the module that defines it and nothing else — no library name, no name the
+module imports from another, no name inside core — because an import-style
+change can silently undo such a patch, and the test then runs the real
+collaborator. The bare-metal buyer CLI
+(`domains/bare_metal/buyer/src/arkhai_bare_metal_buyer/cli.py`) has this shape:
+its tests replace `fresh_identity`, `recovery_identity`, `registry_client`, and
+`payment_approval`. The other CLIs' tests still replace library and imported
+names; [`ROADMAP.md`](ROADMAP.md) records that gap.
+
 **Composition-boundary convention:** When a role receives a versioned domain contract, unit tests should inject a distinct compatible object and assert object identity at each constructor boundary rather than patching the default resolver. Fail-closed cases belong at the composition root and must assert that persistence, network, and worker collaborators were not constructed. Existing integration tests remain responsible for public behavior and persisted-state parity.
 
 **Negotiation-runtime convention:** Protocol invariants are tested once in
@@ -81,6 +95,21 @@ replace the in-process-app integration tests of a service that composes the
 library, which remain the tests of that service's wire contract. A library
 test that exercises a real database but still sits in `unit/` moves to
 `integration/` when it is next touched.
+
+**Registration and traffic are different proofs:** a test that a
+connection, proxy, or route was admitted also carries traffic through
+it. A peer can report a registration it cannot serve — a tunnel listed
+as running whose remote port reaches nothing, an address delivered that
+routes elsewhere — and only bytes sent end to end show the admission
+did what it claims. The frps admission plugin's real-frp tests
+(`tools/frp-grant-admission/tests/frp/`) hold to this: an admitted proxy
+carries bytes from frps's remote port to a listener behind frpc, and a
+proxy that outlives a reload carries traffic on a held connection and a
+new one. Those tests are a third flavour of integration test, beside the
+in-process and library ones: real external processes started by the
+test, skipped in the default suite without their binaries and run in a
+gate that fails on a skip, as the native Ansible checks are
+([Ansible Syntax and Native Checks](#ansible-syntax-and-native-checks)).
 
 **Test setup pattern:** Use `httpx.AsyncClient` with `ASGITransport`
 against the real application instance, injected via the service's
@@ -165,15 +194,26 @@ waiting is a defect in the mock, not something to resume around.
 applies to a service's own background lifecycle loops, where the seam is
 an HTTP control rather than a callback. Each loop should offer a pause,
 and an explicit single-step that works *while* paused, so a scenario
-drives transitions instead of waiting for a timer:
+drives transitions instead of waiting for a timer. The stage discipline
+diagram under [system integration tests](#4-system-integration-tests-end-to-end)
+draws a scenario following this:
 
 | Loop | Pause | Explicit step |
 |---|---|---|
-| Lease watchdog | `POST /api/v1/system/lease-watchdog/pause` | `POST /api/v1/system/check-leases` |
-| Fulfillment convergence | `POST /api/v1/system/fulfillment-convergence/pause` | `POST /api/v1/system/fulfillment-convergence/advance-cycle` |
-| VM storefront loops (`publication`, `capacity-events`, `site-projections`, `settlement-servicing`, `fulfillment-resume`, `negotiation-watchdog`, and `introduction-retention` while contact exchange is enabled) | `POST /api/v1/admin/lifecycle/pause`, which holds them all | `POST /api/v1/admin/lifecycle/<loop>/run-cycle`, previewed by `.../<loop>/dry-run` for `publication`, `capacity-events`, and `introduction-retention` |
-| Bare-metal storefront loops (`publication`, `site-projections`, `settlement-servicing`, `negotiation-watchdog`, `payment-reconciliation` while Arkhai payments is composed, and `introduction-retention` while contact exchange is enabled) | `POST /api/v1/admin/lifecycle/pause`, which holds them all | `POST /api/v1/admin/lifecycle/<loop>/run-cycle`, previewed by `.../<loop>/dry-run` for `publication` and `introduction-retention`; the `bare-metal-storefront publish` command is a client of the `publication` step and its preview |
-| API-credit storefront loops (`capacity-events`, `settlement-servicing`, `negotiation-watchdog`, and `payment-reconciliation` while Arkhai payments is composed) | `POST /api/v1/admin/lifecycle/pause`, which holds them all | `POST /api/v1/admin/lifecycle/<loop>/run-cycle`, previewed by `.../capacity-events/dry-run` |
+| Lease watchdog | `POST /api/v1/system/lease-watchdog/pause`, answering `paused` and `at_gate` (`WorkerPauseResponse`) | `POST /api/v1/system/check-leases` |
+| Fulfillment convergence | `POST /api/v1/system/fulfillment-convergence/pause`, answering `paused` and `at_gate` (`WorkerPauseResponse`) | `POST /api/v1/system/fulfillment-convergence/advance-cycle` |
+| VM storefront loops (`publication`, `capacity-events`, `site-projections`, `settlement-servicing`, `fulfillment-resume`, `negotiation-watchdog`, `introduction-retention` while contact exchange is enabled, and `alkahest-chain-probe` while an Alkahest section is configured) | `POST /api/v1/admin/lifecycle/pause`, which holds them all | `POST /api/v1/admin/lifecycle/<loop>/run-cycle`, previewed by `.../<loop>/dry-run` for `publication`, `capacity-events`, and `introduction-retention` |
+| Bare-metal storefront loops (`publication`, `site-projections`, `settlement-servicing`, `negotiation-watchdog`, `payment-reconciliation` while Arkhai payments is composed, `introduction-retention` while contact exchange is enabled, and `alkahest-chain-probe` while Alkahest is composed) | `POST /api/v1/admin/lifecycle/pause`, which holds them all | `POST /api/v1/admin/lifecycle/<loop>/run-cycle`, previewed by `.../<loop>/dry-run` for `publication` and `introduction-retention`; the `bare-metal-storefront publish` command is a client of the `publication` step and its preview |
+| API-credit storefront loops (`capacity-events`, `settlement-servicing`, `negotiation-watchdog`, `payment-reconciliation` while Arkhai payments is composed, `alkahest-chain-probe` while Alkahest is composed, and `listing-seed` while a seed listing is configured) | `POST /api/v1/admin/lifecycle/pause`, which holds them all | `POST /api/v1/admin/lifecycle/<loop>/run-cycle`, previewed by `.../capacity-events/dry-run` |
+
+A provisioning worker's pause answers `at_gate` beside `paused`: a cycle that
+began before the pause finishes first, so a caller that needs the worker held
+repeats the pause until `at_gate` is true. A storefront's pause answers each
+loop's gate state the same way. `alkahest-chain-probe` probes every configured
+chain at each step, and settlement readiness reads only its last results, so a
+held storefront judges Alkahest by the probe a stage last stepped.
+`listing-seed` finishes once the configured seed listing exists and waits while
+a dependency it needs cannot be reached.
 
 Every storefront composes its loops onto the one kit loop controller in
 `kit/storefront`, so the routes, response shapes, and the canonical
@@ -187,8 +227,30 @@ from a generation polled within its `[capacity].source_confirmation_seconds`. A
 scenario that holds the loops keeps trading, so it steps `site-projections`
 wherever a site changed before stepping publication or negotiating, and the
 end-to-end lanes widen the window to an hour so a scenario's rounds are not
-refused between steps. The bare-metal scenarios hold the loops through an opt-in
-per-module fixture (`bare_metal_loops_held`) resumed in a finaliser.
+refused between steps.
+
+A scenario that needs a shared service's timer held — a storefront's lifecycle loops,
+provisioning's fulfillment convergence or lease watchdog — takes that lane's hold fixture
+for the whole module with `usefixtures`, listed first so it is released last. A hold is
+taken before the module's first stage and waits until each loop is at its gate, and is
+released in a finaliser whatever the module's outcome. Stages assert a hold; they never
+pause or resume a service themselves, and a source check enforces it.
+
+The hold helpers are `storefront_loops_held`, `fulfillment_convergence_held`, and
+`lease_watchdog_held` in `e2e-tests/tests/e2e/roles/helpers/compute_deal.py`; each
+compute lane's `conftest.py` builds its fixtures of the same names on them, and the VM
+lane adds `alice_loops_held` for Alice's storefront. A stage reads a hold back through
+live system status (`assert_storefront_loops_held`, `assert_lease_watchdog_held`), so a
+module that lost its hold fails rather than racing a timer. A lane's cleanup fixtures
+are not autouse: pytest sets an autouse fixture up first and so finalises it after the
+holds, so each module lists its cleanup after its holds, and the holds keep the timers
+stopped while the cleanup runs. `e2e-tests/tests/unit/test_scenario_holds.py` refuses,
+from source, any pause or resume call or route outside the hold helpers and the
+conftests' hold fixtures, and `e2e-tests/tests/unit/test_scenario_cleanup_order.py`
+reads the fixture order pytest resolves for every compute-lane scenario module and
+refuses a hold released before the module's other cleanup. A module killed by `helm
+test`'s timeout runs no finaliser, and only a restart clears its pause; modules in a
+lane run serially.
 
 Traps this has already sprung, worth checking for a new loop:
 
@@ -216,14 +278,6 @@ Traps this has already sprung, worth checking for a new loop:
   cursor lock. Test it with the real loop body and an interval far longer
   than the test waits. A test that needs a self-gating body runs it as a
   fan-out with no children.
-- **Scope the pause to the module that owns the advances.** A pause in
-  a shared `conftest.py` reaches every scenario in that directory, and a
-  scenario that legitimately relies on the timer — one that arms an
-  ungated provider rule and waits for the lease, say — is stalled rather
-  than made deterministic by it. Make the fixture opt-in and take it with
-  `pytest.mark.usefixtures` from the modules that drive the loop
-  themselves, and resume in a finaliser so a failing stage does not leave
-  the loop stopped for the next module.
 
 ### 3. Smoke Tests (Deployment Validation)
 
@@ -240,6 +294,15 @@ submit a real job and poll for completion.
 **Current location:** `e2e-tests/tests/smoke/`, run as Helm test hooks
 in Kubernetes (`helm/templates/tests/`, per-chart `templates/tests/`
 directories).
+
+A smoke check that writes state belongs in an integration test instead. The
+provisioning smoke checks carry two markers: `provisioning_readonly` for
+reads of health, system status, hosts, and host connectivity, and
+`provisioning_security` for authentication enforcement, which sends an
+unsigned read to a protected route and expects 401 or 403, so it needs no
+administrator credential. The provisioning chart's test hook selects
+`provisioning_readonly or provisioning_security`, and its render test holds
+the hook to that expression.
 
 ### 4. System Integration Tests (End-to-End)
 
@@ -262,40 +325,131 @@ bare-metal lease is released only when authenticated access is revoked and the
 selected-site authority reports teardown. A health check or static Compose
 render is not deal evidence.
 
-The scenarios share `DomainDealState`, exact event ordering, profiled buyer
-configuration, and public client helpers from
-`e2e-tests/tests/e2e/roles/helpers/domain_deal.py` and
-`e2e-tests/tests/e2e/roles/buyer_cli.py`. The helpers keep domain results
-opaque: they do not assume a VM listing, provisioning job, host field, API key,
-Physical Resource, site, or teardown payload. A scenario supplies its codecs
-and domain assertions instead of copying another domain's control flow.
+Three diagrams carry the rest of this section. The first draws the discipline
+every complete-deal scenario follows, whatever its domain. The second applies
+that discipline to the compute family's canonical deal, part by part, as the
+worked example. The third zooms into one of those parts to show the discipline
+inside a single box. Each diagram's source is the `.drawio` file named under it
+in [`diagrams/`](diagrams/); the SVG beside each is its export and also opens
+in draw.io.
 
-The compute family's canonical deal (Alkahest settlement on the dev chain,
-delivery through the provisioning mock profile) takes every stage its domains
-run identically from `e2e-tests/tests/e2e/roles/helpers/compute_deal_stages.py`.
-Those stages are not named `Test*`, so pytest collects them only where a
-domain's scenario module subclasses them, with an empty body, in its run order.
-A shared stage's body is therefore defined once and runs in every compute lane;
-a stage whose body would differ stays each domain's own, inserted between the
-shared ones (VM's listing creation and claim, bare metal's publication, evidence,
-and second-deal stages). What differs reaches a shared stage two ways: fixtures
+#### The discipline every scenario follows
+
+A scenario asserts only on side effects it asked for. While a service's timer
+loops run, an observation races them: a listing reconciled a second later reads
+differently from one reconciled a second earlier, and waiting for the system to
+settle cannot establish ordering even when it passes. So a scenario holds every
+loop it depends on once, at the start, through the pause and step controls
+under ["Pause the loop, then advance it explicitly"](#2-integration-tests), and
+initializes what the deal needs. Then, for each transition, it previews the
+move through the route's evaluate twin or the loop's dry run, advances exactly
+one side effect, and measures that effect against expectations through typed
+clients, with no sleeps: the only wait is on a request the stage made. What a
+stage produced goes into the shared deal state for the stages that depend on
+it, and whatever happened, the fixture's finaliser resumes the loops.
+
+![How an end-to-end scenario holds the loops once, then previews, advances, and measures each transition](diagrams/e2e-stage-discipline.svg)
+
+Source: [`diagrams/e2e-stage-discipline.drawio`](diagrams/e2e-stage-discipline.drawio).
+
+The shared deal state is `DomainDealState`, from
+`e2e-tests/tests/e2e/roles/helpers/domain_deal.py`, which the scenarios share
+with exact event ordering, profiled buyer configuration, and the public client
+helpers in `e2e-tests/tests/e2e/roles/buyer_cli.py`. The helpers keep domain
+results opaque: they do not assume a VM listing, provisioning job, host field,
+API key, Physical Resource, site, or teardown payload. A scenario supplies its
+codecs and domain assertions instead of copying another domain's control flow.
+A stage names each earlier result it depends on with `require_state`, one
+exact producer/consumer field at a time. When an earlier stage or external
+authority is unavailable, the dependent stage names that prerequisite and
+remains blocked; it is never counted as a successful live deal.
+
+#### The canonical compute deal
+
+The compute family's canonical deal settles through Alkahest on the dev chain.
+The pipeline's lanes deliver it through the provisioning mock profile; the
+[real-provisioning lane](#the-real-provisioning-lane) delivers it through a real
+KVM host. The diagram draws it part by part, from holding the loops to resuming
+them. Each box is one part of the deal, its preview, advance, and measurement
+folded into a sentence or two, and the tag at its right is the deal stage the
+shared state records for it. The bare-metal lane runs a second deal on the freed
+host before its loops resume.
+
+![The canonical compute deal, part by part, from holding the loops to resuming them](diagrams/e2e-compute-deal.svg)
+
+Source: [`diagrams/e2e-compute-deal.drawio`](diagrams/e2e-compute-deal.drawio).
+
+Every stage the compute domains run identically comes from one definition, in
+`e2e-tests/tests/e2e/roles/helpers/compute_deal_stages.py`. Those stages are
+not named `Test*`, so pytest collects them only where a domain's scenario
+module subclasses them, with an empty body, in its run order. A shared stage's
+body is therefore defined once and runs in every compute lane; a stage whose
+body would differ stays each domain's own, inserted between the shared ones
+(VM's listing creation and claim, bare metal's publication, evidence, and
+second-deal stages). What differs reaches a shared stage two ways: fixtures
 every compute conftest provides under one set of names supply who is calling,
 and each domain's `ComputeDealDriver`
 (`e2e-tests/tests/e2e/roles/scenarios/vms/compute_deal_driver.py`,
 `e2e-tests/tests/e2e/roles/scenarios/bare_metal/compute_deal_driver.py`)
-supplies supply seeding, provision terms, the mock rules and their release, the
-settlement preview's expectations, the settlement's dispatch, the delivery
-assertions, the lease view, and the re-reservation of released supply.
+supplies supply seeding, provision terms, the settlement preview's expectations,
+the settlement's dispatch, the delivery assertions, the lease view, and the
+re-reservation of released supply.
 Negotiation has no driver hook: a compute domain that negotiates differently is
-resolved in its storefront composition. `e2e-tests/tests/unit/test_compute_deal_stages.py`
-checks the stage set from source: each domain subclasses every shared stage once,
-in order, with an empty body, and every state field has one producer that runs
-before any stage reads it.
+resolved in its storefront composition.
 
-Staged scenarios use `require_state` with one exact producer/consumer field.
-When an earlier stage or external authority is unavailable, the dependent
-stage names that prerequisite and remains blocked; it is never counted as a
-successful live deal.
+A shared stage never depends on the mock profile. Holding a provisioning job at
+a mock rule's gate, releasing it, evaluating the rule, and confirming the mock
+profile are mock gates: each is a mock-lane stage of its own (`MockLaneStage`),
+which only a lane delivering through the mock profile declares, between the
+shared stages it surrounds. A mock driver supplies the gates through a second
+part, `MockGates`, which a real driver does not implement. A stage that would
+both advance the deal and touch a gate is split at the gate, so its gate-free
+part stays shared: the escrow apart from arming the create gate, the advance to
+`active` apart from releasing and draining the create job, the lease expiry
+apart from arming the teardown gate, and teardown's completion apart from
+releasing and draining the teardown job. A gate answered by a real driver with a
+no-op would report a hold that never happened, and a shared assertion would hold
+under one driver and be vacuous under another. Settlement submits only once the
+lane's last check before it has passed: the mock rule's evaluation in a mock
+lane, the check of the previewed host in the real lane.
+
+`e2e-tests/tests/unit/test_compute_deal_stages.py` checks the stage set from
+source: a mock lane subclasses every stage once, in definition order, with an
+empty body; the real lane runs every shared stage in that order and no mock-lane
+stage; no shared stage names a mock gate or the mock test client; and every
+state field has one producer that runs before any stage reads it.
+
+Settlement by introduction is defined once the same way, in
+`e2e-tests/tests/e2e/roles/helpers/introduction_stages.py`: disclosure of the
+retention window before any contact is given, backed and unbacked supply
+discovered together under one rate bound, the reveal into the buyer's own sink,
+and seller-side delivery read back from the lane's Mailpit. VM's
+`e2e_vm_introduction` and bare metal's `e2e_bare_metal_unbacked_introduction`
+subclass those stages in order and insert their own between them; each
+domain's `IntroductionDriver`
+(`e2e-tests/tests/e2e/roles/scenarios/vms/introduction_driver.py`,
+`e2e-tests/tests/e2e/roles/scenarios/bare_metal/introduction_driver.py`) seeds
+the supply and speaks its CLI verbs, and only stages write the shared
+`IntroductionState`. `e2e-tests/tests/unit/test_introduction_stages.py` holds
+each domain to the shared stages and fields.
+
+#### One part, zoomed in
+
+Settle has the fullest shape of any part, so it is the one drawn open, as a
+mock lane runs it. It previews twice, through the storefront's evaluate-settle
+and, in a mock-lane stage, the provisioning service's evaluate-job, advances
+with one settle call, and measures a fulfillment dispatched and not yet
+converged. The real lane previews the same settlement and checks, in place of
+evaluate-job, that the previewed host is its target. What the part reads from
+and writes to the shared deal state is what ties it to the parts before and
+after: `require_state` on the escrow, listing, negotiation, and the passed
+preflight on the way in, and the placed host and fulfillment ids on the way
+out, the latter read next by the deliver part. Every other box in the deal
+diagram opens the same way, with its own previews, advance, and measurement.
+
+![One part of the compute deal, settle, zoomed in: its two previews, one advance, and measurement](diagrams/e2e-settle-zoom.svg)
+
+Source: [`diagrams/e2e-settle-zoom.drawio`](diagrams/e2e-settle-zoom.drawio).
 
 The e2e test pod cannot import service internals — it uses typed
 clients, explicit test controllers, and stage/event APIs over HTTP, the
@@ -329,10 +483,22 @@ project of its own:
   refund, reporting one it cannot read or tear down; a refund that still fails
   fails the run with the negotiation and
   transaction for an operator. Each cleanup step is
-  attempted even after an earlier one fails, and the loops the module paused
-  resume last.
+  attempted even after an earlier one fails, and the module's holds are
+  released last.
   Unconfigured payments remain a named blocked prerequisite; no real SSH claim
-  is made.
+  is made. Its `e2e_bare_metal_unbacked_introduction` scenario is the compute
+  family's introduction scenario on bare metal: the site's operator declares a
+  whole machine in a capacity-backed pool naming its host, one in an unbacked
+  pool naming none, each at an asking rate, and one in a backed pool stating no
+  rate, and a storefront pool override offers the unbacked pool by
+  introduction alone. A rate-bounded `market bare-metal list` returns the backed
+  and unbacked listings together and leaves out the rateless one, a
+  `capacity_backing=unbacked` query returns only the unbacked one, and the
+  unbacked listing publishes `capacity_backing: unbacked`, no host fields, no
+  `access_methods`, and only `contact-exchange.v1`. The buyer reveals the
+  introduction through the CLI into its own file sink, the storefront mails the
+  buyer's contact to the seller through the lane's Mailpit, and the deal's
+  fulfillment status route answers 404.
 - **API-credit lane** (`make -C e2e-tests test-e2e-apicredits`): the credits
   registry, service, storefront, and gated sample app, a compute-schema registry
   of the lane's own that the credits deal's discovery is routed away from, and
@@ -359,16 +525,48 @@ adapter mounts its rules and job dry run under its own prefix, VM's at
 `/test/bare-metal/mock-rules` and `/test/bare-metal/evaluate-job`, beside the
 shared `/test/jobs/*` routes. None of them is mounted outside the mock profile.
 
+A mock's default output is what the shipped configuration prints for the job:
+the role's `debug: var:` fact in the YAML result format, then the `debug: msg:`
+JSON copy the shared fact reader reads, rendered from the job's own parameters
+— its guest or host, its tenant account, its action, and booleans where the
+role prints booleans. So a mock lane exercises the same reader and the same
+linkage between a fact and its job as a real run, and a fact naming another
+guest or tenant yields no delivery evidence there too. The VM scenarios arm no
+create output of their own; every create reads that default. A test that needs
+an output the role would not print for its job states it in a rule and keeps
+to the codec's or provider's level.
+
 `make -C e2e-tests test-e2e` runs the three in turn, taking each stack down
 before the next, because every stack names its chain container `anvil` and
 publishes fixed host ports. A lane provides its own configuration, so a
 scenario that finds a lane setting missing fails rather than skipping.
 
+Pre-review validation also runs the scenarios the default Helm charts can serve
+(`HELM_SCENARIOS` in `scripts/validate_slice.py`) against a Helm release, in the
+change's own namespace ("Validation namespaces" in
+`docs/development/DEPLOYMENT_AND_CONFIG.md`). They run as a pod inside that
+namespace, the e2e-tests chart's `<release>-e2e-tests-e2e-scenarios` Helm test
+hook, rendered when `scenarios.markers` is set: it runs the change's own
+`e2e-tests` image with the release's `test-config` ConfigMap under the `helm`
+profile, the deal test pod's environment and mounts, and reaches every service by
+its in-cluster name, as a lane's scenarios do on their compose network, so no local
+port is involved. Validation runs it alone (`helm test --filter name=<pod>`) and
+counts it as passed only on the pod's own exit status of 0, since `helm test`
+passes when its filter matches no test. A scenario on that list reads only what the
+`e2e-tests` image copies — `src`, `tests`, `config`, `conftest.py`, and
+`settings.toml` — never a file from the checkout. Every other pipeline scenario is
+reported as not run against Helm.
+
 A mock-provisioned deal proves the services compose into a working deal, not
 that a real resource was delivered. Bare metal's release-qualified deal
 (`e2e_bare_metal_deal`) needs a real whole host to grant and revoke access on,
 which the pipeline never has, so no lane selects it: real access and its
-revocation remain a separate protected lane's evidence.
+revocation remain a separate protected lane's evidence. It uses the shared
+SSH helper with the operator's read-only known-hosts file; each access probe is
+one fresh process, and only public-key authentication refusal proves revocation.
+Transport failure is an unsuccessful observation. VM's real delivery is
+proven the same way, outside every lane, by
+[the real-provisioning lane](#the-real-provisioning-lane).
 
 The VM multi-registry scenario seeds Bob's and Alice's separate provisioning
 authorities through typed administration clients and refreshes both site
@@ -399,6 +597,103 @@ Each successful fetch also creates `<run-id>.zip` beside the run directory,
 containing that directory and its logs. Repeated fetches replace the ZIP.
 An unavailable artifact is reported without discarding other logs. A successful
 fetch means diagnostics were retrieved; it does not mean the tests passed.
+
+#### The real-provisioning lane
+
+`e2e_vm_real_provisioning`
+(`e2e-tests/tests/e2e/roles/scenarios/vms/test_real_provisioning_deal.py`) runs
+the canonical compute deal against a provisioning service outside its mock
+profile and a real KVM host, and proves what a mock-provisioned deal cannot: the
+service's VM execution is not mocked; the create and teardown jobs ran on the
+target host and succeeded; the buyer, with a key generated for the run and
+negotiated in the deal, reaches the guest at the delivered access as the
+delivered user and finds the negotiated vCPUs, memory within a stated tolerance,
+and at least the negotiated disk; an unrelated key is refused for that user; and
+once the lease expires and its capacity is released, a VM list job on the host
+no longer names the guest and the delivered access no longer connects. It claims
+nothing about the guest's other credentials, which a batch-mode SSH client never
+tries. The guest's host key is trusted on first use for the run only, and a
+later connection presenting another fails the run. Direct access uses forwarded
+guest ports; relay access checks the relay address and the reservation's leased
+port against the delivered endpoint. Released holdings retain their grant expiry;
+the scenario does not require immediate port reuse during quarantine.
+
+It is in no lane, because the pipeline has no host to provision on. It runs from
+an operator's machine against a deployed stack's forwarded services, signing as
+the `local` profile's principals, with `ACTIVE_PROFILES=local,real-provisioning-target`:
+[`e2e-tests/README.md`](../../e2e-tests/README.md#real-vm-provisioning) gives the
+steps, and [`VALIDATION_RUNBOOK.md`](VALIDATION_RUNBOOK.md#21-provide-a-kvm-host)
+the operator procedure around them. Its target is the `REAL_PROVISIONING_TARGET` section
+of `config-real-provisioning-target.yml`, which an environment owner renders into
+`e2e-tests/config/` beside the committed example, `config-real-provisioning-target.yml.example`,
+and which Git ignores.
+`e2e-tests/src/e2e_harness/real_provisioning_target.py` validates it before anything else.
+Version 2 describes at most one host per domain, each with a connection,
+access and sellable capacity. A VM host adds a listing shape fitting twice within
+capacity; a bare-metal host adds its physical identity and verified SSH public
+host key. Direct access names a public host, while relay access names only its
+relay identifier. Unknown or foreign fields fail by name; version 1 is refused
+with conversion instructions. A relayed run requires an enabled relay with a
+configured token and active grant key before taking holds or registering supply.
+The target contains no private key or relay secret.
+Without the profile every stage skips naming it, and nothing is written to the
+stack.
+
+The lane registers its own supply from the target — a pool stating a GPU-less
+shape, the host with its connection, and one declaration selling the whole
+capacity — and publishes the target's smaller listing shape. It checks before
+its holds are taken that the service reports its VM executor real. It runs every shared stage and no mock-lane stage, and
+inserts its own: a check that the settlement preview chose the target host,
+before settlement; a create-job poll after it; SSH access stages once the lease
+is recorded; a teardown-job poll; and the VM-list and access-ended checks after
+release. Where a mock lane releases a gate, the real lane waits for the real job
+instead, found through the fulfillment's capacity reservation in the operator
+job list and read by its status within a named bound. That poll is the one wait
+the lane adds to the stage discipline, which otherwise waits only on a request a
+stage made; a failed or timed-out job fails the stage with its logs.
+
+A rerun against the same stack reconciles rather than duplicates. The host's
+connection is replaced where it differs and the declaration rewritten, and the
+open listing an earlier run left on the scenario's resource is adopted, paused,
+rather than created, since a publication source backs one listing for good,
+whether it is open or closed. Several listings, a closed one, or one of another
+shape fail naming them, for an operator to recover. The settle stage waits for
+the deal's own `job_submitted` event, filtered by its negotiation and counted
+from a mark taken before settling, because an adopted listing's event log holds
+earlier deals' events.
+
+The lane keeps one SSH process printing a timestamp each second, with a five-second
+maximum observed gap, while a second deal creates a guest and then expires it.
+It requires the original session alive across both operations and checks management
+connectivity before and after each create and teardown. Each guest uses its own
+delivered port. A temporary reservation proves the second guest's shape is available
+again while the first guest remains active. The first deal then follows ordinary
+lease expiry and proves the whole host capacity is available again.
+
+A run that fails after an accepted settlement is recovered by a module finaliser.
+It tries both deals even if one recovery fails, expiring only their own leases
+through the site, and advances the held workers, so the
+provisioning service tears the guest down through its own lease lifecycle; it
+then confirms the teardown job and the guest's absence. It takes any settlement
+the storefront records, or whose dispatch it logs within a bound, as having
+dispatched a fulfillment, unless the settlement's status shows a refund begun
+before delivery. Where it cannot find the fulfillment or confirm the removal, it
+fails naming the escrow, negotiation, fulfillment, reservation, jobs, guest, and
+host. It never releases reservations fleet-wide, which would return the host's
+capacity to the market while its guest may still run.
+
+The opt-in `e2e_bare_metal_real_provisioning` scenario
+(`e2e-tests/tests/e2e/roles/scenarios/bare_metal/test_real_provisioning_deal.py`)
+uses the same canonical shared stages with a gate-free bare-metal driver. It
+registers a backed relay-bound pool, the target's management connection and one
+whole-machine declaration. Publication creates or reuses the open listing for
+that machine and declared shape; the scenario never creates a listing directly.
+The target's host key is validated and pinned before first SSH contact. Actual
+grant/reclaim jobs, management continuity, negotiated-key access, unrelated-key
+refusal, ordinary expiry/release, closed access and released/quarantined relay
+holdings require a configured real host. The module belongs to no pipeline lane;
+without its target it skips before any holds or supply writes. Unit and mock
+pipeline results do not substitute for this physical qualification.
 
 ## Coverage Contract Between Levels
 
@@ -452,7 +747,7 @@ consumer ignores.
 - **Same-package boundary** (producer and consumer share a package):
   `tests/fixtures/<module>.py` within that package, importable as
   `tests.fixtures.<module>` by any test in the package. Example:
-  `domains/vms/storefront/tests/fixtures/publish.py`.
+  `domains/vms/storefront/tests/fixtures/publication_cycle.py`.
 - **Cross-package boundary** (the consumer is a separate, higher-level
   package): `src/<package_name>/fixtures/<module>.py` inside the
   producer's own source package. Because the producer is already
@@ -498,8 +793,8 @@ proving that no execution layer relies on another layer's earlier decision:
 - `kit/fulfillment` scheduler tests withdraw a declaration after reservation;
   orchestration tests withdraw it after provider input is prepared and assert
   no provider dispatch occurs.
-- Provisioning migration tests cover fresh bootstrap, the system-owned default
-  pool, exact derivation from provider/playbook/delegate configuration,
+- Provisioning migration tests cover fresh bootstrap, a `default` pool stored
+  before offering modes (migration creates none), exact derivation from provider/playbook/delegate configuration,
   idempotent rerun, narrowing, INFO evidence, malformed drift, single-proof
   backfill, conflicting proof, unproved active rows, and terminal rows.
 - Advertisement and backing declarations follow the same split.
@@ -513,7 +808,7 @@ proving that no execution layer relies on another layer's earlier decision:
   client — status and stored state only, per the rejection-path rule — plus the
   upgrade migration, the startup refusal, and every projected pool carrying both
   declarations. The api family authority library's integration suite
-  (`domains/api/authority/tests/integration/test_pool_declarations_migration.py`)
+  (`kit/api/authority/tests/integration/test_pool_declarations_migration.py`)
   owns the API-credits service's migration and startup refusal.
 - Provider and backing immutability follow the same split. `kit/resource-pools`
   unit tests own the pure stored-versus-proposed comparison; no database is
@@ -565,8 +860,8 @@ proves its own check:
   clients:
   - admission and scheduling refusals with the executor boundary asserted
     never reached;
-  - dispatch to an unregistered host failing before any playbook, even with a
-    configured inventory file naming the host.
+  - dispatch to an unregistered host failing before any playbook, even after a
+    host definitions document naming the host was submitted and refused.
 
 ## Multi-Domain Storefront Composition
 
@@ -660,6 +955,12 @@ manifest must fail startup rather than admit mixed identity precedence.
   physical access. Check readiness before a live run and report unavailable
   service or credential prerequisites rather than run against a down target.
 
+## Accepted Arkhai purchase qualification
+
+For external physical qualification, use the shipped ordinary buyer CLI to exercise discovery, negotiation, signed TEST payment, delivery, and ordinary teardown. Collect independent lifecycle observations through the supported typed operator clients; do not import a payment-specific full-deal driver merely to obtain operator visibility. Keep buyer credentials separate from operator credentials. Bind source and selected artifacts/configuration to the run and correlate the accepted Agreement, funding evidence, receipt, rental debit, reservation, fulfillment, jobs, delivered access, and teardown observations in restricted evidence. Public summaries omit credentials, private service records, and raw deployment data.
+
+Require actual paid-buyer journeys for claims about tenant identity, negotiated privilege, grant admission, GPU work, delivery, ordinary teardown, fresh access denial, and capacity restoration. A supplemental network-policy probe is admissible only from an actual operator-only CPU guest on the same paid deployment, using the pinned guest base, its actual default bridge and virtio NIC, and the loaded policy structure. It may establish only the finite selectors observed on that path; it establishes none of the paid tenant identity, credential, privilege, grant, GPU, payment, delivery, or lifecycle facts and does not prove universal isolation. A namespace-only probe is not a substitute for this guest-path evidence. Published vectors, local component tests, and controlled smokes are narrower evidence. Record unrun markers as unrun: an equivalent ordinary-buyer method does not mean an older named test marker executed.
+
 ## Payment Receipts in Tests
 
 A seller delivers only after verifying a receipt that the payments service
@@ -682,13 +983,24 @@ signature = service.sign(_frame(("arkhai.payments.receipt.v1", jcs_sha256(receip
 ```
 
 The fixture is trustworthy because it uses the same framing function as the
-kit's verifier, and the kit's unit suite proves it reproduces the published
-vector exactly:
+kit's verifier, and that framing is pinned by the producer's own vectors. The
+kit vendors two vector publications. The current producer vectors' receipt passes the
+strict models and verifies. The historical vectors are a separate raw-framing
+regression whose receipt the current models refuse. The framing and the
+signature cover a receipt's JSON whatever its parts say, so the kit's unit
+suite reproduces each publication's message and signature from its raw
+published body, byte for byte, and then signs and verifies a receipt for a
+mandate the marketplace derives through the same framing:
 
 ```python
 assert receipt_message(vector_body).hex() == vectors["receipt"]["message"]
-assert sign_receipt(Ed25519Signer(vector_seed), vector_body) == vector_receipt
+assert signer.sign(receipt_message(vector_body)) == vector_signature
+assert sign_receipt(SERVICE, derived_body) == build_signed_receipt(signer=SERVICE, mandate=mandate)
 ```
+
+The fixture exists to supply receipts for mandates the marketplace derives.
+`kit/arkhai-payments/schema/SOURCE.md` records the schema's and both vector
+publications' content hashes and how to select newer ones.
 
 The fixture takes its signer as an argument and ships no key material.
 Integration tests replace `PaymentsClient`, the code that wraps the payments
@@ -734,10 +1046,64 @@ relocated unit tests. Validate:
 - observable lifecycle events verified without arbitrary sleeps (see
   "Async test discipline" above).
 
-The Python CI matrix always creates `.dist`, including for projects with no
-internal dependencies. Jobs that consume repository-owned Python packages run
-`make dist-ci` so the Make dependency graph, rather than the workflow, owns the
-wheel inventory and build order.
+CI's test matrix runs `make test` as a change's validation runs it locally: one
+job per target `make test` is made of, each running that target after `make
+dist-ci`, so the Make dependency graph, rather than the workflow, owns the wheel
+inventory, the build order, and how each suite is invoked. A suite passes in CI
+exactly when it passes under `make test`; `scripts/tests/test_tests_workflow.py`
+holds the matrix to `make test`'s targets. The jobs set
+`_TYPER_FORCE_DISABLE_TERMINAL`, because Typer forces Rich's terminal styling
+whenever `GITHUB_ACTIONS` is set, which a local run never sees.
+
+## Ansible Syntax and Native Checks
+
+The roles reach most of their task files through `include_tasks`, which
+`ansible-playbook --syntax-check` does not follow, so checking a role's own
+playbook leaves those files unparsed. Each such role has a parse-only playbook
+that imports its task files through `import_role` instead, in the role's
+context: `vm-management-task-files.yaml` and `vm-setup-task-files.yaml` in the
+VM IaC tree. Parsing is where some errors only show: Ansible splits a free-form
+`shell: |` string as module arguments, so an unbalanced quote, an apostrophe in a
+bash comment included, fails the whole task file as it loads, though bash would
+run the script. A syntax check templates nothing and executes nothing.
+
+A parse-only playbook's first task refuses to run and is tagged `always`, since
+the tasks it imports keep their own tags and some carry `always`: under any
+`--tags` selection the refusal still runs first. An operator's explicit
+`--skip-tags always` or `--start-at-task` passes over it, which nothing in a play
+can refuse.
+
+`domains/vms/provisioning/iac/scripts/validate_playbooks.sh` syntax-checks every playbook the VM IaC tree
+ships from one list, which a structure test holds equal to the playbooks
+present; `make validate-playbooks` runs it. Tests that run shipped tasks through
+real `ansible-playbook` are library integration: the VM suite renders both create
+facts and exercises its family-role call boundary, and the family suite runs its
+installer and authenticated status wait against controlled local file and HTTP
+boundaries. Native tests skip in the default suite without supported Ansible;
+the family HTTP tests also require the `ansible.posix.json` callback.
+
+`make test-provisioning-iac-native` runs the native suites and syntax checks from
+the built provisioning image's packaged IaC trees, with no network but loopback.
+A missing image, supported Ansible or required callback, no native test, or a
+skipped native test fails the gate. Both domains' playbooks are parsed with their
+own configuration and with the shared service configuration and image role path.
+The shared configuration contains no domain path. A structure test holds the VM
+gate's list of native modules to every module defining its skip guard. The VM
+end-to-end lane runs this gate once it has built the image.
+
+The bounded bare-metal working-data helper has its own evidence boundaries.
+`make test-bare-metal-iac` exercises its unit and library-integration behavior;
+`make build-provisioning` followed by `make test-bare-metal-iac-native`
+executes native account, filesystem and IPC behavior in a disposable isolated
+environment and fails on missing prerequisites or skips. Neither gate proves
+that an image contains the intended assets, that the role is active in a
+deployment, or that a real lease is reclaimed. A deployed qualification must additionally observe an actual lease through
+cleanup and successor access; the real-provisioning marker by itself does not
+qualify bounded cleanup. A valid older copy of the host ledger is
+not locally distinguishable from current state; operational rollback response
+is quarantine pending history verification or host decommission, not a passing
+rollback test. A rejected cleanup retains capacity; normal same-job retry is
+distinct from terminal failed-job recovery or force-release.
 
 ## Chart Render Tests
 
@@ -784,7 +1150,9 @@ passing render is not deployment evidence, just as it is not deal evidence.
   mechanism. `test-render.sh` sets it when the VM storefront environment exists
   (`make init-storefront`). `helm/charts/bare-metal-storefront/tests/test_render.py`
   does the same through `BARE_METAL_STOREFRONT_PYTHON`, which `test-render.sh` sets
-  when `domains/bare_metal/storefront/.venv` exists: bare metal's loader, startup
+  when `domains/bare_metal/storefront/.venv` exists (`make
+  init-bare-metal-storefront`; both targets build the wheelhouse first, and `make
+  init` runs both): bare metal's loader, startup
   refusal, clause compilation, and site binding over the example's rendered
   document, and the refusal over the defaults'. That shows a rendered configuration
   is publishable, not that the storefront starts on it, since the runtime also needs
@@ -792,6 +1160,19 @@ passing render is not deployment evidence, just as it is not deal evidence.
   Without its interpreter each check reports a skip. No CI job has both Helm and
   those environments, so in CI these checks do not run; run them locally before a
   change to a chart or a loader is reviewed.
+- `helm/charts/storefront/tests/test_render.py` also asserts, over the defaults,
+  the local release, every rendering fixture, and a second agent, that no VM
+  storefront Deployment renders an init container or a `wait-for-` container and
+  that each carries a `startupProbe` on `/health`, as the bare-metal chart's does:
+  the storefront starts with its dependencies unreachable and reports them
+  degraded.
+- `helm/tests/test_release_topology.py` asserts, over both topology releases,
+  that no Pod annotated `helm.sh/hook: test` carries all of any Deployment's
+  `matchLabels` or any Service's selector — every test pod carries
+  `app.kubernetes.io/component: test` and its release's instance label and lacks
+  `app.kubernetes.io/name`, which every selector requires — and that each release
+  renders exactly its expected test templates, so a test pod that stops rendering
+  fails rather than leaving nothing to check.
 
 **How to write one:**
 
@@ -850,17 +1231,17 @@ languages" a checkable claim rather than an assumption.
 **Current example:** the api family's bearer gate — the Python
 `arkhai-api-gate` (reference implementation) and the API-credits
 TypeScript and Rust middlewares — all replay
-`domains/apicredits/middleware/conformance/session.json` — one recorded
+`kit/api/gate-ports/conformance/session.json` — one recorded
 session of requests against the gate, with each step asserting the
 allow/deny decision, the deny body's machine-readable error code,
 whether a `purchase` pointer is present, and call counts against the
 stateful collaborators the step is meant to exercise (cache-hit
 skipping, zero-calls-on-known-exhaustion). See
-`domains/apicredits/middleware/conformance/README.md` for what each step
+`kit/api/gate-ports/conformance/README.md` for what each step
 field asserts, and the runners at
-`domains/api/gate/tests/conformance_runner.py`,
-`domains/apicredits/middleware/typescript/test/conformanceRunner.ts`,
-and `domains/apicredits/middleware/rust/tests/conformance.rs`.
+`kit/api/gate/tests/conformance_runner.py`,
+`kit/api/gate-ports/typescript/test/conformanceRunner.ts`,
+and `kit/api/gate-ports/rust/tests/conformance.rs`.
 
 ## Private Service Dependencies
 
@@ -882,7 +1263,7 @@ only the named payments table, not domain configuration or payer selection.
 See [shared payment-scenario configuration](../../e2e-tests/README.md#shared-payment-scenario-configuration)
 for environment and runner setup.
 
-**Current example:** complete deals settled through the Arkhai payments service are qualified by that service's own suite. Here, `kit/arkhai-payments` checks conformance against the service's published vectors, vendored and identified by content hash in `kit/arkhai-payments/schema/SOURCE.md`.
+**Current example:** complete deals settled through the Arkhai payments service are qualified by that service's own suite. Here, `kit/arkhai-payments` generates its models from the service's published schema and checks the published vectors, all vendored and identified by content hash in `kit/arkhai-payments/schema/SOURCE.md`: the current producer vectors through the strict models, signatures and transaction identities, and the historical vectors as raw transaction identities, receipt framing, signatures and attachment hashes only, which the current models refuse, as "Payment Receipts in Tests" describes. Neither proves live service responses, provider funding or physical delivery.
 
 ## Offline Review Validation
 

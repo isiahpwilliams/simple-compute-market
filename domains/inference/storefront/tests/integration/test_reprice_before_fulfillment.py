@@ -70,8 +70,8 @@ class ScriptedChain:
         self.attestations: list[str] = []
         self.client = SimpleNamespace(string_obligation=SimpleNamespace(do_obligation=self._attest))
 
-    async def verify_escrow(self, *, listing: dict[str, Any], **_escrow: Any) -> int:
-        self.verified_against.append(listing)
+    async def verify_escrow(self, *, settlement_plan: dict[str, Any], **_escrow: Any) -> int:
+        self.verified_against.append(settlement_plan)
         return 0
 
     async def _attest(self, _data: str, condition_anchor: str) -> str:
@@ -201,8 +201,10 @@ async def test_the_key_is_issued_on_the_accepted_terms_after_the_seller_reprices
     assert (settled.ready, settled.status) == (True, "ready")
     assert repriced.listing_resource["rate_card"]["request_credits"] == "9"
     assert rewritten.listing_resource["rate_card"]["request_credits"] == "9"
+    # Verified against the plan committed at acceptance, which the reprice
+    # does not touch.
     (verified,) = chain.verified_against
-    assert verified["listing_resource"]["rate_card"]["request_credits"] == "3"
+    assert verified["obligations"]
     (body,) = authority.requests
     terms = accepted_terms(InferenceModelCard.model_validate(accepted_listing.listing_resource))
     assert body["accepted_terms"] == terms

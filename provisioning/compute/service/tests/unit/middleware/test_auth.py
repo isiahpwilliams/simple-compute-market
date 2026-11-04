@@ -133,6 +133,8 @@ def _app(storefront, authority, route_table=_ROUTE_TABLE):
     )
     app.add_api_route("/api/v1/system/check-leases", mutation, methods=["POST"])
     app.add_api_route("/api/v1/capacity/snapshot", mutation, methods=["GET"])
+    app.add_api_route("/api/v1/hosts/definitions/export", mutation, methods=["GET"])
+    app.add_api_route("/api/v1/hosts/definitions/import", mutation, methods=["POST"])
 
     @app.get("/health")
     async def health():
@@ -254,6 +256,33 @@ def test_the_operator_s_release_controls_admit_the_administrator_only(identities
 
 
 @pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/api/v1/hosts/definitions/export", EMPTY_BODY),
+        ("POST", "/api/v1/hosts/definitions/import", {"yaml_text": "hosts: []\n"}),
+    ],
+)
+def test_the_host_definitions_routes_admit_the_administrator_only(identities, method, path, body):
+    storefront, authority = identities
+    client, calls = _app(storefront, authority)
+    payload = {} if body is EMPTY_BODY else {"json": body}
+
+    as_seller = client.request(
+        method, path, headers=_headers(storefront, path, body, request_id="seller", method=method), **payload
+    )
+    as_admin = client.request(
+        method,
+        path,
+        headers=_headers(_ADMIN_SIGNER, path, body, request_id="admin", role="admin", method=method),
+        **payload,
+    )
+
+    assert as_seller.status_code == 403
+    assert as_admin.status_code == 200
+    assert calls["count"] == 1
+
+
+@pytest.mark.parametrize(
     ("path", "body"),
     [
         ("/api/v1/relays/", {"id": "site-a"}),
@@ -280,6 +309,40 @@ def test_relay_administration_admits_the_administrator_only(identities, path, bo
         json=body,
         headers=_headers(
             _ADMIN_SIGNER, path, body, request_id="admin", role="admin", route_table=table
+        ),
+    )
+
+    assert as_seller.status_code == 403
+    assert as_admin.status_code == 200
+    assert calls["count"] == 1
+
+
+def test_the_relay_holdings_read_admits_the_administrator_only(identities):
+    """What a relay holds names hosts and reservations across every
+    storefront, so a storefront's signed read is refused before dispatch.
+    Signed by hand, because the typed client refuses to sign it as the seller."""
+    storefront, authority = identities
+    table = assemble_service_route_table(vm_route_contracts())
+    client, calls = _app(storefront, authority, route_table=table)
+    path = "/api/v1/relays/site-a/leases"
+    client.app.add_api_route(path, _counting(calls), methods=["GET"])
+
+    as_seller = client.get(
+        path,
+        headers=_headers(
+            storefront, path, EMPTY_BODY, request_id="seller", method="GET", route_table=table
+        ),
+    )
+    as_admin = client.get(
+        path,
+        headers=_headers(
+            _ADMIN_SIGNER,
+            path,
+            EMPTY_BODY,
+            request_id="admin",
+            role="admin",
+            method="GET",
+            route_table=table,
         ),
     )
 
@@ -347,6 +410,95 @@ def test_exact_retry_returns_recorded_outcome_and_changed_reuse_conflicts(identi
     assert first.json() == exact.json() == {"ok": True, "count": 1}
     assert changed_response.status_code == 409
     assert calls["count"] == 1
+
+
+def test_a_route_failing_after_authentication_answers_a_signed_500_replayed_exactly(
+    identities, caplog
+):
+    storefront, authority = identities
+    client, calls = _app(storefront, authority)
+    path = "/api/v1/contract/leases/reservation-1/release-oversight"
+    role = _ROUTE_TABLE.resolve("POST", path, {})[0].required_role
+    signer = _ADMIN_SIGNER if role == "admin" else storefront
+
+    async def failing(_: Request):
+        calls["count"] += 1
+        raise RuntimeError("stored row unreadable: internal detail")
+
+    client.app.add_api_route(path, failing, methods=["POST"])
+    headers = _headers(signer, path, {}, request_id="failing-request", role=role)
+
+    with caplog.at_level("ERROR"):
+        first = client.post(path, json={}, headers=headers)
+    retry = client.post(path, json={}, headers=headers)
+
+    assert first.status_code == retry.status_code == 500
+    assert first.json() == retry.json() == {"detail": "Provisioning request failed"}
+    assert "internal detail" not in first.text
+    assert "internal detail" in caplog.text
+    assert _verified_response(first, authority.identity, path, {}).verified
+    assert _verified_response(retry, authority.identity, path, {}).verified
+    # The retry replays the recorded answer; the route runs once.
+    assert calls["count"] == 1
+
+
+_RESPONSE_AUTHENTICATION = (
+    SIGNATURE_VERSION_HEADER,
+    IDENTITY_SCHEME_HEADER,
+    IDENTITY_IDENTIFIER_HEADER,
+    ROLE_HEADER,
+    REQUEST_ID_HEADER,
+    TIMESTAMP_HEADER,
+    SIGNATURE_HEADER,
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "status", "allow"),
+    [
+        ("POST", "/api/v1/nowhere", {}, 404, None),
+        ("DELETE", "/api/v1/fulfillment/schedule", {}, 405, "POST"),
+        ("DELETE", "/api/v1/capacity/snapshot", {}, 405, "GET"),
+        ("POST", "/api/v1/fulfillment/schedule", {}, 400, None),
+        ("POST", "/api/v1/fulfillment/schedule", {"capacity_reservation_id": 7}, 400, None),
+    ],
+    ids=["unknown-path", "family-method", "site-method", "missing-resource", "non-string-resource"],
+)
+def test_an_unroutable_request_is_answered_unsigned_by_what_failed(
+    identities, method, path, body, status, allow
+):
+    storefront, authority = identities
+    client, calls = _app(storefront, authority)
+    signed = _headers(storefront, "/api/v1/fulfillment/schedule", {"capacity_reservation_id": "r"})
+
+    response = client.request(method, path, json=body, headers=signed)
+
+    assert response.status_code == status
+    assert response.headers.get("Allow") == allow
+    if status == 400:
+        # The middleware's own answer is under test: it names the field.
+        assert "capacity_reservation_id" in response.json()["detail"]
+    for header in _RESPONSE_AUTHENTICATION:
+        assert header not in response.headers
+    answered = response.text + "".join(response.headers.values())
+    assert signed[SIGNATURE_HEADER] not in answered
+    assert signed[IDENTITY_IDENTIFIER_HEADER] not in answered
+    assert calls["count"] == 0
+
+
+def test_an_unreadable_body_on_an_unroutable_request_is_answered_by_its_route(identities):
+    """A JSON body that does not parse is refused only where a route serves it."""
+    storefront, authority = identities
+    client, _ = _app(storefront, authority)
+    unreadable = {"content": b"{not json", "headers": {"content-type": "application/json"}}
+
+    unknown = client.request("POST", "/api/v1/nowhere", **unreadable)
+    unserved = client.request("DELETE", "/api/v1/capacity/snapshot", **unreadable)
+    routed = client.request("POST", "/api/v1/fulfillment/schedule", **unreadable)
+
+    assert (unknown.status_code, unserved.status_code, routed.status_code) == (404, 405, 400)
+    assert unserved.headers["Allow"] == "GET"
+    assert "capacity_reservation_id" not in routed.json()["detail"]
 
 
 def test_legacy_admin_header_is_rejected_and_health_stays_open(identities):

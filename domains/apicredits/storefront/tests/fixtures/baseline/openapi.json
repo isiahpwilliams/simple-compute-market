@@ -567,7 +567,13 @@
             "anyOf": [
               {
                 "additionalProperties": {
-                  "additionalProperties": true,
+                  "additionalProperties": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "type": "object"
                 },
                 "type": "object"
@@ -577,6 +583,21 @@
               }
             ],
             "title": "Publication Derivation"
+          },
+          "settlement": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement"
           },
           "site_projections": {
             "anyOf": [
@@ -960,21 +981,6 @@
               }
             ]
           },
-          "accepted_escrow_terms": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Accepted Escrow Terms"
-          },
           "action": {
             "title": "Action",
             "type": "string"
@@ -1121,7 +1127,7 @@
         "type": "object"
       },
       "NegotiateNewResponse": {
-        "description": "Seller's round-0 response.\n\n``proposal`` carries the seller's counter (when action=\"counter\")\nor the agreed proposal echoed back (when action=\"accept\"). For\n\"exit\" / \"reject\" it's absent. ``accepted_provision_terms`` and\n``accepted_escrow_proposal`` echo back the buyer's round-0 ask\nafter the seller validated it.\n\n``settlement_plan`` is the negotiated outcome's canonical carrier\n(mechanism-neutral obligations); ``accepted_escrow_terms`` is its\nLEGACY flat-alkahest mirror, kept for buyers that predate the plan\ncarrier and removed with the client-wheel wire bump.\n\n``settlement_data`` carries an opaque seller-owned payload for the\nselected settlement stage.",
+        "description": "Seller's round-0 response.\n\n``proposal`` carries the seller's counter (when action=\"counter\")\nor the agreed proposal echoed back (when action=\"accept\"). For\n\"exit\" / \"reject\" it's absent. ``accepted_provision_terms`` and\n``accepted_escrow_proposal`` echo back the buyer's round-0 ask\nafter the seller validated it.\n\n``settlement_plan`` is the negotiated outcome's canonical carrier\n(mechanism-neutral obligations): the seller's committed copy, which a\nbuyer compares with its own derivation and never funds in its place.\n\n``settlement_data`` carries an opaque seller-owned payload for the\nselected settlement stage.",
         "properties": {
           "accepted_escrow_proposal": {
             "anyOf": [
@@ -1132,21 +1138,6 @@
                 "type": "null"
               }
             ]
-          },
-          "accepted_escrow_terms": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Accepted Escrow Terms"
           },
           "accepted_provision_terms": {
             "anyOf": [
@@ -1809,7 +1800,7 @@
         "type": "object"
       },
       "SettleWaitResponse": {
-        "description": "Response for GET /api/v1/admin/settle/{escrow_uid}/wait.\n\nMirrors the registry-agent wait pattern: ``ready`` indicates whether a\nterminal state was reached before the timeout; ``status`` is the raw\nsettlement job status (``ready`` | ``failed`` | ``provisioning``).\n\n``provisioning_job_id`` is the legacy ephemeral executor-job identity;\nit is always ``None`` for a fulfillment that went through the durable\nfulfillment path (there is no executor job id in that architecture).\n``fulfillment_id`` is that path's durable identity and is the field a\ncaller should prefer once available.",
+        "description": "Response for GET /api/v1/admin/settle/{escrow_uid}/wait.\n\nMirrors the registry-agent wait pattern: ``ready`` indicates whether a\nterminal state was reached before the timeout; ``status`` is the raw\nsettlement job status (``ready`` | ``failed`` | ``provisioning``).\n\n``provisioning_job_id`` is the legacy ephemeral executor-job identity;\nit is always ``None`` for a fulfillment that went through the durable\nfulfillment path (there is no executor job id in that architecture).\n``fulfillment_id`` is that path's durable identity and is the field a\ncaller should prefer once available.\n\n``last_error`` is the error of the wait's last status read, when that read\nfailed: a wait polls through a failed read and reports one only when it\nends unready.",
         "properties": {
           "elapsed_ms": {
             "title": "Elapsed Ms",
@@ -1825,6 +1816,17 @@
               }
             ],
             "title": "Fulfillment Id"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
           },
           "provisioning_job_id": {
             "anyOf": [

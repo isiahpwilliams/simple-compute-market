@@ -643,6 +643,26 @@ A domain MUST compose only mechanism stages it supports, and each stage MUST und
 - **WHEN** a marketplace domain composes `arkhai.payments.v1`
 - **THEN** it uses the external payments API and signed receipt as authority and keeps no local ledger, payment-provider integration, or settlement daemon
 
+#### Scenario: Published payment snapshots contain an effective end or zero gross
+
+- **WHEN** the selected published contract permits an effective part end or a zero gross amount in a payment snapshot or receipt
+- **THEN** the generated consumer accepts those fields and values without accepting unknown fields or weakening unrelated constraints
+
+#### Scenario: A contract publication is refreshed
+
+- **WHEN** the payment consumer selects a newer standalone JSON Schema and producer conformance vectors
+- **THEN** it records their content hashes, regenerates reproducible strict models, verifies current producer signatures and transaction identities, and preserves historical raw signed-byte verification separately
+
+#### Scenario: Nullable required values remain distinct from optional omissions
+
+- **WHEN** a published mandate includes a required nullable duration or an omitted optional end
+- **THEN** serialization retains the required null and omits an unset optional end consistently for the approval body, canonical transaction identity and receipt verification
+
+#### Scenario: An explicit null for an optional property is normalized away
+
+- **WHEN** a mandate, receipt or snapshot states `null` for an optional property whose schema does not allow null, such as a part's `end` or a receipt part's `rate`
+- **THEN** the generated consumer accepts it and treats it as omitted, so the transaction identity and receipt signature verification use the normalized body, and settlement data pairing such a mandate with the hash of its raw JSON is refused
+
 ### Requirement: Marketplace roles hold no payment ledger
 
 Marketplace roles MUST NOT own ledger state or implement cash movement, Stripe top-ups, payouts, or provider recovery. The kit MUST keep no settlement servicing state or daemon; headless callers supply owner-scoped credentials per request and verify service-signed receipts through the identity kit.
@@ -734,13 +754,14 @@ against declared supply have shapes; the market core MUST NOT carry it.
 
 - **Schema.** Flattening MUST be driven by a schema the owning domain supplies. For each
   family field the schema states whether it is a quantity or an attribute, whether it is
-  required, and its flat name. The utility MUST NOT contain any domain's family or field
-  names.
+  required, and its flat name. A required field MUST be required only in a shape that names
+  its family: a shape that omits the family states nothing about it. The utility MUST NOT
+  contain any domain's family or field names.
 - **Digest.** The canonical digest MUST be taken over the family-grouped form, so changing a
   schema's flat names does not change a shape's digest.
-- **Refusals.** A shape naming a family or field its schema does not define, missing a
-  required field, or carrying a value of the wrong kind MUST be refused with the offending
-  path named.
+- **Refusals.** A shape naming a family or field its schema does not define, naming a family
+  without one of that family's required fields, or carrying a value of the wrong kind MUST be
+  refused with the offending path named.
 - **Inverse.** The utility MUST build a family-grouped shape from flat quantities and
   attributes through a schema, as the exact inverse of flattening, refusing every flat name
   the schema does not define and every problem flattening would refuse.
@@ -764,6 +785,16 @@ against declared supply have shapes; the market core MUST NOT carry it.
 
 - **WHEN** a shape names a field the supplied schema does not define
 - **THEN** flattening refuses it and names the family and field
+
+#### Scenario: A shape omits a family whose fields are required
+
+- **WHEN** a shape names no field of a family whose fields its schema marks required
+- **THEN** the utility accepts it, and its flattening carries nothing for that family
+
+#### Scenario: A shape names a family without one of its required fields
+
+- **WHEN** a shape names a family but omits a field the schema marks required in it
+- **THEN** the utility refuses it, naming the missing `family.field`
 
 #### Scenario: Structure is checked without a schema
 
@@ -791,11 +822,31 @@ that every compute domain binds. The VM and bare-metal domains MUST NOT each def
 and neither MUST obtain the schema by importing the other. The package MUST depend only on
 the standard library and the capability-shape foundation kit.
 
+No family of the compute schema is required. The `gpu` family's `count` and `model` MUST
+both be required within it, so a compute shape states a GPU count and model together or
+states no GPUs, and every compute shape carries at least one quantity.
+
 #### Scenario: Two compute domains flatten one shape
 
 - **WHEN** the VM and bare-metal domains each flatten `{gpu: {count: 8, model: H200}, memory: {gib: 2048}}`
 - **THEN** both produce `gpu_count: 8`, `ram_gb: 2048`, and `gpu_model: H200` through the
   same schema object
+
+#### Scenario: A shape states no GPUs
+
+- **WHEN** the compute schema validates `{cpu: {count: 8}, memory: {gib: 32}}`
+- **THEN** the shape is accepted and flattens to `vcpu_count: 8` and `ram_gb: 32` with no
+  attribute
+
+#### Scenario: A shape states a GPU model without a count
+
+- **WHEN** the compute schema validates `{gpu: {model: H100}, cpu: {count: 8}}`
+- **THEN** the shape is refused, naming `gpu.count` as required
+
+#### Scenario: A shape states a GPU count without a model
+
+- **WHEN** the compute schema validates `{gpu: {count: 2}}`
+- **THEN** the shape is refused, naming `gpu.model` as required
 
 #### Scenario: The bare-metal storefront binds the schema
 
@@ -1060,7 +1111,11 @@ framework-free test route service. A mock executor MUST be assembled from shared
 execution mechanics and the adapter's contributed default output; no adapter's mock MAY
 derive from another adapter's. The mechanism MUST NOT be presented as a foundation kit,
 and a non-compute domain's executor mock MUST NOT be added to it. Each adapter MUST
-mount its rule routes under its own prefix; job draining and waiting MUST stay shared.
+mount its rule and evaluate-job routes under its own prefix, contributing their route
+contracts from the family's template instantiated with its mount; job draining and
+waiting MUST stay shared.
+The test route service MUST answer with response models the compute family's contracts
+distribution owns, so every adapter's rule routes answer the same typed shapes.
 
 #### Scenario: A bare-metal grant runs under the mock profile
 
@@ -1077,6 +1132,12 @@ mount its rule routes under its own prefix; job draining and waiting MUST stay s
 
 - **WHEN** a scenario installs a VM mock rule
 - **THEN** it matches VM jobs only and never a bare-metal job
+
+#### Scenario: Two adapters' rule routes answer one shape
+
+- **WHEN** a scenario lists the rules installed through VM's and through bare metal's rule
+  routes
+- **THEN** both answers are the family's typed rule models
 
 ### Requirement: Per-site projection state is kit-owned and held once per process
 
@@ -1175,7 +1236,7 @@ the field's absence MUST leave a response valid for a storefront that reports no
 ### Requirement: The api family shares one access vocabulary and kit
 
 API credits, and every API-selling domain that follows it, MUST form the `api`
-family, with one vocabulary package under `domains/api` and one family kit of
+family, with one vocabulary package under `kit/api` and one family kit of
 distributions beneath it, placed under the family directory the scope rule
 names. A domain of the family MUST NOT define the purchase shape, issuance
 digests, key authority, issuance composition, buyer flows, mechanism stages, or
@@ -1200,7 +1261,7 @@ the kit's scope until its ledger-free distribution exists.
   supplies its selling and buying bundles, its capacity profile, and its
   service root
 - **THEN** it composes the storefront, authority, gate, and buyer flows without
-  a change to any `domains/api` distribution
+  a change to any `kit/api` distribution
 
 ## Evidence
 

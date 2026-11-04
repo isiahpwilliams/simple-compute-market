@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arkhai-inference-gateway-service"
+version = "0.1.0"
+license = "MIT"
+description = "Inference gateway: the family gateway in front of a model server, charging the inference authority for each request to the listed model"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "arkhai-api-gateway>=0.1.0",
+    "arkhai-api-gate[signed]>=0.2.0",
+    "arkhai-inference-domain>=0.2.0",
+    "arkhai-core-storefront-client>=0.27.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.7",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4,<9.0.0",
+    "pytest-asyncio>=0.23.8,<1.0.0",
+    # Test-only: the real inference authority in process, and the clients
+    # that register its quota and issue a key, as the storefront would.
+    "arkhai-inference-service>=0.1.0",
+    "arkhai-api>=0.2.0",
+    "arkhai-api-client>=0.1.0",
+    "arkhai-kit-site-client",
+    "arkhai-kit-identity==0.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inference_gateway_service"]

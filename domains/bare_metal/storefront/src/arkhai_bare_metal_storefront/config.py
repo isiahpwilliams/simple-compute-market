@@ -40,6 +40,7 @@ from core_storefront.identity_config import IdentityConfig, resolve_storefront_s
 from core_storefront.multi_registry_client import RegistryAuthorityTrust
 from core_storefront.service_peers import ServicePeerConfigs
 from dynaconf import Dynaconf
+from market_alkahest import retired_address_book_keys, retired_address_book_refusal
 from market_config.config_loader import storefront_config_files
 from market_config.registry_url import normalize_registry_url
 from market_config.setting_types import PositiveSeconds, positive_seconds
@@ -165,10 +166,19 @@ class RegistryAuthoritySettings(_Section):
 
 
 class RegistrySettings(_Section):
-    """``[registry]``: every registry the storefront publishes to, each pinned."""
+    """``[registry]``: every registry the storefront publishes to, each pinned.
+
+    ``auth`` maps a registry's URL to the bearer token a registry that gates
+    writes requires, sent beside the storefront's signature, never in place of
+    it. It is secret, so it belongs in the Secret overlay, and the chart's
+    values schema refuses it in public configuration.
+    """
 
     urls: list[str] = Field(default_factory=list)
     authorities: dict[str, RegistryAuthoritySettings] = Field(default_factory=dict)
+    auth: dict[str, str] = Field(
+        default_factory=dict, repr=False, json_schema_extra={"secret": True}
+    )
 
 
 class CapacitySettings(_Section):
@@ -240,11 +250,14 @@ class WalletSettings(_Section):
 
 
 class ChainSettings(_Section):
-    """One ``[Chains.<name>]``: an EVM chain the storefront settles Alkahest on."""
+    """One ``[Chains.<name>]``: an EVM chain the storefront settles Alkahest on.
+
+    Its Alkahest address book is named in ``[Settlement.alkahest.address_books]``;
+    the settings model refuses the retired key a chain table once stated it.
+    """
 
     rpc_url: str = Field(min_length=1)
     chain_id: StrictInt | None = None
-    alkahest_address_config_path: str | None = None
 
 
 class BareMetalStorefrontSettings(_Section):
@@ -276,6 +289,24 @@ class BareMetalStorefrontSettings(_Section):
     @classmethod
     def _settlement_in_any_case(cls, value: Any) -> Any:
         return {} if value is None else _lowered(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_retired_address_book_keys(cls, value: Any) -> Any:
+        # Unrefused, a key the storefront no longer reads would leave its chain
+        # without the book the operator meant it to use.
+        if not isinstance(value, Mapping):
+            return value
+        sections = {str(key).lower(): item for key, item in value.items()}
+        settlement = sections.get("settlement")
+        chains = sections.get("chains")
+        retired = retired_address_book_keys(
+            settlement if isinstance(settlement, Mapping) else None,
+            chains if isinstance(chains, Mapping) else None,
+        )
+        if retired:
+            raise ValueError("; ".join(map(retired_address_book_refusal, retired)))
+        return value
 
     @property
     def storefront_url(self) -> str:
@@ -364,6 +395,29 @@ class BareMetalStorefrontSettings(_Section):
                 authority=pin.authority, principals=principals
             )
         return authorities
+
+    def registry_auth(self) -> dict[str, str]:
+        """Each ``[registry.auth]`` token by its normalized registry URL.
+
+        A token must name a configured registry: one naming none, by a typo or
+        a stale URL, would otherwise be dropped silently and its registry's
+        writes refused. An empty token is no token. Refusals name the URL and
+        never the token.
+        """
+        urls = {normalize_registry_url(url) for url in self.registry.urls}
+        tokens: dict[str, str] = {}
+        for raw_url, token in self.registry.auth.items():
+            url = normalize_registry_url(raw_url)
+            if url in tokens:
+                raise BareMetalConfigurationError(
+                    f"[registry.auth] names {url!r} twice"
+                )
+            if url not in urls:
+                raise BareMetalConfigurationError(
+                    f"[registry.auth] names {url!r}, which is not one of [registry].urls"
+                )
+            tokens[url] = token
+        return {url: token for url, token in tokens.items() if token}
 
 
 def settings_source() -> Dynaconf:

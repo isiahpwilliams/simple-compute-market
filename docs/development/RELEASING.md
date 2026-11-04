@@ -14,8 +14,7 @@ issue-discovery development tool (`scm-issue-discovery`).
 Distribution names are prefixed `arkhai-`. PyPI does not namespace
 distribution names by organization, so the prefix is the project's
 namespace. Import names and console scripts (`market`,
-`market-storefront`, `market-policy`) are independent of the
-distribution name.
+`market-storefront`) are independent of the distribution name.
 
 ## Published packages
 
@@ -27,7 +26,7 @@ the one its `pyproject.toml` declares.
 
 | Package | Path | Internal deps |
 |---|---|---|
-| `arkhai-kit-alkahest` | `kit/alkahest/` | `arkhai-kit-settlement-runtime` |
+| `arkhai-kit-alkahest` | `kit/alkahest/` | `arkhai-kit-config`, `arkhai-kit-settlement-runtime` |
 | `arkhai-kit-config` | `kit/config/` | `arkhai-kit-settlement-runtime` |
 | `arkhai-kit-identity` | `kit/identity/` | none |
 | `arkhai-kit-arkhai-payments` | `kit/arkhai-payments/` | `arkhai-core`, `arkhai-kit-identity`, `arkhai-kit-settlement-runtime` |
@@ -56,18 +55,18 @@ the one its `pyproject.toml` declares.
 | `arkhai-kit-resource-pools-client` | `kit/resource-pools-client/` | `arkhai-kit-resource-pools-contracts` |
 | `arkhai-kit-storefront` | `kit/storefront/` | `arkhai-core`, `arkhai-core-storefront`, `arkhai-kit-alkahest`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime` |
 | `arkhai-compute` | `domains/compute/` | `arkhai-kit-capability-shape` |
-| `arkhai-api` | `domains/api/` | `arkhai-kit-identity` |
-| `arkhai-api-contracts` | `domains/api/contracts/` | `arkhai-api`, `arkhai-core`, `arkhai-kit-identity` |
-| `arkhai-api-client` | `domains/api/client/` | `arkhai-api-contracts`, `arkhai-kit-identity` |
-| `arkhai-api-authority` | `domains/api/authority/` | `arkhai-api`, `arkhai-api-contracts`, `arkhai-kit-identity`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-site` |
-| `arkhai-api-selling` | `domains/api/selling/` | `arkhai-api`, `arkhai-api-client`, `arkhai-core`, `arkhai-core-registry-client`, `arkhai-core-storefront`, `arkhai-kit-capacity-publication`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-policy`, `arkhai-kit-resource-pools`, `arkhai-kit-settlement-runtime`, `arkhai-kit-site-client`, `arkhai-kit-storefront` |
-| `arkhai-api-selling-alkahest` | `domains/api/selling-alkahest/` | `arkhai-api-selling`, `arkhai-core`, `arkhai-kit-alkahest`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-settlement-runtime` |
-| `arkhai-api-selling-arkhai-payments` | `domains/api/selling-arkhai-payments/` | `arkhai-api`, `arkhai-api-selling`, `arkhai-core`, `arkhai-kit-arkhai-payments`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-settlement-runtime`, `arkhai-kit-storefront` |
-| `arkhai-api-buying` | `domains/api/buying/` | `arkhai-api`, `arkhai-core`, `arkhai-core-buyer`, `arkhai-kit-config`, `arkhai-kit-identity`, `arkhai-kit-policy`, `arkhai-kit-settlement-runtime` |
-| `arkhai-api-buying-alkahest` | `domains/api/buying-alkahest/` | `arkhai-api-buying`, `arkhai-core-buyer`, `arkhai-kit-alkahest`, `arkhai-kit-config`, `arkhai-kit-identity`, `arkhai-kit-policy` |
-| `arkhai-api-buying-arkhai-payments` | `domains/api/buying-arkhai-payments/` | `arkhai-api-buying`, `arkhai-core`, `arkhai-core-buyer`, `arkhai-kit-arkhai-payments`, `arkhai-kit-config`, `arkhai-kit-settlement-runtime` |
-| `arkhai-api-gate` | `domains/api/gate/` | none (`signed` extra: `arkhai-kit-identity`) |
-| `arkhai-api-gateway` | `domains/api/gateway/` | `arkhai-api-gate` (`signed` extra) |
+| `arkhai-api` | `kit/api/` | `arkhai-kit-identity` |
+| `arkhai-api-contracts` | `kit/api/contracts/` | `arkhai-api`, `arkhai-core`, `arkhai-kit-identity` |
+| `arkhai-api-client` | `kit/api/client/` | `arkhai-api-contracts`, `arkhai-kit-identity` |
+| `arkhai-api-authority` | `kit/api/authority/` | `arkhai-api`, `arkhai-api-contracts`, `arkhai-kit-identity`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-site` |
+| `arkhai-api-selling` | `kit/api/selling/` | `arkhai-api`, `arkhai-api-client`, `arkhai-core`, `arkhai-core-registry-client`, `arkhai-core-storefront`, `arkhai-core-storefront-client`, `arkhai-kit-capacity-publication`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-policy`, `arkhai-kit-resource-pools`, `arkhai-kit-settlement-runtime`, `arkhai-kit-site-client`, `arkhai-kit-storefront` |
+| `arkhai-api-selling-alkahest` | `kit/api/selling-alkahest/` | `arkhai-api-selling`, `arkhai-core`, `arkhai-kit-alkahest`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-settlement-runtime`, `arkhai-kit-storefront` |
+| `arkhai-api-selling-arkhai-payments` | `kit/api/selling-arkhai-payments/` | `arkhai-api`, `arkhai-api-selling`, `arkhai-core`, `arkhai-kit-arkhai-payments`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-settlement-runtime`, `arkhai-kit-storefront` |
+| `arkhai-api-buying` | `kit/api/buying/` | `arkhai-api`, `arkhai-core`, `arkhai-core-buyer`, `arkhai-kit-config`, `arkhai-kit-identity`, `arkhai-kit-policy`, `arkhai-kit-settlement-runtime` |
+| `arkhai-api-buying-alkahest` | `kit/api/buying-alkahest/` | `arkhai-api-buying`, `arkhai-core-buyer`, `arkhai-kit-alkahest`, `arkhai-kit-config`, `arkhai-kit-identity`, `arkhai-kit-policy` |
+| `arkhai-api-buying-arkhai-payments` | `kit/api/buying-arkhai-payments/` | `arkhai-api-buying`, `arkhai-core`, `arkhai-core-buyer`, `arkhai-kit-arkhai-payments`, `arkhai-kit-config`, `arkhai-kit-settlement-runtime` |
+| `arkhai-api-gate` | `kit/api/gate/` | none (`signed` extra: `arkhai-kit-identity`) |
+| `arkhai-api-gateway` | `kit/api/gateway/` | `arkhai-api-gate` (`signed` extra) |
 | `arkhai-bare-metal` | `domains/bare_metal/` | `arkhai-compute`, `arkhai-core`, `arkhai-kit-capability-shape`, `arkhai-kit-resource-pools-contracts` (`storefront` extra: `arkhai-core-storefront`) |
 | `arkhai-bare-metal-storefront` | `domains/bare_metal/storefront/` | `arkhai-bare-metal`, `arkhai-compute-provisioning-client`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-core-registry-client`, `arkhai-core-storefront`, `arkhai-core-storefront-client`, `arkhai-kit-alkahest`, `arkhai-kit-arkhai-payments`, `arkhai-kit-capacity-publication`, `arkhai-kit-config`, `arkhai-kit-contact-exchange`, `arkhai-kit-delivery`, `arkhai-kit-delivery-apprise`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-policy`, `arkhai-kit-pool-overrides`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-settlement-runtime`, `arkhai-kit-site-client`, `arkhai-kit-storefront` |
 | `arkhai-bare-metal-buyer` | `domains/bare_metal/buyer/` | `arkhai-bare-metal`, `arkhai-core`, `arkhai-core-buyer`, `arkhai-core-registry-client`, `arkhai-kit-alkahest`, `arkhai-kit-arkhai-payments`, `arkhai-kit-contact-exchange`, `arkhai-kit-identity`, `arkhai-kit-settlement-runtime` |
@@ -78,11 +77,11 @@ the one its `pyproject.toml` declares.
 | `arkhai-vms-settlement` | `domains/vms/settlement/` | `arkhai-kit-alkahest`, `arkhai-vms-listings` |
 | `arkhai-vms-buyer` | `domains/vms/buyer/` | `arkhai-core`, `arkhai-core-buyer`, `arkhai-kit-alkahest`, `arkhai-kit-arkhai-payments`, `arkhai-kit-config`, `arkhai-kit-contact-exchange`, `arkhai-kit-identity`, `arkhai-kit-policy`, `arkhai-kit-settlement-runtime`, `arkhai-vms`, `arkhai-vms-listings`, `arkhai-vms-negotiation` |
 | `arkhai-vms-provisioning-operator-client` | `domains/vms/provisioning/client/` | `arkhai-compute-provisioning-contracts` |
-| `arkhai-vms-provisioning-adapter` | `domains/vms/provisioning/adapter/` | `arkhai-compute-provisioning`, `arkhai-compute-provisioning-ansible`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-config`, `arkhai-kit-fulfillment`, `arkhai-kit-resource-pools`, `arkhai-vms`, `arkhai-vms-provisioning-operator-client` |
-| `arkhai-compute-provisioning` | `provisioning/compute/` | `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-fulfillment`, `arkhai-kit-resource-pools`, `arkhai-kit-site` |
+| `arkhai-vms-provisioning-adapter` | `domains/vms/provisioning/adapter/` | `arkhai-compute-provisioning`, `arkhai-compute-provisioning-ansible`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-fulfillment`, `arkhai-kit-resource-pools`, `arkhai-vms`, `arkhai-vms-provisioning-operator-client` |
+| `arkhai-compute-provisioning` | `provisioning/compute/` | `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-config`, `arkhai-kit-fulfillment`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-site` |
 | `arkhai-compute-provisioning-contracts` | `provisioning/compute/contracts/` | `arkhai-core`, `arkhai-kit-identity` |
 | `arkhai-compute-provisioning-client` | `provisioning/compute/client/` | `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-identity` |
-| `arkhai-compute-provisioning-ansible` | `provisioning/compute/ansible/` | `arkhai-compute-provisioning`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-config`, `arkhai-kit-resource-pools` |
+| `arkhai-compute-provisioning-ansible` | `provisioning/compute/ansible/` | `arkhai-compute-provisioning`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-kit-config` |
 | `arkhai-compute-provisioning-service` | `provisioning/compute/service/` | `arkhai-compute-provisioning`, `arkhai-compute-provisioning-ansible`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-core-storefront-client`, `arkhai-kit-config`, `arkhai-kit-fulfillment`, `arkhai-kit-identity`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-site` (`adapters` extra: `arkhai-bare-metal-provisioning-adapter`, `arkhai-vms-provisioning-adapter`) |
 | `arkhai-vms-storefront` | `domains/vms/storefront/` | `arkhai-bare-metal`, `arkhai-bare-metal-storefront`, `arkhai-compute-provisioning-client`, `arkhai-compute-provisioning-contracts`, `arkhai-core`, `arkhai-core-registry-client`, `arkhai-core-storefront`, `arkhai-core-storefront-client`, `arkhai-kit-alkahest`, `arkhai-kit-arkhai-payments`, `arkhai-kit-capability-admissibility`, `arkhai-kit-capacity-publication`, `arkhai-kit-config`, `arkhai-kit-contact-exchange`, `arkhai-kit-delivery`, `arkhai-kit-delivery-apprise`, `arkhai-kit-fulfillment`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-policy`, `arkhai-kit-pool-overrides`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-settlement-runtime`, `arkhai-kit-site`, `arkhai-kit-site-client`, `arkhai-kit-storefront`, `arkhai-vms`, `arkhai-vms-listings`, `arkhai-vms-negotiation`, `arkhai-vms-settlement` |
 | `arkhai-apicredits-domain` | `domains/apicredits/` | `arkhai-api`, `arkhai-api-contracts`, `arkhai-core` |
@@ -90,6 +89,7 @@ the one its `pyproject.toml` declares.
 | `arkhai-inference-service` | `domains/inference/service/` | `arkhai-api-authority`, `arkhai-api-contracts`, `arkhai-inference-domain`, `arkhai-kit-identity`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-site` |
 | `arkhai-inference-storefront` | `domains/inference/storefront/` | `arkhai-api`, `arkhai-api-client`, `arkhai-api-selling`, `arkhai-api-selling-alkahest`, `arkhai-core`, `arkhai-core-storefront`, `arkhai-core-storefront-client`, `arkhai-inference-domain`, `arkhai-kit-alkahest`, `arkhai-kit-config`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-settlement-runtime`, `arkhai-kit-storefront` |
 | `arkhai-inference-buyer` | `domains/inference/buyer/` | `arkhai-api-buying`, `arkhai-api-buying-alkahest`, `arkhai-core`, `arkhai-core-buyer`, `arkhai-inference-domain` |
+| `arkhai-inference-gateway-service` | `domains/inference/gateway-service/` | `arkhai-api-gate` (`signed` extra), `arkhai-api-gateway`, `arkhai-core-storefront-client`, `arkhai-inference-domain` |
 | `arkhai-apicredits-buyer` | `domains/apicredits/buyer/` | `arkhai-api-buying`, `arkhai-api-buying-alkahest`, `arkhai-api-buying-arkhai-payments`, `arkhai-apicredits-domain`, `arkhai-core`, `arkhai-core-buyer` |
 | `arkhai-apicredits-storefront` | `domains/apicredits/storefront/` | `arkhai-api-client`, `arkhai-api-selling`, `arkhai-api-selling-alkahest`, `arkhai-api-selling-arkhai-payments`, `arkhai-apicredits-domain`, `arkhai-core`, `arkhai-core-storefront`, `arkhai-core-storefront-client`, `arkhai-kit-alkahest`, `arkhai-kit-config`, `arkhai-kit-identity`, `arkhai-kit-negotiation-runtime`, `arkhai-kit-settlement-runtime`, `arkhai-kit-storefront` |
 | `arkhai-apicredits-service` | `domains/apicredits/service/` | `arkhai-api`, `arkhai-api-authority`, `arkhai-api-contracts`, `arkhai-kit-identity`, `arkhai-kit-resource-pools`, `arkhai-kit-resource-pools-contracts`, `arkhai-kit-site` |
@@ -178,12 +178,33 @@ Each package follows [SemVer](https://semver.org):
 - **Patch** — bug fix or internal change.
 
 Before a package reaches 1.0.0 its major version stays at zero: an
-incompatible change takes a **minor** bump in place of a major one, and
-the other rules apply unchanged. A consumer that depends on the
-incompatible behaviour raises its lower bound to the new minor version.
-Moving a package to 1.0.0 is a deliberate decision that sets its
-compatibility commitment, not a consequence of shipping an incompatible
-change.
+incompatible change to anything the package publishes — its API, a wire
+format it sends or accepts, or the meaning of a configuration key it
+reads — takes a **minor** bump in place of a major one, and the other
+rules apply unchanged. Its users are expected to update; a consumer that
+depends on the incompatible behaviour raises its lower bound to the new
+minor version. Moving a package to 1.0.0 is a deliberate decision that
+sets its compatibility commitment, not a consequence of shipping an
+incompatible change.
+
+A contract that carries its own version — a `VersionedEnvelope`'s
+`(kind, schema_version)`, a contract version, a protocol identifier — is
+never changed in place, before 1.0.0 or after. An incompatible change
+defines a new version, and each party states the versions it accepts and
+refuses the others, naming what it supports. Before 1.0.0 the release that
+introduces a version may stop accepting the one before, so the parties to
+it upgrade, and roll back, together. Persisted state keeps its own
+migration rules. Neither pre-1.0 allowance applies at or above 1.0.0.
+Incompatibility is signalled by the version numbers and the versioned
+contracts alone; no per-release list of incompatible changes is kept.
+
+A change bumps each package it changes at most once, measured against the
+package's version on the branch the change merges into: that is the version a
+release sees. A package already bumped on the change's branch is bumped again
+only when a later edit needs a larger bump than the one it has, such as an
+incompatible edit to a package bumped only for a fix, and exact pins on it move
+only with that bump. Bumping an unreleased version again changes nothing a
+release sees and moves every exact pin on it for nothing.
 
 ### Import package renames
 

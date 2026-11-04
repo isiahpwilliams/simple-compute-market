@@ -17,6 +17,7 @@
     "20260810_002_settlement_servicing_runtime",
     "20260811_003_settlement_principal_authorization",
     "20260815_004_settlement_mechanism_materialization_params",
+    "20261028_005_settlement_operation_awaiting_delivery",
     "20260810_001_escrow_settlement_identity",
     "20260815_002_issuance_evidence"
   ],
@@ -913,7 +914,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE escrows (\n                  escrow_uid TEXT PRIMARY KEY,\n                  negotiation_id TEXT NOT NULL,\n                  status TEXT NOT NULL,\n                  chain_name TEXT,\n                  escrow_address TEXT,\n                  is_primary INTEGER NOT NULL DEFAULT 1,\n                  fulfillment_uid TEXT,\n                  provisioning_job_id TEXT,\n                  connection_details TEXT,\n                  tenant_credentials TEXT,\n                  reason TEXT,\n                  -- Durable physical-fulfillment identity, so a caller can\n                  -- resume checking progress after a storefront restart\n                  -- without redispatching. Distinct from fulfillment_uid\n                  -- above (the on-chain settlement-claim identity) --\n                  -- see ARCHITECTURE.md's \"Shared vocabulary and identities\".\n                  capacity_reservation_id TEXT,\n                  settlement_resource_id TEXT,\n                  fulfillment_id TEXT,\n                  fulfillment_context TEXT,\n                  fulfillment_phase TEXT,\n                  processing_owner TEXT,\n                  processing_lease_until TEXT,\n                  created_at TEXT NOT NULL,\n                  updated_at TEXT NOT NULL\n                , obligation_ref TEXT, obligation_index INTEGER)",
+      "sql": "CREATE TABLE escrows (\n                  escrow_uid TEXT PRIMARY KEY,\n                  negotiation_id TEXT NOT NULL,\n                  status TEXT NOT NULL,\n                  chain_name TEXT,\n                  escrow_address TEXT,\n                  is_primary INTEGER NOT NULL DEFAULT 1,\n                  fulfillment_uid TEXT,\n                  provisioning_job_id TEXT,\n                  connection_details TEXT,\n                  tenant_credentials TEXT,\n                  reason TEXT,\n                  -- A physical fulfillment's identity, distinct from\n                  -- fulfillment_uid above (the on-chain settlement-claim\n                  -- identity) -- see ARCHITECTURE.md's \"Shared vocabulary and\n                  -- identities\". VM restart convergence reads the identity\n                  -- from its delivery record, not from these columns.\n                  capacity_reservation_id TEXT,\n                  settlement_resource_id TEXT,\n                  fulfillment_id TEXT,\n                  fulfillment_context TEXT,\n                  fulfillment_phase TEXT,\n                  processing_owner TEXT,\n                  processing_lease_until TEXT,\n                  created_at TEXT NOT NULL,\n                  updated_at TEXT NOT NULL\n                , obligation_ref TEXT, obligation_index INTEGER)",
       "triggers": []
     },
     "identity_audit": {
@@ -2573,6 +2574,13 @@
           "not_null": true,
           "primary_key": 0,
           "type": "TEXT"
+        },
+        {
+          "default": "0",
+          "name": "awaiting_delivery",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "INTEGER"
         }
       ],
       "foreign_keys": [
@@ -2605,7 +2613,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE settlement_operations (\n          obligation_ref TEXT NOT NULL,\n          operation TEXT NOT NULL,\n          request_hash TEXT NOT NULL,\n          state TEXT NOT NULL DEFAULT 'pending',\n          attempts INTEGER NOT NULL DEFAULT 0,\n          uncertain_acknowledgement INTEGER NOT NULL DEFAULT 0,\n          receipt TEXT,\n          last_error TEXT,\n          lease_owner TEXT,\n          lease_until_unix REAL,\n          next_attempt_unix REAL,\n          created_at TEXT NOT NULL,\n          updated_at TEXT NOT NULL,\n          PRIMARY KEY (obligation_ref, operation),\n          FOREIGN KEY (obligation_ref) REFERENCES settlement_obligations(obligation_ref)\n        )",
+      "sql": "CREATE TABLE settlement_operations (\n          obligation_ref TEXT NOT NULL,\n          operation TEXT NOT NULL,\n          request_hash TEXT NOT NULL,\n          state TEXT NOT NULL DEFAULT 'pending',\n          attempts INTEGER NOT NULL DEFAULT 0,\n          uncertain_acknowledgement INTEGER NOT NULL DEFAULT 0,\n          receipt TEXT,\n          last_error TEXT,\n          lease_owner TEXT,\n          lease_until_unix REAL,\n          next_attempt_unix REAL,\n          created_at TEXT NOT NULL,\n          updated_at TEXT NOT NULL, awaiting_delivery INTEGER NOT NULL DEFAULT 0,\n          PRIMARY KEY (obligation_ref, operation),\n          FOREIGN KEY (obligation_ref) REFERENCES settlement_obligations(obligation_ref)\n        )",
       "triggers": []
     },
     "stage_events": {

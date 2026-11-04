@@ -342,6 +342,16 @@ async def start_background_tasks(
         logger.info("[STARTUP] %s loop started (interval=%ss)", name, interval)
 
 
+async def stop_background_tasks(loops: StorefrontLoopController | None) -> None:
+    """Stop every loop and wait for it to end, before shutdown clears what the loops read.
+
+    A cancelled loop may still be unwinding across an await, so cancelling alone is
+    not enough. ``loops`` is None when the storefront never started them.
+    """
+    if loops is not None:
+        await loops.stop_loops()
+
+
 def seed_site(sites: Mapping[str, CapacitySite], selected: str | None) -> CapacitySite:
     """The pinned site a seed's quota is registered at: the selected one, else the only one."""
     if selected:

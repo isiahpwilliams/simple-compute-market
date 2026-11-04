@@ -1503,10 +1503,11 @@ pattern and are not changed here.
 *Fix (implementation review 20 F1):* the storefront's shutdown cancelled its
 background loops through `clear_loops()` and went on without waiting, so a
 loop could still be unwinding against the state shutdown clears. It now awaits
-the loop controller's `stop_loops()` first. `tests/integration/test_shutdown.py`
-holds a loop that unwinds across an await and fails against the storefront
-before the fix. The API-credits storefront shares the defect and is not
-changed here.
+the loop controller's `stop_loops()` first, through the selling library's
+`stop_background_tasks`, which the API-credits storefront, sharing the defect,
+now calls too. `tests/integration/test_shutdown.py` in each storefront holds a
+loop that unwinds across an await and fails against the storefront before the
+fix.
 
 ## 7. Inference buyer plugin `arkhai-inference-buyer`
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,7 @@ from arkhai_api_selling.lifecycle import (
     StorefrontLoops,
     loop_controller,
     start_background_tasks,
+    stop_background_tasks,
 )
 
 SETTINGS = LoopSettings(
@@ -86,6 +88,31 @@ def test_a_contributed_loop_is_registered_and_timed_like_the_storefronts_own():
 
     assert set(steps.step_routes().values()) == {*BASE_LOOPS, "example_reconciliation"}
     assert intervals["example_reconciliation"] == 60
+
+
+async def test_stopping_waits_for_a_loop_unwinding_across_an_await():
+    started = asyncio.Event()
+
+    async def step():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+        return {}
+
+    loops = loop_controller()
+    loops.register_loop("held", step=step, interval_seconds=60)
+    tasks = loops.start_loops()
+    await asyncio.wait_for(started.wait(), 5)
+
+    await stop_background_tasks(loops)
+
+    assert tasks and all(task.done() for task in tasks.values())
+
+
+async def test_stopping_a_storefront_that_never_started_its_loops_does_nothing():
+    await stop_background_tasks(None)
 
 
 async def test_startup_runs_only_the_composed_startup_steps():

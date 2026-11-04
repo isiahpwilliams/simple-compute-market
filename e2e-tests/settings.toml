@@ -123,6 +123,7 @@ service_url                     = ""   # inference service (keys/credits/quota)
 storefront_url                  = ""   # inference seller storefront
 gateway_url                     = ""   # gateway in front of the model server
 served_model_name               = ""   # the seeded listing's model
+stub_chunk_delay_seconds        = ""   # the stub's pause between streamed chunks
 registry_authority_id           = ""
 registry_scheme                 = ""
 registry_identifier             = ""

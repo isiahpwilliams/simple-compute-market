@@ -106,6 +106,8 @@ inference:
   storefront_url:    "http://inference-storefront:8000"
   gateway_url:       "http://inference-gateway:8090"
   served_model_name: "stub-instruct"
+  # The model stub's pause between streamed chunks, set by compose.inference-lane.yml.
+  stub_chunk_delay_seconds: "0.3"
   registry_authority_id: "inference-registry"
   registry_scheme:       "ed25519"
   registry_identifier:   "QpkX0mKYYK2PMdhAweeYEpDGzdX_htGTGmZq-L0e9r8"

@@ -2129,6 +2129,18 @@ test-e2e-unit` (85, and the stub's 5), `make test-release-tooling` (1,168),
 `make check-packaging`, `make check-architecture`, and `make
 check-comment-hygiene` pass. `make test` has not been run in full.
 
+*Fix (implementation review 22 F1–F3):* the second key's `403` did not show it
+uncharged; it is now topped up by one credit after the refusal, and the
+delivery reports the authority's balance as three, both credits it was bought
+with intact. The streaming check held for a buffered response; the lane sets
+the stub's pause between chunks to 0.3 s (`compose.inference-lane.yml`), and
+the first event must precede the last by at least half the reply's total pause,
+which a buffered relay collapses. The gateway's integration test still holds
+the controlled-upstream case. The model filter met no other listing; the second
+model's listing is now published before step (a), which shows it absent from
+the filtered list and present in the unfiltered one, and step (f) buys it.
+Evidence: `e2e_inference_deal` passed against a fresh inference lane.
+
 ## 12. Closeout
 
 The eleven parts of `openspec/README.md`'s "Plan closeout requirements", in

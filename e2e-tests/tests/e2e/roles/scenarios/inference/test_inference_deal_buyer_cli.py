@@ -170,6 +170,11 @@ def test_inference_full_deal(
 ) -> None:
     served_model = lane_setting("INFERENCE.SERVED_MODEL_NAME")
 
+    # A second model's listing, so the model filter has something to leave out;
+    # step (f) buys it.
+    other_listing = asyncio.run(_publish_other_listing())
+    log.info("[inference] published %s for %s", other_listing, OTHER_MODEL)
+
     # --- a. The schema filter routes discovery to the inference registry -----
     # Wide enough that the table prints the model id whole.
     monkeypatch.setenv("COLUMNS", "240")
@@ -178,6 +183,10 @@ def test_inference_full_deal(
     )
     assert listed.returncode == 0, f"listing list: {listed.stderr()[-2000:]}"
     assert "arkhai/stub-instruct" in listed.stdout(), listed.stdout()
+    assert f"arkhai/{OTHER_MODEL}" not in listed.stdout(), listed.stdout()
+    unfiltered = inference_buyer_cli.run(["inference", "listing", "list"], timeout=60.0)
+    assert unfiltered.returncode == 0, f"listing list: {unfiltered.stderr()[-2000:]}"
+    assert f"arkhai/{OTHER_MODEL}" in unfiltered.stdout(), unfiltered.stdout()
     for registry, schema in (
         (lane_setting("INFERENCE.COMPUTE_REGISTRY_URL"), "compute.market"),
         (lane_setting("INFERENCE.API_CREDITS_REGISTRY_URL"), "api_credits"),
@@ -261,7 +270,7 @@ def test_inference_full_deal(
         )
     assert _reply(last) == _stub_reply(PROMPT)
 
-    # --- i. A streamed completion arrives event by event ---------------------
+    # --- i. A streamed completion is relayed as it is produced ---------------
     arrivals: list[tuple[float, str]] = []
     with httpx.Client(timeout=15) as client, client.stream(
         "POST",
@@ -274,13 +283,14 @@ def test_inference_full_deal(
             if line.startswith("data: "):
                 arrivals.append((time.monotonic(), line.removeprefix("data: ")))
     assert arrivals and arrivals[-1][1] == "[DONE]"
-    assert arrivals[0][0] < arrivals[-1][0]
     pieces = [json.loads(data)["choices"][0]["delta"]["content"] for _, data in arrivals[:-1]]
     assert "".join(pieces) == _stub_reply(PROMPT)
+    # The stub pauses after every chunk, so a relayed stream spreads its events
+    # over at least that long; a buffered one delivers them all at once.
+    pause = float(lane_setting("INFERENCE.STUB_CHUNK_DELAY_SECONDS"))
+    assert arrivals[-1][0] - arrivals[0][0] >= 0.5 * pause * len(pieces), arrivals
 
     # --- f. A key bought under another listing is refused at this gateway ----
-    other_listing = asyncio.run(_publish_other_listing())
-    log.info("[inference] published %s for %s", other_listing, OTHER_MODEL)
     other = inference_buyer_cli.run([
         "inference", "buy",
         "--quantity", "2",
@@ -297,6 +307,24 @@ def test_inference_full_deal(
     other.wait_for_event("credentials_delivered", timeout=10.0)
     other_creds = inference_buyer_cli.credentials("inference", other.run_id)
     assert other_creds["key_id"] != key_id
+    assert other_creds["balance"] == 2
     refused = _chat(base_url, other_creds["secret"], model=served_model)
     assert refused.status_code == 403, refused.text
     assert refused.json()["error"] == "key_out_of_scope"
+    # The uncharged proof: a top-up reports the authority's balance, which
+    # still holds both credits the key was bought with.
+    other_topup = inference_buyer_cli.run([
+        "inference", "buy",
+        "--quantity", "1",
+        "--key-id", other_creds["key_id"],
+        "--resource", f'model_id="arkhai/{OTHER_MODEL}"',
+        "--max-matches", "5",
+        "--max-rounds", "10",
+        "--poll-interval", "1.0",
+        "--settlement-timeout", "300",
+        "--expiration", "3600",
+        "--yes",
+    ], timeout=320.0)
+    assert_market_run_succeeded(other_topup, command="market inference buy --key-id (other listing)")
+    delivered = other_topup.wait_for_event("credentials_delivered", timeout=10.0)
+    assert (delivered["key_id"], delivered["balance"]) == (other_creds["key_id"], 3), delivered

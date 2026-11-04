@@ -7,7 +7,7 @@ selects; the library compares no mechanism ID.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -99,7 +99,8 @@ class SellingSettlementComposition:
     mechanism_clients: Mapping[str, Any]
     settlement_config: Any
     configuration_registry: SettlementConfigurationRegistry
-    mechanism_resources: Mapping[str, Any]
+    # Carries the seller wallet's key, so it is never part of the repr.
+    mechanism_resources: Mapping[str, Any] = field(repr=False)
     credits_client: AuthorityClient
     evidence_service: IssuanceEvidenceService
     private_results: PrivateResultRepository
@@ -110,12 +111,27 @@ class SellingSettlementComposition:
         mechanism = agreement["settlement"]["mechanism"]
         return self.stages[mechanism].agreement_artifacts(agreement, self)
 
-    async def readiness(self) -> tuple[MechanismReadiness, ...]:
+    async def readiness(
+        self, *, accepted_escrows: Sequence[Mapping[str, Any]] = ()
+    ) -> tuple[MechanismReadiness, ...]:
+        """Each mechanism's readiness; ``accepted_escrows`` are escrows a listing
+        request supplies, whose chains the escrow mechanism's readiness is then judged on."""
+        resources: Mapping[str, Any] = self.mechanism_resources
+        if accepted_escrows:
+            resources = {
+                **resources,
+                "accepted_escrows": [dict(escrow) for escrow in accepted_escrows],
+            }
         return await self.configuration_registry.ordered_readiness(
             self.settlement_config,
             role="seller",
-            resources=self.mechanism_resources,
+            resources=resources,
         )
+
+    def canonical_mechanism(self, name: str) -> str:
+        """The canonical ID of the mechanism a publication clause names, by its
+        ID or its configuration key, as compiling the clause resolves it."""
+        return self.configuration_registry.canonical_mechanism_id(name, role="seller")
 
     def accepted_obligation_dispatch(
         self,
@@ -157,7 +173,12 @@ class SellingSettlementComposition:
     ) -> tuple[
         list[dict[str, Any]], list[dict[str, Any]], tuple[MechanismReadiness, ...]
     ]:
-        """Compile each complete ready clause without suppressing ready peers."""
+        """Compile each complete ready clause without suppressing ready peers.
+
+        A clause whose mechanism is unready compiles nothing, so with none ready
+        no artifact is returned; the readiness returned beside them says why,
+        which the caller judges.
+        """
         merged_resources = {**self.mechanism_resources, **resources}
         compiled = (
             [
@@ -233,8 +254,6 @@ class SellingSettlementComposition:
             settlement_options.extend(
                 dict(item) for item in envelope.get("settlement_options", ())
             )
-        if not accepted_escrows and not settlement_options:
-            raise RuntimeError("no enabled settlement mechanism is ready")
         return accepted_escrows, settlement_options, readiness
 
 

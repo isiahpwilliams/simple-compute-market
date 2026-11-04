@@ -20,6 +20,7 @@ from arkhai_api_buying.stages import (
     StageOptions,
 )
 from core_buyer.buyer_config import resolve_buyer_wallet
+from core_buyer.deal_helpers import exact_agreed_amount
 from core_buyer.negotiation_client import display_to_base_units
 from core_buyer.orchestration import (
     make_escrow_settle_hook,
@@ -28,11 +29,11 @@ from core_buyer.orchestration import (
 )
 from core_buyer.run_log import RunLog, read_run
 from market_alkahest import ALKAHEST_MECHANISM_ID, create_alkahest_registration
-from market_alkahest.plans import escrow_terms_from_settlement_plan
-from market_alkahest.proposals import escrow_proposal_from_accepted_entry
+from market_alkahest.plans import require_escrow_terms_fund_plan
+from market_alkahest.proposals import derive_accepted_escrow_terms, escrow_proposal_from_accepted_entry
+from market_alkahest.release_authorization import release_conditions_record
 from market_alkahest.schemas import (
     EscrowProposal,
-    EscrowTerms,
     accepted_recipient_address,
     accepted_token_address,
     primary_rate_value,
@@ -46,7 +47,10 @@ from rich.table import Table
 from arkhai_api_buying_alkahest.chains import (
     accepted_chain_names,
     buyer_chains,
+    chain_address_book,
+    chain_address_books,
     chain_by_name,
+    refuse_retired_address_book_keys,
     select_chain_for_listing,
 )
 from arkhai_api_buying_alkahest.escrow_client import (
@@ -56,7 +60,6 @@ from arkhai_api_buying_alkahest.escrow_client import (
     make_alkahest_settlement_payload_fn,
     make_buyer_payment_escrow_terms_fn,
     make_create_escrow_fn,
-    resumed_proposal_refusal,
 )
 from arkhai_api_buying_alkahest.escrow_selection import select_escrow_entry
 
@@ -129,13 +132,6 @@ def _chain_name_from_run_log(run_id: str, *, signer: Signer) -> Optional[str]:
 
 
 def _accepted_proposal_chain(deal) -> Optional[str]:
-    terms = getattr(deal, "accepted_escrow_terms", None)
-    if isinstance(terms, list) and terms:
-        first = terms[0]
-        if isinstance(first, dict):
-            chain = first.get("chain_name")
-            if isinstance(chain, str) and chain:
-                return chain
     proposal = getattr(deal, "accepted_escrow_proposal", None)
     if isinstance(proposal, dict):
         chain = proposal.get("chain_name")
@@ -145,16 +141,16 @@ def _accepted_proposal_chain(deal) -> Optional[str]:
 
 
 def _refuse_without_release_condition(log: RunLog, reason: str) -> None:
-    """End a settlement that has no accepted release condition to create under.
+    """End a settlement whose escrow the buyer cannot derive and check.
 
-    The seller settles the escrow only under the release condition it accepted;
-    one created under any other would never be released to it, so nothing is
-    created.
+    A resumed run funds only the escrow it derives from its accepted proposal
+    and the release conditions its listing advertised at acceptance, held to
+    the seller's recorded plan; without them it creates nothing.
     """
     error = (
-        f"Cannot create the escrow: {reason}. A resumed run creates an escrow "
-        "only from the seller's accepted escrow terms recorded in its run-log; "
-        "re-run negotiation so they are captured."
+        f"Cannot create the escrow: {reason}. A resumed run creates only the "
+        "escrow it derives from its accepted proposal and the release conditions "
+        "its run-log recorded at acceptance."
     )
     log.event("escrow_release_condition_missing", error=error)
     log.end("error", error=error)
@@ -285,7 +281,7 @@ class AlkahestBuySession:
         chain = self._chains.get(_proposal_chain(negotiation.outcome.accepted_escrow_proposal) or "")
         if chain is None:
             raise ValueError("the accepted Alkahest escrow names no configured chain")
-        address_config = chain.alkahest_address_config_path or None
+        address_config = chain_address_book(chain.name)
         confirm = None
         if run.interactive:
             console = self._request.console
@@ -302,6 +298,7 @@ class AlkahestBuySession:
             build_escrow_terms=make_buyer_payment_escrow_terms_fn(
                 chain_name=chain.name, addr_config_path=address_config
             ),
+            check_escrows_fund_plan=require_escrow_terms_fund_plan,
             create_escrow=make_create_escrow_fn(
                 private_key=self._private_key,
                 rpc_url=chain.rpc_url,
@@ -353,8 +350,11 @@ class AlkahestBuyerStage:
             resources["default_chain"] = next(iter(chains))
         return resources
 
+    def check_configuration(self, document: Mapping[str, Any]) -> None:
+        refuse_retired_address_book_keys(document)
+
     def chain_config_paths(self) -> Mapping[str, str | None]:
-        return {name: chain.alkahest_address_config_path for name, chain in buyer_chains().items()}
+        return chain_address_books()
 
     def negotiation_run_fields(self, options: StageOptions, selected: Any | None) -> Mapping[str, Any]:
         return {
@@ -442,11 +442,10 @@ class AlkahestBuyerStage:
             token = accepted_token_address(deal.accepted_escrow_proposal)
             if token:
                 deal.token_contract = token
-        if deal.settlement_plan is not None and not deal.accepted_escrow_terms:
-            deal.accepted_escrow_terms = [
-                terms.model_dump()
-                for terms in escrow_terms_from_settlement_plan(deal.settlement_plan)
-            ]
+
+    def listing_record(self, listing: Any) -> dict[str, Any]:
+        """The listing's advertised release conditions, which a resumed run derives from."""
+        return release_conditions_record(listing)
 
     def listing_rows(self, listing: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
         return (("Accepted escrows", format_accepted_escrows(listing.get("accepted_escrows", []))),)
@@ -470,7 +469,7 @@ class AlkahestBuyerStage:
             )
             raise typer.Exit(2)
         chain_cfg = chain_by_name(chain_cfg_name)
-        if deal.accepted_escrow_proposal is None and deal.accepted_escrow_terms is None:
+        if deal.accepted_escrow_proposal is None:
             typer.secho(
                 "Run-log carries no seller-accepted escrow proposal. Re-run negotiation so the accepted proposal is captured — token settlement always settles the seller-confirmed shape.",
                 err=True,
@@ -490,7 +489,7 @@ class AlkahestBuyerStage:
             buyer_private_key=resolved_evm_private_key,
             rpc_url=chain_cfg.rpc_url,
             chain_name=chain_cfg.name,
-            alkahest_addr_config=chain_cfg.alkahest_address_config_path,
+            alkahest_addr_config=chain_address_book(chain_cfg.name),
         )
         log = resume.open_log()
         resolve_seller_principals = resume.seller_principals(log, resume.buy_config())
@@ -511,18 +510,17 @@ class AlkahestBuyerStage:
                 },
             )
             console.print("[dim]escrow.create[/dim]  approve + create on-chain…")
-            if deal.accepted_escrow_terms is not None:
-                escrow_terms_list = [
-                    EscrowTerms.model_validate(item) for item in deal.accepted_escrow_terms
-                ]
-            elif deal.accepted_escrow_proposal is None:
-                _refuse_without_release_condition(
-                    log, "the run-log records no accepted escrow terms or proposal"
+            try:
+                escrow_terms_list = derive_accepted_escrow_terms(
+                    accepted_proposal=deal.accepted_escrow_proposal,
+                    listing_record=deal.listing_record,
+                    agreed_amount=exact_agreed_amount(deal),
+                    duration_seconds=0,
+                    settlement_plan=deal.settlement_plan,
+                    addr_config_path=chain.alkahest_addr_config,
                 )
-            else:
-                _refuse_without_release_condition(
-                    log, resumed_proposal_refusal(deal.accepted_escrow_proposal)
-                )
+            except ValueError as exc:
+                _refuse_without_release_condition(log, str(exc))
             create_escrow = make_create_escrow_fn(
                 private_key=chain.buyer_private_key,
                 rpc_url=chain.rpc_url,

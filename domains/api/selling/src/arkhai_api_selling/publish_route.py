@@ -1,6 +1,8 @@
 """The seller's publish-from-quota route: its contract, its request and response, and its typed clients.
 
-A domain's request model extends ``PublishFromQuotaRequest`` with what its listing describes.
+A domain's request model extends ``PublishFromQuotaRequest`` with what its listing
+describes. The clients also list the storefront's listings through its public
+listing route.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from typing import Any, Protocol
 
 from market_identity import Identity
 from pydantic import BaseModel, Field
+from storefront_client.models import ListingListResponse
 
 PUBLISH_FROM_QUOTA_PATH = "/api/v1/listings/publish-from-quota"
 PUBLISH_FROM_QUOTA_OPERATION = "create_listing"
@@ -49,6 +52,10 @@ class PublishFromQuotaResponse(BaseModel):
 class _Transport(Protocol):
     def authenticated_request(self, method: str, path: str, **kwargs: Any) -> Any: ...
 
+    def list_listings(
+        self, *, status: str | None = None, limit: int = 50, offset: int = 0
+    ) -> Any: ...
+
 
 def _publish(
     request_model: type[PublishFromQuotaRequest],
@@ -86,11 +93,24 @@ class ListingClient:
         *,
         request_id: str | None = None,
     ) -> PublishFromQuotaResponse:
-        """Create and publish a listing; refused with 400 when the quota or a settlement alternative is unavailable."""
+        """Create and publish a listing backed by ``request``'s quota resource.
+
+        Refused with 400 when the resource is unknown, holds no sellable units,
+        or no settlement alternative it may publish is ready for a reason its
+        configuration causes, naming the blockers; and with 503 when the only
+        reason is that a mechanism it uses has not been reached yet, which the
+        same request may retry.
+        """
         args, kwargs = _publish(self._request_model, request, self._seller)
         return PublishFromQuotaResponse.model_validate(
             await self._client.authenticated_request(*args, **kwargs, request_id=request_id)
         )
+
+    async def list_listings(
+        self, *, status: str | None = None, limit: int = 50, offset: int = 0
+    ) -> ListingListResponse:
+        """The storefront's local listings, through its public listing route."""
+        return await self._client.list_listings(status=status, limit=limit, offset=offset)
 
 
 class SyncListingClient:
@@ -118,3 +138,9 @@ class SyncListingClient:
         return PublishFromQuotaResponse.model_validate(
             self._client.authenticated_request(*args, **kwargs, request_id=request_id)
         )
+
+    def list_listings(
+        self, *, status: str | None = None, limit: int = 50, offset: int = 0
+    ) -> ListingListResponse:
+        """See ``ListingClient.list_listings``."""
+        return self._client.list_listings(status=status, limit=limit, offset=offset)

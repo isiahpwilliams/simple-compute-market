@@ -74,7 +74,6 @@ class NegotiationOutcome(CoreNegotiationOutcome):
 
     accepted_provision_terms: ProvisionTerms | None = None
     accepted_escrow_proposal: Any | None = None
-    accepted_escrow_terms: list[Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = super().to_dict()
@@ -82,8 +81,6 @@ class NegotiationOutcome(CoreNegotiationOutcome):
             payload["accepted_provision_terms"] = self.accepted_provision_terms.model_dump()
         if self.accepted_escrow_proposal is not None:
             payload["accepted_escrow_proposal"] = _dump(self.accepted_escrow_proposal)
-        if self.accepted_escrow_terms is not None:
-            payload["accepted_escrow_terms"] = [_dump(term) for term in self.accepted_escrow_terms]
         return payload
 
 
@@ -97,7 +94,6 @@ def negotiate_with_seller(
     kwargs.setdefault("validate_acceptance", settlement.validate_acceptance)
     kwargs.setdefault("decode_provision_terms", lambda value: validate_model(terms, value))
     kwargs.setdefault("decode_escrow_proposal", escrow.decode_proposal)
-    kwargs.setdefault("decode_escrow_terms", escrow.decode_terms)
     core_outcome = _core_negotiate_with_seller(**kwargs)
     values = {
         field.name: getattr(core_outcome, field.name)
@@ -111,10 +107,6 @@ def negotiate_with_seller(
         values["accepted_escrow_proposal"] = escrow.decode_proposal(
             core_outcome.accepted_escrow_proposal
         )
-    if core_outcome.accepted_escrow_terms is not None:
-        values["accepted_escrow_terms"] = [
-            escrow.decode_terms(term) for term in core_outcome.accepted_escrow_terms
-        ]
     return NegotiationOutcome(**values)
 
 
@@ -274,7 +266,6 @@ def register(
                 accepted_escrow_proposal=resume_point.accepted_escrow_proposal,
                 settlement_selection=resume_point.settlement_selection,
                 settlement_plan=resume_point.settlement_plan,
-                accepted_escrow_terms=resume_point.accepted_escrow_terms,
             )
             if resume_point.settlement_selection is None:
                 raise typer.BadParameter("run has no recorded settlement selection")
@@ -471,6 +462,14 @@ def register(
             stage_run_fields.update(stage.negotiation_run_fields(
                 options, selected_settlement if stage is selected_stage else None,
             ))
+        # What the selected entry records about the listing, such as the release
+        # conditions it advertised; a resumed run carries its first run's record.
+        if selected_stage is not None and listing_dict is not None:
+            listing_record = selected_stage.listing_record(listing_dict)
+        elif resume_state is not None:
+            listing_record = resume_point.listing_record
+        else:
+            listing_record = None
         run_log = DeliveryRunLog.of(RunLog.start(
             profile_id=identity.profile_id,
             principal=identity.principal,
@@ -491,6 +490,7 @@ def register(
             key_id=resolved_key_id,
             resumed_from=from_run,
             **stage_run_fields,
+            listing_record=listing_record,
         ))
         resolve_seller_principals = make_publisher_trust_resolver(
             config=BuyConfig.from_resolved_identity(
@@ -631,11 +631,7 @@ def register(
                 if outcome.accepted_escrow_proposal is not None
                 else None
             ),
-            accepted_escrow_terms=(
-                [term.model_dump() for term in outcome.accepted_escrow_terms]
-                if outcome.accepted_escrow_terms is not None
-                else None
-            ),
+            listing_record=listing_record,
             accepted_provision_terms=(
                 outcome.accepted_provision_terms.model_dump()
                 if outcome.accepted_provision_terms is not None

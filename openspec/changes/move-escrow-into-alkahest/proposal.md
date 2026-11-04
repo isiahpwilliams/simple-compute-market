@@ -14,6 +14,16 @@ Escrow is Alkahest's model, but it still sits in shared carriers. `SettlementObl
   reply carries nothing derivable from it. `unbacked-bare-metal-listings` removes the
   reply's `accepted_escrow_terms` and has the buyer derive its escrow and compare it with
   the seller's plan; this is the end state that design records.
+- One opening rule for the compute storefronts' settlement selection, handed over
+  2026-10-27 by `resolve-compute-family-findings`' design (its decision D1). The VM
+  storefront requires an opening to state its settlement selection inside the proposal
+  (`settlement_stages.py`'s `resolve_proposal_stage`); the bare-metal storefront projects
+  an Alkahest selection from the escrow carrier and refuses one stated beside it
+  (`negotiation_runtime.py`'s `exact_selection`). The shared end-to-end compute deal
+  stages therefore ask each domain's driver which opening to send
+  (`compute_deal_stages.py`'s `opening_selection`). With escrow fields as option
+  parameters and the Agreement as the complete settlement input, both storefronts take
+  one opening shape and the driver hook goes.
 - Rename the kit/site quota ledger's `escrow_uid` correlation API/persistence coordinate to a neutral name with its owning ledger and all consumers changed together. Credits issuance currently supplies its negotiation-derived fulfillment ID there, not an escrow or grant alias; domain-local renaming must not create another compatibility projection. This includes shared capacity `deal_ref` consumers, not just the credits service.
 - Escrow-shaped code leaves the foundation kits and the buyer core, so that no kit
   other than Alkahest's holds Alkahest in its scope (`ARCHITECTURE.md`, "Where the
@@ -55,6 +65,13 @@ Escrow is Alkahest's model, but it still sits in shared carriers. `SettlementObl
     `kit-owned-storefront-shell`'s design for which change lands the lifespan step.
   - `market_core.schemas`'s Alkahest-named escrow fields leave with
     `SettlementObligation`'s, which the first bullet above already moves.
+  - `kit/config`'s settlement migration (`market_config/settlement_migration.py`)
+    encodes the meaning of `[Settlement.alkahest.address_books]` — which chain a
+    retired address-book key served, and when that is ambiguous — while `kit/alkahest`
+    owns the table and refuses the retired keys. Handed over 2026-10-28 by
+    `resolve-compute-family-findings`' closeout: the design decides whether the
+    Alkahest half of the migration moves to `kit/alkahest`, leaving `kit/config` the
+    mechanism-neutral steps.
 - The VM listing and negotiation specializations stop importing `kit/alkahest`,
   since neither carries a mechanism in its name and so neither may know one
   (`ARCHITECTURE.md`, "Scope"):

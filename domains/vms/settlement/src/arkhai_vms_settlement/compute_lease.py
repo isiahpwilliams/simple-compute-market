@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
@@ -18,9 +19,14 @@ logger = logging.getLogger(__name__)
 def token_resource_from_accepted_escrow(
     accepted_escrow: dict[str, Any] | Any,
     *,
-    chain_configs: dict[str, Any] | None = None,
+    chain_config_paths: Mapping[str, str | None] | None = None,
 ) -> TokenResource | None:
-    """Build a payment ``TokenResource`` from an accepted-escrow entry."""
+    """Build a payment ``TokenResource`` from an accepted-escrow entry.
+
+    ``chain_config_paths`` maps each configured chain to its Alkahest address
+    book, ``None`` for the SDK's built-in addresses, as the caller resolved it;
+    an escrow naming no token is read as native-token through its chain's book.
+    """
     from market_alkahest.schemas import accepted_token_address, primary_rate_value
 
     if not isinstance(accepted_escrow, dict):
@@ -37,15 +43,10 @@ def token_resource_from_accepted_escrow(
             from market_alkahest.alkahest import get_escrow_codec_for
 
             chain_name = accepted_escrow.get("chain_name", "")
-            chain_config = (chain_configs or {}).get(chain_name)
             codec = get_escrow_codec_for(
                 chain_name,
                 accepted_escrow.get("escrow_address", ""),
-                config_path=getattr(
-                    chain_config,
-                    "alkahest_address_config_path",
-                    None,
-                ),
+                config_path=(chain_config_paths or {}).get(chain_name),
             )
         except Exception:
             codec = None
@@ -99,18 +100,23 @@ def encode_compute_lease(
     )
     human_price_per_hour = Decimal(hourly_rate.amount) / (10**token_meta.decimals)
 
-    lease_terms = {
-        "gpu_model": (
+    # A GPU field the listing does not state is left out rather than written
+    # as null: a null would state a value the deal never committed to.
+    lease_terms: dict[str, Any] = {}
+    if compute.gpu_model is not None:
+        lease_terms["gpu_model"] = (
             compute.gpu_model.value
             if hasattr(compute.gpu_model, "value")
             else str(compute.gpu_model)
-        ),
-        "region": (
-            compute.region.value
-            if hasattr(compute.region, "value")
-            else str(compute.region)
-        ),
-        "gpu_count": compute.gpu_count,
+        )
+    lease_terms["region"] = (
+        compute.region.value
+        if hasattr(compute.region, "value")
+        else str(compute.region)
+    )
+    if compute.gpu_count is not None:
+        lease_terms["gpu_count"] = compute.gpu_count
+    lease_terms |= {
         "sla": compute.sla,
         "duration_seconds": duration_seconds,
         "token_symbol": token_meta.symbol,

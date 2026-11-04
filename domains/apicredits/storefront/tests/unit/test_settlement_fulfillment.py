@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import datetime
 from functools import partial
@@ -27,6 +28,7 @@ from arkhai_api_selling.evidence_store import (
 )
 from arkhai_api_selling.issuance import (
     MissingQuotaResource,
+    SettlementRefusal,
     delivery,
     fulfill,
     issuance_subject,
@@ -42,6 +44,8 @@ from arkhai_apicredits.label import API_CREDITS_LABEL
 from apicredits_storefront import container, server
 from apicredits_storefront.container import SELLING_CONTRIBUTIONS
 from apicredits_storefront.container import storefront_sqlite_client
+from apicredits_storefront.utils import config as config_module
+from tests._settings_overrides import replaced_setting
 from tests.integration.credit_negotiation import FakeCapacity
 from tests.listing_bindings import upsert_bound_listing
 
@@ -274,7 +278,7 @@ async def test_payment_refusal_releases_hold_using_negotiation_not_transaction(
 
 
 @pytest.fixture
-async def settled_db(tmp_path, monkeypatch):
+async def settled_db(tmp_path, monkeypatch, request):
     """A DB with an accepted token negotiation, via the real sync flow."""
     import market_policy.negotiation_thread as thread_module
     from apicredits_storefront.domain_runtime import get_market_domain_contract
@@ -311,14 +315,16 @@ async def settled_db(tmp_path, monkeypatch):
             }
         )
     )
-    monkeypatch.setitem(
-        config_module.CHAINS,
-        "anvil",
-        SimpleNamespace(
-            alkahest_address_config_path=str(address_config),
-            rpc_url="http://x",
-        ),
-    )
+    monkeypatch.setitem(config_module.CHAINS, "anvil", SimpleNamespace(rpc_url="http://x"))
+    settlement = config_module.settlement_config_mapping()
+    settlement["alkahest"] = {
+        **dict(settlement.get("alkahest") or {}),
+        "address_books": {"anvil": str(address_config)},
+    }
+    held = ExitStack()
+    # Released whatever the setup below does, so the setting never leaks.
+    request.addfinalizer(held.close)
+    held.enter_context(replaced_setting("settlement", settlement))
     client = storefront_sqlite_client(db_path=str(tmp_path / "settle.db"))
     thread_module._thread_store = None
     get_thread_store(
@@ -384,7 +390,18 @@ async def settled_db(tmp_path, monkeypatch):
     return client, response["negotiation_id"]
 
 
-def _build_settlement_composition(db, *, verify_escrow, on_outcome=None, credits_client=None):
+def _build_settlement_composition(
+    db, *, verify_escrow, on_outcome=None, on_completion=None, credits_client=None
+):
+    """The settlement composition the coordinator tests drive.
+
+    ``on_completion`` is called with the coordinator's own task once that task
+    finishes. The task persists its outcome and then wakes servicing, so its
+    outcome being stored does not mean it is done: a test that waits for the
+    task itself, through ``_fulfilled``, neither ends while the task still runs
+    on the test's event loop, which closes without cancelling it, nor misses an
+    error the task raised.
+    """
     from market_settlement_runtime import (
         ConditionOutcome,
         EffectOutcome,
@@ -438,6 +455,11 @@ def _build_settlement_composition(db, *, verify_escrow, on_outcome=None, credits
     })
 
     async def persist(prepared, outcome):
+        # The coordinator awaits this hook from its own task, so the current
+        # task is the one the test waits for; its done callback is registered
+        # before persisting, so a failure here reaches the test too.
+        if on_completion is not None:
+            asyncio.current_task().add_done_callback(on_completion)
         await persist_settlement_outcome(db, prepared, outcome)
         if on_outcome is not None:
             on_outcome()
@@ -463,6 +485,15 @@ def _build_settlement_composition(db, *, verify_escrow, on_outcome=None, credits
     return runtime, worker, coordinator
 
 
+async def _fulfilled(finished: asyncio.Future):
+    """The coordinator task's outcome, once the task has finished, failing the
+    test if it raised, was cancelled, or did not fulfil."""
+    task = await asyncio.wait_for(finished, timeout=5)
+    outcome = task.result()
+    assert outcome.status == "fulfilled", outcome
+    return outcome
+
+
 async def test_settlement_coordinator_verifies_issues_and_stores_credentials(settled_db, monkeypatch):
     db, neg_id = settled_db
     verified = []
@@ -481,22 +512,26 @@ async def test_settlement_coordinator_verifies_issues_and_stores_credentials(set
         attested.append((json.loads(payload), escrow_uid))
         return "0xfulfill"
     client = SimpleNamespace(string_obligation=SimpleNamespace(do_obligation=attest))
-    completed = asyncio.Event()
+    finished = asyncio.get_running_loop().create_future()
     runtime, worker, coordinator = _build_settlement_composition(
-        db, verify_escrow=verify, on_outcome=completed.set, credits_client=_FakeAuthority(issue),
+        db, verify_escrow=verify, on_completion=finished.set_result,
+        credits_client=_FakeAuthority(issue),
     )
     result = await coordinator.start(
         escrow_uid="0xdeal", negotiation_id=neg_id, mechanism_client=client, chain_name="anvil",
         request=_settlement_request(neg_id),
     )
     assert result["status"] == "provisioning"
-    await asyncio.wait_for(completed.wait(), timeout=5)
+    await _fulfilled(finished)
     progress = await db.load_issuance_progress(reference="0xdeal")
     assert progress["status"] == "ready"
     projection = await project_progress(SELLING_CONTRIBUTIONS, db, progress, owner=_BUYER_PRINCIPAL)
     assert projection["tenant_credentials"]["secret"] == "ak_new.s3cret"
     assert len(verified) == 1
-    assert int(verified[0]["agreed_price"]) == 300
+    # Verified against the plan the negotiation committed at acceptance.
+    thread = await db.load_negotiation_thread_row(negotiation_id=neg_id)
+    assert verified[0]["settlement_plan"] == thread["settlement_plan"]
+    assert verified[0]["escrow_address"] == "0x" + "11" * 20
     assert all(call["escrow_uid"] == "0xdeal" for call in verified)
     assert issued[0].negotiation_id == neg_id
     escrow = await db.load_escrow(escrow_uid="0xdeal")
@@ -593,7 +628,6 @@ async def test_a_listing_changed_after_acceptance_issues_what_the_buyer_accepted
     listing = await db.load_listing(listing_id=thread["our_listing_id"])
     stored = listing["listing_resource"]
     resource = json.loads(stored) if isinstance(stored, str) else dict(stored)
-    accepted_escrows = listing["accepted_escrows"]
     await db.update_listing(
         listing_id=thread["our_listing_id"],
         listing_resource={**resource, "service_name": "Another Service", "base_url": "https://other.example"},
@@ -611,9 +645,8 @@ async def test_a_listing_changed_after_acceptance_issues_what_the_buyer_accepted
     )
     await asyncio.wait_for(completed.wait(), timeout=5)
 
-    assert verified[0]["listing"]["accepted_escrows"] == (
-        json.loads(accepted_escrows) if isinstance(accepted_escrows, str) else accepted_escrows
-    )
+    # Verified against the plan committed at acceptance, not the listing now.
+    assert verified[0]["settlement_plan"] == thread["settlement_plan"]
     assert (issued[0].service, issued[0].resource_id) == (resource["service_name"], resource["resource_id"])
     progress = await db.load_issuance_progress(reference="0xdeal")
     assert json.loads(progress["public_result"]["connection_details"])["service_name"] == resource["service_name"]
@@ -655,6 +688,68 @@ async def test_an_agreement_naming_another_listing_than_its_thread_is_refused(se
     assert await db.load_escrow(escrow_uid="0xdeal") is None
 
 
+async def test_a_listing_changed_since_acceptance_settles_against_the_committed_plan(
+    settled_db, monkeypatch,
+):
+    """The seller rewrites the listing's release condition and its wallet after
+    acceptance; settlement still verifies and registers the plan it committed,
+    which re-deriving from the listing would no longer authorize."""
+    db, neg_id = settled_db
+    committed = (await db.load_negotiation_thread_row(negotiation_id=neg_id))[
+        "settlement_plan"
+    ]
+    listing = await db.load_listing(listing_id="L-tok")
+    # Development values standing for a changed release policy and wallet.
+    monkeypatch.setattr(config_module.settings.wallet, "address", "0x" + "44" * 20)
+    await upsert_bound_listing(
+        db,
+        listing_id="L-tok",
+        status="open",
+        created_at=datetime.now().isoformat(),
+        updated_at=datetime.now().isoformat(),
+        listing_resource=dict(_OFFER),
+        accepted_escrows=listing["accepted_escrows"],
+        demands=[{
+            "chain_name": "anvil",
+            "arbiter": "0x" + "33" * 20,
+            "demand_data": {"recipient": "0x" + "44" * 20},
+        }],
+        fulfillment_resource=None,
+        max_duration_seconds=None,
+        storefront_url="http://seller:8002",
+        seller_principal=_SELLER_PRINCIPAL,
+    )
+    verified = []
+
+    async def verify(**kwargs):
+        verified.append(kwargs)
+        return 0
+
+    async def issue(request):
+        return _issuance_result(request)
+
+    async def attest(_payload, _escrow_uid):
+        return "0xfulfill"
+
+    finished = asyncio.get_running_loop().create_future()
+    runtime, _, coordinator = _build_settlement_composition(
+        db, verify_escrow=verify, on_completion=finished.set_result,
+        credits_client=_FakeAuthority(issue),
+    )
+    await coordinator.start(
+        escrow_uid="0xchanged", negotiation_id=neg_id,
+        mechanism_client=SimpleNamespace(string_obligation=SimpleNamespace(do_obligation=attest)),
+        chain_name="anvil", request=_settlement_request(neg_id),
+    )
+    await _fulfilled(finished)
+
+    assert [call["settlement_plan"] for call in verified] == [committed]
+    registered = await runtime.get_status(neg_id)
+    assert [record.obligation for record in registered.obligations] == committed[
+        "obligations"
+    ]
+
+
 async def test_verified_prepare_delivers_when_further_chain_reads_are_unavailable(
     settled_db, monkeypatch,
 ):
@@ -676,16 +771,17 @@ async def test_verified_prepare_delivers_when_further_chain_reads_are_unavailabl
     async def attest(_payload, _escrow_uid):
         return "0xfulfill"
 
-    completed = asyncio.Event()
+    finished = asyncio.get_running_loop().create_future()
     _, _, coordinator = _build_settlement_composition(
-        db, verify_escrow=verify, on_outcome=completed.set, credits_client=_FakeAuthority(issue),
+        db, verify_escrow=verify, on_completion=finished.set_result,
+        credits_client=_FakeAuthority(issue),
     )
     await coordinator.start(
         escrow_uid="0xverified", negotiation_id=neg_id,
         mechanism_client=SimpleNamespace(string_obligation=SimpleNamespace(do_obligation=attest)),
         chain_name="anvil", request=_settlement_request(neg_id),
     )
-    await asyncio.wait_for(completed.wait(), timeout=5)
+    await _fulfilled(finished)
 
     assert (await db.load_issuance_progress(reference="0xverified"))["status"] == "ready"
     assert (await db.load_escrow(escrow_uid="0xverified"))["status"] == "ready"
@@ -805,3 +901,34 @@ def test_a_stored_listing_row_is_projected_before_the_domain_validates_it():
     assert listing.listing_resource.service_name == "weather-api"
     assert listing.listing_resource.resource_id == "weather-quota"
     assert listing.accepted_escrows == row["accepted_escrows"]
+
+
+@pytest.mark.parametrize(
+    ("configured", "refusal"),
+    [
+        pytest.param({"anvil": object()}, 503, id="configured-chain-without-a-client-yet"),
+        pytest.param({}, None, id="unconfigured-chain"),
+    ],
+)
+async def test_a_chain_with_no_client_is_retryable_only_when_configured(
+    configured, refusal
+):
+    """The chain probe builds each client after startup, so a settle for a
+    configured chain it has not built yet is refused 503 for a retry, and one
+    for a chain the storefront does not configure is refused outright (the
+    route answers that ``ValueError`` 400)."""
+    stage = container.alkahest_stage(chains=lambda: configured)
+    coordinator = SimpleNamespace(start=AsyncMock())
+    composition = SimpleNamespace(mechanism_resources={"get_client": lambda _chain: None})
+    body = SimpleNamespace(chain_name="anvil", negotiation_id="neg-alkahest")
+
+    expected = SettlementRefusal if refusal else ValueError
+    with pytest.raises(expected) as refused:
+        await stage._start(
+            db=None, composition=composition, coordinator=coordinator,
+            reference="escrow-1", body=body,
+        )
+
+    if refusal:
+        assert refused.value.status_code == refusal
+    coordinator.start.assert_not_awaited()

@@ -8,8 +8,9 @@ authority pin; no enabled settlement mechanism; or no configured site, or a site
 not bound to exactly one service peer.
 
 Terms a pool's override may supply instead of the storefront's defaults -- its
-settlement clauses and its maximum lease duration -- are not checked here: a
-pool that resolves none is held and reported by publication. See the
+settlement clauses and its maximum lease duration -- are not checked here:
+publication holds a pool that resolves no lease bound, and refuses, closing any
+open listing, a candidate whose pool resolves no settlement clause. See the
 requirement "A storefront that cannot publish refuses to start" in
 openspec/specs/storefront-publication/spec.md.
 """
@@ -31,11 +32,13 @@ class BareMetalStartupError(RuntimeError):
 def _registry_problems(settings: BareMetalStorefrontSettings) -> list[str]:
     if not settings.registry.urls:
         return ["no registry to publish to: [registry].urls is empty"]
-    try:
-        settings.registry_authorities()
-    except BareMetalConfigurationError as exc:
-        return [str(exc)]
-    return []
+    problems = []
+    for resolve in (settings.registry_authorities, settings.registry_auth):
+        try:
+            resolve()
+        except BareMetalConfigurationError as exc:
+            problems.append(str(exc))
+    return problems
 
 
 def _settlement_problems(settings: BareMetalStorefrontSettings) -> list[str]:

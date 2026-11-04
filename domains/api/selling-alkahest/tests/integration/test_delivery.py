@@ -132,7 +132,8 @@ class Harness:
         """A fresh stage, as a restarted process composes one."""
         return AlkahestSellerStage(
             EXAMPLE, fulfils_through_capacity=True, release_models=frozenset({RECIPIENT_RELEASE}),
-            chains=lambda: {}, seller_wallet=lambda: "", composition=lambda: self.composition,
+            chains=lambda: {}, seller_wallet=lambda: "", seller_wallet_key=lambda: "",
+            address_books=lambda: {}, chain_probe=lambda: None, composition=lambda: self.composition,
             sqlite_client=lambda: self.db, backfill_escrows=None, stage_event=self._event,
         )
 

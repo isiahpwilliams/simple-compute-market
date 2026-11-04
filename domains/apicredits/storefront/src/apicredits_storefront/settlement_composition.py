@@ -16,6 +16,8 @@ from arkhai_api_selling.settlement_composition import (
     mechanism_servicing,
     servicing_mechanism_clients,
 )
+from core_storefront.stage_log import stage_event
+from market_alkahest import AlkahestChainProbe
 from market_core import MarketDomainContract
 from market_identity import Signer, TrustedIdentitySet
 from market_settlement_runtime import (
@@ -25,7 +27,7 @@ from market_settlement_runtime import (
     SettlementSQLiteRepository,
 )
 
-from apicredits_storefront.container import SELLER_STAGES, SELLING_CONTRIBUTIONS
+from apicredits_storefront.container import ALKAHEST_STAGE, SELLER_STAGES, SELLING_CONTRIBUTIONS
 from apicredits_storefront.services.credits_service_client import get_credits_service_client
 from apicredits_storefront.utils import config as storefront_config
 
@@ -36,7 +38,7 @@ def build_storefront_settlement_registry() -> SettlementConfigurationRegistry:
 
 
 def validate_mechanism_configuration(settlement_config: Any = None) -> None:
-    """Refuse a configuration a composed mechanism cannot honour.
+    """Refuse a mechanism configuration that contradicts itself.
 
     With no ``settlement_config``, the storefront's own configuration is resolved.
     """
@@ -48,6 +50,12 @@ def validate_mechanism_configuration(settlement_config: Any = None) -> None:
         stage.validate_configuration(settlement_config)
 
 
+def record_servicing_event(event: str, fields: dict[str, Any]) -> None:
+    """Record a servicing worker's event as a ``claims`` stage event, so a
+    failing step is on the deal's record."""
+    stage_event("claims", event, **fields)
+
+
 def build_api_credit_settlement_composition(
     *,
     domain: MarketDomainContract,
@@ -55,8 +63,13 @@ def build_api_credit_settlement_composition(
     chain_clients: Mapping[str, Any],
     marketplace_signer: Signer,
     failure_policy: Any,
+    chain_probe: AlkahestChainProbe | None = None,
 ) -> SellingSettlementComposition:
-    """Build the servicing clients, each mechanism's servicing, and the shared servicing worker."""
+    """Build the servicing clients, each mechanism's servicing, and the shared servicing worker.
+
+    ``chain_clients`` is the live map ``chain_probe`` updates in place, so it is
+    held here rather than copied; readiness reads the probe's results.
+    """
     registry = build_storefront_settlement_registry()
     settlement_config = registry.resolve(
         storefront_config.settlement_config_mapping(),
@@ -68,11 +81,14 @@ def build_api_credit_settlement_composition(
     )
     resources: dict[str, Any] = {
         "marketplace_signer": marketplace_signer,
-        "clients": dict(chain_clients),
+        "clients": chain_clients,
         "get_client": lambda chain: chain_clients.get(chain or ""),
         "chains": storefront_config.CHAINS,
         "default_chain": next(iter(storefront_config.CHAINS), None),
+        **ALKAHEST_STAGE.composition_resources(),
     }
+    if chain_probe is not None:
+        resources["chain_probe"] = chain_probe
     mechanism_clients = servicing_mechanism_clients(
         SELLER_STAGES, registry, settlement_config, resources
     )
@@ -93,6 +109,7 @@ def build_api_credit_settlement_composition(
         repository,
         worker_id=f"api-credit-storefront:{storefront_config.AGENT_ID}",
         interval_seconds=storefront_config.settlement_servicing_interval(),
+        on_event=record_servicing_event,
     )
     return SellingSettlementComposition(
         contributions=SELLING_CONTRIBUTIONS,

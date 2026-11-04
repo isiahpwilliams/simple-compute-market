@@ -21,6 +21,7 @@ from arkhai_bare_metal_storefront.settlement_composition import (
 )
 from storefront_configuration import (
     ADMIN,
+    REGISTRY_URL,
     SELLER,
     SELLER_CREDENTIAL,
     publishable_configuration,
@@ -125,6 +126,72 @@ def test_the_secret_overlay_wins_on_a_conflicting_key(monkeypatch, tmp_path):
     assert WALLET_KEY not in repr(settings)
 
 
+#: Development-only registry token; it authorizes nothing anywhere.
+REGISTRY_TOKEN = "dev-only-registry-token-not-a-secret"
+
+
+def test_a_registry_token_is_read_from_the_secret_overlay_by_its_normalized_url(
+    monkeypatch, tmp_path
+):
+    write_configuration(
+        monkeypatch,
+        tmp_path,
+        publishable_configuration(tmp_path / "storefront.db"),
+        secrets=f'[registry.auth]\n"HTTP://Registry.Test:8080/" = "{REGISTRY_TOKEN}"\n',
+    )
+
+    settings = load_storefront_settings()
+
+    assert settings.registry_auth() == {REGISTRY_URL: REGISTRY_TOKEN}
+    # The overlay adds the token and keeps the public pins it does not state.
+    assert list(settings.registry_authorities()) == [REGISTRY_URL]
+    assert REGISTRY_TOKEN not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected"),
+    [
+        pytest.param({}, {}, id="no token"),
+        pytest.param({REGISTRY_URL: ""}, {}, id="an empty token is none"),
+    ],
+)
+def test_a_registry_without_a_token_has_none(monkeypatch, tmp_path, auth, expected):
+    document = publishable_configuration(tmp_path / "storefront.db")
+    document["registry"]["auth"] = auth
+    write_configuration(monkeypatch, tmp_path, document)
+
+    assert load_storefront_settings().registry_auth() == expected
+
+
+@pytest.mark.parametrize(
+    ("auth", "named"),
+    [
+        pytest.param(
+            {"http://elsewhere.test:8080": REGISTRY_TOKEN},
+            "'http://elsewhere.test:8080', which is not one of",
+            id="no such registry",
+        ),
+        pytest.param(
+            {REGISTRY_URL: REGISTRY_TOKEN, REGISTRY_URL + "/": REGISTRY_TOKEN},
+            "names 'http://registry.test:8080' twice",
+            id="one registry twice",
+        ),
+    ],
+)
+def test_a_registry_token_is_refused_by_its_url_never_its_value(
+    monkeypatch, tmp_path, auth, named
+):
+    document = publishable_configuration(tmp_path / "storefront.db")
+    document["registry"]["auth"] = auth
+    write_configuration(monkeypatch, tmp_path, document)
+
+    with pytest.raises(BareMetalConfigurationError) as refused:
+        load_storefront_settings().registry_auth()
+
+    assert named in str(refused.value)
+    assert REGISTRY_TOKEN not in str(refused.value)
+
+
 def test_the_environment_override_layer_applies_over_every_file(monkeypatch, tmp_path):
     write_configuration(monkeypatch, tmp_path, {"capacity": {"poll_interval": 2}})
     monkeypatch.setenv("STOREFRONT_CAPACITY__POLL_INTERVAL", "7")
@@ -208,6 +275,36 @@ def test_a_setting_that_cannot_be_read_is_refused_by_key(
 
     with pytest.raises(BareMetalConfigurationError, match=named):
         load_storefront_settings()
+
+
+@pytest.mark.parametrize(
+    ("document", "path"),
+    [
+        (
+            {"Chains": {"anvil": {"rpc_url": "ws://anvil:8545",
+                                  "alkahest_address_config_path": "/book.json"}}},
+            "[Chains.anvil].alkahest_address_config_path",
+        ),
+        (
+            {"Settlement": {"alkahest": {"enabled": True,
+                                         "address_config_path": "/book.json"}}},
+            "[Settlement.alkahest].address_config_path",
+        ),
+    ],
+    ids=["chain-key", "section-key"],
+)
+def test_a_retired_address_book_key_is_refused_naming_the_table(
+    monkeypatch, tmp_path, document, path
+):
+    """Spec scenario "A retired key is stated", for the bare-metal storefront."""
+    write_configuration(monkeypatch, tmp_path, document)
+
+    with pytest.raises(BareMetalConfigurationError) as refused:
+        load_storefront_settings()
+
+    assert f"{path} is retired" in str(refused.value)
+    assert "[Settlement.alkahest.address_books]" in str(refused.value)
+    assert "/book.json" not in str(refused.value)
 
 
 def test_the_confirmation_window_is_three_poll_intervals_unless_stated(

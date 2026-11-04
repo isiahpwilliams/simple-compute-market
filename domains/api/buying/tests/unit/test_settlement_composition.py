@@ -8,7 +8,12 @@ from typing import Any
 
 import pytest
 from market_core import SettlementStageTable
-from market_core.schemas import Agreement, SettlementOption, derive_settlement_option_id
+from market_core.schemas import (
+    Agreement,
+    SettlementOption,
+    SettlementSelection,
+    derive_settlement_option_id,
+)
 from market_identity import Ed25519Signer
 
 import inspect
@@ -29,9 +34,6 @@ class Codec:
     def decode_proposal(self, value: Any) -> Any:
         return ("proposal", value)
 
-    def decode_terms(self, value: Any) -> Any:
-        return ("terms", value)
-
 
 class Stage:
     def __init__(self, mechanism_id: str, *, codec: Any = None, options: tuple = ()) -> None:
@@ -45,6 +47,12 @@ class Stage:
 
     def validate_acceptance(self, outcome: Any) -> None:
         self.accepted.append(outcome)
+
+    def check_configuration(self, document: Any) -> None:
+        pass
+
+    def listing_record(self, listing: Any) -> dict[str, Any]:
+        return {"recorded_by": self.mechanism_id}
 
 
 def _agreement(mechanism: str) -> dict[str, Any]:
@@ -186,3 +194,25 @@ def test_two_stages_cannot_contribute_one_commands_option():
 
 def test_the_chain_configuration_merges_every_stages():
     assert _composition(Stage("a.v1"), Stage("b.v1")).chain_config_paths() == {"a.v1": None, "b.v1": None}
+
+
+def test_the_listing_record_is_the_selected_or_escrow_stages():
+    """A selection's mechanism records it; any other proposal is the escrow stage's."""
+    composition = BuyerSettlementComposition(
+        CONTRIBUTIONS,
+        SettlementStageTable({
+            "escrow.v1": Stage("escrow.v1", codec=Codec()),
+            "rated.v1": Stage("rated.v1"),
+        }),
+    )
+    selection = SettlementSelection(
+        mechanism="rated.v1", option_id="a" * 64, expiration_unix=1_800_000_000,
+    )
+    unknown = SettlementSelection(
+        mechanism="other.v1", option_id="a" * 64, expiration_unix=1_800_000_000,
+    )
+
+    assert composition.accepted_listing_record({}, selection) == {"recorded_by": "rated.v1"}
+    assert composition.accepted_listing_record({}, object()) == {"recorded_by": "escrow.v1"}
+    assert composition.accepted_listing_record({}, unknown) == {}
+    assert composition.accepted_listing_record({}, None) == {}

@@ -12,6 +12,8 @@ from compute_provisioning_service.db.migrations import (
     check_schema_version,
 )
 
+from .legacy_default_pool import add_legacy_default_pool
+
 
 def _rows(engine, table, key):
     with engine.connect() as connection:
@@ -22,7 +24,8 @@ def _rows(engine, table, key):
 
 def test_vm_identity_migration_changes_only_provider_names_and_is_idempotent(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'provisioning.db'}")
-    run_migrations(engine, default_playbook_path="/configured/vm.yaml")
+    run_migrations(engine)
+    add_legacy_default_pool(engine, playbook_path="/configured/vm.yaml")
     operation = json.dumps({
         "kind": "vm.ansible.create.v1", "version": 1,
         "payload": {"parameters": {"executor_target": "guest-1"}},
@@ -37,8 +40,8 @@ def test_vm_identity_migration_changes_only_provider_names_and_is_idempotent(tmp
         # to contact on a public network.
         connection.execute(text(
             "INSERT INTO hosts (host_id, connection_kind, connection_version, "
-            "connection_public, connection_protected, gpu_count, enabled, pool_id) "
-            "VALUES ('host-1', 'ssh', 1, :public, '{}', 1, 1, 'default')"
+            "connection_public, connection_protected, enabled, pool_id) "
+            "VALUES ('host-1', 'ssh', 1, :public, '{}', 1, 'default')"
         ), {"public": json.dumps({"ssh_host": "203.0.113.10", "ssh_user": "stub"})})
         for identifier, provider in (("vm", "ansible"), ("bare-metal", "bare_metal.ansible")):
             connection.execute(text(
@@ -63,7 +66,7 @@ def test_vm_identity_migration_changes_only_provider_names_and_is_idempotent(tmp
     }
     before = {table: _rows(engine, table, key) for table, key in tables.items()}
 
-    run_migrations(engine, pool_definitions_path=tmp_path / "mounted-pools.yaml")
+    run_migrations(engine)
     check_schema_version(engine)
 
     after = {table: _rows(engine, table, key) for table, key in tables.items()}

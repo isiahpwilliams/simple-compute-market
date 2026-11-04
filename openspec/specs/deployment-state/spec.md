@@ -65,7 +65,7 @@ Each service MUST own its database and migration history; cross-service identifi
 - **THEN** correlation identifiers cross the API while provisioning retains ownership of its allocation records
 
 ### Requirement: Service-owned migration history
-Each stateful service MUST run and record its own ordered migration chain against its owned database; a deployed provisioning service MUST apply pending migrations before application startup and MUST reject schema drift from its normal startup path instead of applying migrations in-process.
+Each stateful service MUST run and record its own ordered migration chain against its owned database; a deployed provisioning service MUST apply pending migrations before application startup and MUST reject schema drift from its normal startup path instead of applying migrations in-process. The provisioning migration entrypoint MUST receive only its database and MUST NOT read operational configuration; configuration-driven seeding belongs to runtime initialization.
 
 #### Scenario: Database initialization is repeated
 - **WHEN** a service initializes a database whose migrations are already applied
@@ -82,6 +82,10 @@ Each stateful service MUST run and record its own ordered migration chain agains
 #### Scenario: A service has no separate deployment step for migrations
 - **WHEN** a stateful service has no Kubernetes init container or standalone migration CLI to apply migrations ahead of the application process (for example, the API-credit service, which has no Helm chart)
 - **THEN** it MAY apply its own ordered migration chain in-process at application startup, before serving requests, rather than rejecting drift from its normal startup path — this is a valid instantiation of service-owned migration history for a service without the provisioning service's deployment topology, not an exception to it
+
+#### Scenario: Provisioning migration runs under different configuration
+- **WHEN** the provisioning migration runs against the same database under two configurations that differ in playbooks, host defaults, or pool and seed documents
+- **THEN** both runs produce the same schema and the same rows
 
 ### Requirement: Shared Dynaconf bootstrap preserves consumer policy
 
@@ -328,11 +332,8 @@ The chart MAY refuse a release whose parts disagree with each other: internal-re
 trust whose authority or principals do not include the release's registry identity;
 provisioning trust, or a provisioning service peer for a site bound to the internal
 provisioning service, that does not include the release's provisioning principal; or a
-stated port that differs from the agent's. The chart MAY read the passed-through
-configuration to make a Kubernetes decision, such as waiting for a configured chain's
-RPC endpoint, or for the internal registry when the agent uses it, before the
-storefront starts. The chart MUST match every key it reads or writes as the
-storefront's loader matches it, without regard to case, and MUST refuse a
+stated port that differs from the agent's. The chart MUST match every key it reads or
+writes as the storefront's loader matches it, without regard to case, and MUST refuse a
 configuration that states one key in two spellings at any depth.
 
 A chart that runs several agents MUST key them by agent name, never list them. A
@@ -933,10 +934,151 @@ remains available to an operator.
 - **THEN** its pod environment carries only the configuration directory and the signing
   credential, and every other value is in a mounted configuration file
 
+### Requirement: The provisioning chart mounts operator files it gives no meaning
+The provisioning chart MUST render each entry of `configFiles` verbatim into its ConfigMap and mount it read-only in the application container at `/app/config/<name>`, beside the rendered profile. The chart MUST NOT derive a setting from an operator file: a setting under `config` names it by that path. The values schema MUST refuse a name that is not a single file name, a name the chart mounts itself, and `config.yml` or `config-*.yml` and their `.yaml` forms, which the service would load as configuration profiles. A file's content and name MUST reach the container exactly as given.
+
+#### Scenario: An operator supplies a fresh site's seed
+- **WHEN** a release sets `configFiles` with a `pool-seed.yaml` entry and `config.pool_seed_path` to `/app/config/pool-seed.yaml`
+- **THEN** the file renders and mounts at that path, and the rendered profile carries the setting as stated
+
+#### Scenario: An operator file takes a reserved name
+- **WHEN** a release names an operator file `pool-definitions.yaml`, `config.yml`, `config-production.yml`, `..`, or a path rather than a file name
+- **THEN** rendering fails naming the refused name
+
+### Requirement: A deployment does not wait on a service's dependencies
+
+A chart MUST NOT hold a service back with init containers that wait for or validate its
+external dependencies, such as a registry, a chain, or a site, and a service MUST NOT
+wait for one, or refuse to start because one is unreachable, in its own startup. The
+service MUST start while a dependency is unreachable, report the dependency as degraded
+in its status while its process health check answers, and recover without a restart when
+the dependency answers. A chart whose service starts slowly MUST give it a startup probe,
+so that a slow start is not judged by its liveness probe.
+
+#### Scenario: The VM storefront starts before its registry and chain
+
+- **WHEN** the VM storefront starts while its registry, its site, and its chain are
+  unreachable
+- **THEN** it starts and answers its health check; its status reports the registry check
+  unreachable, the storefront degraded, and Alkahest unready with a reachability blocker;
+  its publication cycle holds the listings of the site whose projection it has not loaded
+  and closes none of them
+- **AND** Alkahest becomes ready once the chain answers, and publication reaches the
+  registry once it answers, both without a restart
+
+#### Scenario: A storefront starts before its site or service
+
+- **WHEN** the VM storefront starts while its provisioning service is unreachable, or the
+  API-credit storefront while its credits service is
+- **THEN** it starts and answers its health check, calls to that service fail retryably,
+  and they succeed once it answers, without a restart
+
+#### Scenario: A storefront chart renders
+
+- **WHEN** the VM or bare-metal storefront chart is rendered
+- **THEN** its Deployment carries no init container that waits on a dependency, and its
+  container carries a startup probe
+
+### Requirement: Helm test pods carry no workload selector labels
+
+A Helm test pod MUST NOT carry every selector label of any workload its release deploys,
+so that selecting a workload's pods by label never returns a test pod. A test pod MUST
+carry the release's instance label and `app.kubernetes.io/component: test`, and MUST NOT
+carry `app.kubernetes.io/name`.
+
+#### Scenario: A registry's pods are selected
+
+- **WHEN** an operator selects the registry Deployment's pods by its selector labels after
+  `helm test` has run
+- **THEN** only the registry's own pods are returned
+
+#### Scenario: Both topology releases are rendered
+
+- **WHEN** both local topology releases are rendered
+- **THEN** no Pod annotated `helm.sh/hook: test` carries all of any rendered Deployment's
+  `matchLabels` or any rendered Service's selector
+
+### Requirement: Evolution preserves retained accepted representations
+
+A change evolving retained signed or content-addressed state MUST preserve the
+original accepted representation and identity. Proof verification MUST use the
+owning protocol's canonicalization and framing over that representation before
+conversion to an application view. A migration MUST NOT replace accepted content
+with a current-model dump. Derived unsigned state MAY migrate separately.
+
+#### Scenario: A decoded view gains a defaulted field
+
+- **WHEN** an upgrade adds a defaulted field to the application view of retained
+  bare-metal lease-ready evidence
+- **THEN** original evidence bytes, digest, signature input, and supported v1
+  decoding remain unchanged
+
+#### Scenario: A derived field is renamed
+
+- **WHEN** a migration renames derived state beside retained accepted content
+- **THEN** the original accepted representation and identity are not rewritten
+
+### Requirement: Preservation respects explicit support and retention boundaries
+
+Representation preservation MUST NOT extend authorized retention, reverse deletion
+or tombstoning, or reenable explicitly unsupported wire versions. A reader-removal
+change MUST identify supported reference and read obligations and establish that
+none still needs the reader. Zero nonterminal records alone MUST NOT establish
+that retained terminal evidence or supported recovery is unused.
+
+#### Scenario: Contact retention deletes an accepted payload
+
+- **WHEN** the contact capability deletes payloads under its authorized policy
+- **THEN** existing tombstone and refusal behavior remain authoritative, and the
+  deleted payload is not presented as replacement content under its old proof
+
+#### Scenario: A previous-wire payment mandate is loaded
+
+- **WHEN** settlement data carries a mandate the settlement contract explicitly refuses
+- **THEN** it remains refused and unchanged rather than converted or reenabled
+
+#### Scenario: Terminal evidence still has supported readers
+
+- **WHEN** no nonterminal contract needs a decoder but retained terminal evidence
+  still has a supported read obligation
+- **THEN** a removal change cannot declare that decoder unused from the
+  nonterminal count alone
+
+### Requirement: The provisioning chart renders a host definitions document
+
+The provisioning chart MUST render a non-empty `definitions.hosts` value verbatim into its ConfigMap, mount it read-only at `/app/config/host-definitions.yaml`, and set `host_definitions_path` to that path in the rendered profile; an empty value MUST render no document, mount, or path. The values schema MUST refuse `host_definitions_path`, `inventory_path`, and `inventory_ini` under `config`, and `host-definitions.yaml` as a `configFiles` name. It MUST refuse `relay_definitions_path` under `config` as it refuses the pool and capacity paths, since the chart derives every definition document's path from its `definitions` value. The chart's values MUST NOT state `inventory_path`. A change to the document MUST change the ConfigMap checksum the deployment carries, so a release that edits it rolls the pod.
+
+#### Scenario: A release supplies host definitions
+
+- **WHEN** a release sets `definitions.hosts` to a host definitions document
+- **THEN** the document renders into the ConfigMap, mounts at `/app/config/host-definitions.yaml`, and the rendered profile sets `host_definitions_path` to that path
+
+#### Scenario: A release supplies no host definitions
+
+- **WHEN** `definitions.hosts` is empty
+- **THEN** no host document renders or mounts, and the rendered profile sets no `host_definitions_path`
+
+#### Scenario: A release states the path or a retired inventory setting
+
+- **WHEN** a release sets `config.host_definitions_path`, `config.inventory_path`, or `config.inventory_ini`
+- **THEN** rendering fails naming the refused key
+
+#### Scenario: A release states the relay definitions path
+
+- **WHEN** a release sets `config.relay_definitions_path`
+- **THEN** rendering fails naming the refused key
+
+#### Scenario: A release edits its host definitions
+
+- **WHEN** a release changes `definitions.hosts`
+- **THEN** the deployment's ConfigMap checksum changes, and the pod is replaced
+
 ## Evidence
 
 - Configurable registry endpoints and independently composed role stacks: core buyer registry configuration plus domain Compose and Helm manifests.
 - Service-owned persistence, provisioning migration init, and schema-drift rejection: registry Alembic tests, `provisioning/compute/service/tests/integration/test_database.py`, and `helm/charts/provisioning/templates/deployment.yaml`.
+- The provisioning migration reading no operational configuration, the same database migrated under two configurations to equal schema and rows: `provisioning/compute/service/tests/integration/test_migration_reads_no_configuration.py`; job-envelope host evidence: `provisioning/compute/service/tests/integration/test_job_envelope_migration.py`.
+- The provisioning chart's `configFiles` rendered, mounted, and named in the profile, exact content and names, and refused names: `helm/charts/provisioning/tests/test_render.py`.
 - Wheel-directory dependency resolution without parent-path UV sources: package `pyproject.toml` files and package Makefiles using `--find-links`.
 - Package architecture in the packaging check: `make check-architecture`, `scripts/check_architecture_*.py`, and `scripts/tests/test_check_architecture.py`.
 - Derived internal-package refresh for environments, images, and locks: `scripts/uv_project.py`, `scripts/tests/test_uv_project.py`, every `reinit` target, and every Dockerfile that copies `.dist`.

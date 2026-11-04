@@ -16,6 +16,11 @@
 # be used on a public network; see dev-env/identities/README.md, "The inference
 # lane". Paths are relative to the repository root.
 services:
+  # A pause between streamed chunks long enough that the scenario can tell a
+  # relayed stream from a buffered one.
+  model-stub:
+    environment:
+      - MODEL_STUB_CHUNK_DELAY_SECONDS=0.3
   compute-registry:
     # The registry image's default filter specification is the compute one.
     image: arkhai:registry

@@ -13,7 +13,6 @@ directly (same as production).
 from __future__ import annotations
 
 import sqlite3
-from types import SimpleNamespace
 from unittest.mock import patch
 from typing import AsyncIterator
 
@@ -26,7 +25,6 @@ from core_storefront.models.system_models import STAGE_EVENT_PAGE_CAP
 from core_storefront.service_peers import ServicePeerTrust
 
 import market_storefront.container as _container
-from market_storefront.controllers import admin_controller
 from market_storefront.middleware.admin_identity import (
     administrator_identity_middleware,
     initialize_administrator_identities,
@@ -230,10 +228,10 @@ class TestHealthEndpoint:
         """A service peer reads status to confirm its own signing path works.
 
         This is the provisioning adapter's `storefront_auth` health check. It
-        is the only side-effect-free service operation available — every other
-        one is a fulfillment callback that mutates state — so if this route
-        stops accepting the `service` role, provisioning loses its only way to
-        verify the credential it uses for those callbacks.
+        is the only side-effect-free service operation available — the other
+        is the capacity-released callback, which mutates state — so if this
+        route stops accepting the `service` role, provisioning loses its only
+        way to verify the credential it uses for that callback.
         """
         result = await service_client.get_system_status()
         assert result.status in ("ok", "degraded")
@@ -484,6 +482,51 @@ async def _seed_dynamic_listing_pool_rows(
         )
 
 
+async def _seed_gpu_less_listing(db: SQLiteClient, *, site_id: str = "default") -> None:
+    """One open listing of a shape stating no GPUs, bound to its resource.
+
+    Its escrow and token addresses are deterministic development values that
+    must never be used on a public network.
+    """
+    await db.upsert_listing(
+        listing_id="listing-cpu",
+        status="open",
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        listing_resource={
+            "resource_id": "pool-cpu-1",
+            "vcpu_count": 8,
+            "ram_gb": 32,
+            "region": "California, US",
+            "sla": 99.0,
+            "offering_mode": "vm",
+        },
+        accepted_escrows=[{
+            "chain_name": "anvil",
+            "escrow_address": "0x" + "11" * 20,
+            "literal_fields": {"token": "0x" + "22" * 20},
+            "rates": [{"field": "amount", "per": "hour", "value": "100"}],
+        }],
+        demands=[],
+        fulfillment_resource=None,
+        max_duration_seconds=3600,
+        storefront_url="http://seller",
+        seller_principal=_TEST_SELLER_PRINCIPAL,
+    )
+    await db.record_listing_binding(
+        binding=prepare_vm_listing_binding(
+            listing_id="listing-cpu",
+            candidate={
+                "capacity_backing": "backed",
+                "site_id": site_id,
+                "pool_id": "pool-cpu-1",
+                "resource_id": "pool-cpu-1",
+                "listing_shape": {"cpu": {"count": 8}, "memory": {"gib": 32}},
+            },
+        )
+    )
+
+
 def _fake_pool_site():
     fake = FakeSite(deliverable_modes={"vm"})
     fake.add_resource(
@@ -512,12 +555,13 @@ async def _ledger_hold(capacity, *, gpu_count: int = 2) -> str:
 
 
 class TestFulfillmentEvents:
-    """Deal-scoped event endpoints over the site-authority ledger.
+    """The admin reserve and the capacity-released callback over the
+    site-authority ledger.
 
-    The reservation rows live in the ledger; these endpoints stage deal
-    context, reconcile derived listings against the aggregated
-    availability, and (for capacity-released / failed) return the units
-    through the capacity client.
+    The reservation rows live in the ledger; a reserve closes the derived
+    listings its hold makes stale, and the capacity-released callback returns
+    the units through the capacity client and reopens what they make
+    available again.
     """
 
     async def test_admin_reserve_capacity_closes_oversized_listings(self, client):
@@ -554,6 +598,34 @@ class TestFulfillmentEvents:
             3: "closed",
             4: "closed",
         }
+
+    async def test_admin_reserve_capacity_of_a_listing_without_gpus_reports_no_gpu_count(
+        self, client
+    ):
+        c, db = client
+        await _seed_gpu_less_listing(db)
+        fake = FakeSite(deliverable_modes={"vm"})
+        fake.add_resource(
+            "pool-cpu-1", 0,
+            attributes={"region": "California, US"},
+            capacity={"vcpu_count": 64, "ram_gb": 512},
+        )
+
+        async with site_capacity(fake, project_pool_modes=True):
+            response = await c.admin_reserve_capacity(
+                required_attributes={
+                    "resource_id": "pool-cpu-1",
+                    "dimensions": {"vcpu_count": 8, "ram_gb": 32},
+                },
+                listing_id="listing-cpu",
+                escrow_uid="manual-escrow-cpu",
+            )
+
+        assert response.capacity_reservation_id
+        assert response.pool_id == "pool-cpu-1"
+        assert response.gpu_count is None
+        (reservation,) = fake.reservations.values()
+        assert reservation["dimensions"] == {"vcpu_count": 8, "ram_gb": 32}
 
     async def test_admin_reserve_capacity_for_a_mapped_listing_pins_to_its_site(
         self, client,
@@ -797,49 +869,21 @@ class TestFulfillmentEvents:
 
         assert "502" in str(exc_info.value)
 
-    async def test_usage_started_closes_oversized_listings(
-        self, db, service_client
-    ):
-        await _seed_dynamic_listing_pool_rows(db)
-        fake = _fake_pool_site()
-
-        async with site_capacity(fake, project_pool_modes=True) as capacity:
-            capacity_reservation_id = await _ledger_hold(capacity, gpu_count=2)
-            response = await service_client.notify_usage_started(
-                capacity_reservation_id,
-                site_id="default",
-                escrow_uid="escrow-2x",
-                provider_id="provider-a",
-                provider_lease_id="lease-2x",
-                resource_id="provider-resource-2x",
-                host_id="kvm1",
-                lease_end_utc="2026-01-01T00:00:00Z",
-            )
-
-        assert response["capacity_reservation_id"] == capacity_reservation_id
-        assert response["state"] == "leased"
-        assert sorted(response["closed_listing_ids"]) == ["listing-3x", "listing-4x"]
-        # Progress events carry no capacity effect: a held reservation is
-        # held in every progress state, and the ledger row is the
-        # provisioning service's to advance.
-        assert fake.reservations[capacity_reservation_id]["state"] == "reserved"
-
     async def test_capacity_released_releases_and_reopens(
-        self, db, service_client
+        self, client, service_client
     ):
+        c, db = client
         await _seed_dynamic_listing_pool_rows(db)
         fake = _fake_pool_site()
 
-        async with site_capacity(fake, project_pool_modes=True) as capacity:
-            capacity_reservation_id = await _ledger_hold(capacity, gpu_count=2)
-            closed = await service_client.notify_usage_started(
-                capacity_reservation_id,
-                site_id="default",
+        async with site_capacity(fake, project_pool_modes=True):
+            reserved = await c.admin_reserve_capacity(
+                required_attributes={"resource_id": "pool-h200-1", "gpu_count": 2},
+                listing_id="listing-2x",
                 escrow_uid="escrow-2x",
             )
-            assert sorted(closed["closed_listing_ids"]) == [
-                "listing-3x", "listing-4x",
-            ]
+            capacity_reservation_id = reserved.capacity_reservation_id
+            assert sorted(reserved.closed_listing_ids) == ["listing-3x", "listing-4x"]
 
             response = await service_client.notify_capacity_released(
                 capacity_reservation_id,
@@ -863,118 +907,6 @@ class TestFulfillmentEvents:
         }
         assert fake.reservations[capacity_reservation_id]["state"] == "released"
         assert fake._available("pool-h200-1") == 4
-
-    async def test_manual_compute_listings_reopen_after_release(
-        self, db, service_client
-    ):
-        await _seed_dynamic_listing_pool_rows(db)
-        fake = _fake_pool_site()
-
-        async with site_capacity(fake, project_pool_modes=True) as capacity:
-            capacity_reservation_id = await _ledger_hold(capacity, gpu_count=2)
-            closed = await service_client.notify_usage_started(
-                capacity_reservation_id,
-                site_id="default",
-                escrow_uid="escrow-2x",
-            )
-            assert sorted(closed["closed_listing_ids"]) == [
-                "listing-3x", "listing-4x",
-            ]
-
-            response = await service_client.notify_capacity_released(
-                capacity_reservation_id,
-                site_id="default",
-            )
-
-        assert sorted(response["reopened_listing_ids"]) == [
-            "listing-3x", "listing-4x",
-        ]
-        statuses = {
-            gpu_count: (await db.load_listing(listing_id=f"listing-{gpu_count}x"))[
-                "status"
-            ]
-            for gpu_count in range(1, 5)
-        }
-        assert statuses == {
-            1: "open",
-            2: "open",
-            3: "open",
-            4: "open",
-        }
-
-    async def test_fulfillment_failed_releases_with_failure_metadata(
-        self, db, service_client
-    ):
-        await _seed_dynamic_listing_pool_rows(db)
-        fake = _fake_pool_site()
-
-        async with site_capacity(fake, project_pool_modes=True) as capacity:
-            capacity_reservation_id = await _ledger_hold(capacity, gpu_count=2)
-            response = await service_client.notify_fulfillment_failed(
-                capacity_reservation_id,
-                site_id="default",
-                provider_id="provider-a",
-                provider_job_id="job-create-1",
-                resource_id="provider-resource-2x",
-                reason="provisioning_error",
-                message="host rejected request",
-                logs_ref="s3://logs/job-create-1",
-            )
-
-        assert response["capacity_reservation_id"] == capacity_reservation_id
-        assert response["state"] == "released"
-        reservation = fake.reservations[capacity_reservation_id]
-        assert reservation["state"] == "released"
-        assert reservation["failure_reason"] == "provisioning_error"
-        assert reservation["failure_message"] == "host rejected request"
-        assert fake._available("pool-h200-1") == 4
-
-    async def test_fulfillment_failed_finds_the_escrow_its_commit_recorded(
-        self, db, service_client, monkeypatch
-    ):
-        """A hold placed before the deal had an escrow learns it at commit, on
-        the reservation itself; a failure callback naming none still reaches the
-        failure policy with that escrow."""
-        received = []
-
-        async def failure_policy(_db, context, *, capacity, site_projections):
-            received.append(context)
-            return SimpleNamespace(
-                capacity_reservation_id=context.capacity_reservation_id,
-                state="released",
-                resource_id=None,
-                gpu_count=None,
-                resource_state=None,
-                reopened_listing_ids=[],
-            )
-
-        monkeypatch.setattr(
-            admin_controller, "apply_fulfillment_failure_policy", failure_policy
-        )
-        await _seed_dynamic_listing_pool_rows(db)
-        fake = _fake_pool_site()
-
-        async with site_capacity(fake, project_pool_modes=True) as capacity:
-            reserved = await capacity.reserve(
-                claim={"offering_mode": "vm", "resource_id": "pool-h200-1", "gpu_count": 2},
-                deal_ref={"listing_id": "listing-2x"},
-            )
-            capacity_reservation_id = str(reserved["capacity_reservation_id"])
-            await capacity.commit(
-                resource_id=None,
-                capacity_reservation_id=capacity_reservation_id,
-                lease_end_utc="2099-01-01 01:00",
-                deal_ref={"escrow_uid": "escrow-committed"},
-                site_id="default",
-            )
-            await service_client.notify_fulfillment_failed(
-                capacity_reservation_id,
-                site_id="default",
-                reason="provisioning_error",
-                message="host rejected request",
-            )
-
-        assert [context.escrow_uid for context in received] == ["escrow-committed"]
 
     async def test_release_of_unknown_reservation_is_idempotent(
         self, service_client

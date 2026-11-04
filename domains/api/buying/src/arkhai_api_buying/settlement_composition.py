@@ -11,7 +11,7 @@ from core_buyer.buyer_config import ResolvedBuyerIdentity
 from core_buyer.settlement import BuyerSettlementPolicy
 from market_config.config_loader import load_user_config
 from market_core import SettlementStageTable
-from market_core.schemas import Agreement
+from market_core.schemas import Agreement, SettlementSelection
 from market_settlement_runtime import (
     MechanismReadiness,
     SettlementConfig,
@@ -32,9 +32,6 @@ class _NoEscrow:
 
     def decode_proposal(self, value: Any) -> Any:
         raise ValueError("no installed settlement stage decodes an escrow proposal")
-
-    def decode_terms(self, value: Any) -> Any:
-        raise ValueError("no installed settlement stage decodes escrow terms")
 
 
 class BuyerSettlementComposition:
@@ -65,10 +62,13 @@ class BuyerSettlementComposition:
                         f"two buyer stages contribute the {option.command} option {option.name!r}"
                     )
                 command[option.name] = option
-        codecs = [stage.escrow_codec for stage in stages.values() if stage.escrow_codec is not None]
-        if len(codecs) > 1:
+        escrow_stages = [stage for stage in stages.values() if stage.escrow_codec is not None]
+        if len(escrow_stages) > 1:
             raise ValueError("at most one buyer stage may negotiate an escrow proposal")
-        self.escrow_codec: EscrowCodec = codecs[0] if codecs else _NoEscrow()
+        self._escrow_stage: BuyerStage | None = escrow_stages[0] if escrow_stages else None
+        self.escrow_codec: EscrowCodec = (
+            self._escrow_stage.escrow_codec if self._escrow_stage is not None else _NoEscrow()
+        )
 
     def stage(self, agreement: Any) -> BuyerStage:
         accepted = Agreement.model_validate(agreement)
@@ -126,6 +126,18 @@ class BuyerSettlementComposition:
     def validate_acceptance(self, outcome: Any) -> None:
         self.stage(outcome.agreement).validate_acceptance(outcome)
 
+    def accepted_listing_record(self, match: Mapping[str, Any], proposal: Any) -> dict[str, Any]:
+        """What the entry the buyer's proposal selects records about its listing.
+
+        A selection names its mechanism, and any other proposal is the escrow
+        stage's; a proposal of neither kind records nothing.
+        """
+        if isinstance(proposal, SettlementSelection):
+            stage = self.stages[proposal.mechanism] if proposal.mechanism in self.stages else None
+        else:
+            stage = self._escrow_stage if proposal is not None else None
+        return stage.listing_record(match) if stage is not None else {}
+
     def registry(self) -> SettlementConfigurationRegistry:
         return SettlementConfigurationRegistry(
             tuple(stage.registration() for stage in self.stages.values())
@@ -164,6 +176,8 @@ class BuyerSettlementComposition:
                 "legacy [settlement] configuration is not supported; run "
                 "`market config migrate --scope settlement --write --backup`"
             )
+        for stage in self.stages.values():
+            stage.check_configuration(document)
         raw = document.get("Settlement", {})
         if not isinstance(raw, Mapping):
             raise ValueError("[Settlement] must be a table")

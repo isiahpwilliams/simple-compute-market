@@ -6,7 +6,7 @@ buyer/settlement flow:
 1. Declare one 4x GPU resource at the site.
 2. Create one live listing for each 1x, 2x, 3x, and 4x slice.
 3. Admin-reserve 2 GPUs and verify 3x/4x listings close.
-4. Mark usage started, then capacity released, and verify 3x/4x reopen.
+4. Release the capacity and verify 3x/4x reopen.
 """
 
 from __future__ import annotations
@@ -21,16 +21,24 @@ from e2e_harness.settings import settings
 from tests.e2e.roles.scenarios.vms.host_registry import (
     E2E_DYNAMIC_HOST,
     E2E_FUNGIBLE_HOSTS,
-    E2E_HOST_GPU_COUNT,
     provision_e2e_executor,
     refresh_storefront_projections,
 )
-from tests.e2e.roles.helpers.compute_deal import pause_storefront
+from tests.e2e.roles.helpers.compute_deal import assert_storefront_loops_held
 from tests.e2e.roles.scenarios.vms.conftest import capacity_site_id, capacity_source_for, require_state
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.e2e_compute_dynamic_listings
+pytestmark = [
+    # Listed first, so the hold is taken before, and released after, every
+    # other fixture of the module; the lane's cleanup follows it, so it runs
+    # while the hold stands.
+    pytest.mark.usefixtures(
+        "storefront_loops_held",
+        "ensure_storefront_resumed", "reap_buyer_settle_subprocess", "release_reserved_resources",
+    ),
+    pytest.mark.e2e_compute_dynamic_listings,
+]
 
 
 #: This scenario's own pool. One pool per scenario: a pool's `listing_mode`
@@ -49,11 +57,11 @@ ACCEPTED_ESCROWS = [{
 
 @dataclass
 class DynamicListingState:
+    storefront_held: bool = False
     supply_declared: bool = False
     listing_ids_by_gpu_count: dict[int, str] = field(default_factory=dict)
     capacity_reservation_id: str | None = None
     reserve_closed_listing_ids: list[str] = field(default_factory=list)
-    usage_started: bool = False
 
 
 @dataclass
@@ -134,23 +142,18 @@ def _listing_statuses(storefront_admin_client, ids_by_gpu_count: dict[int, str])
 
 
 class TestComputeDynamicListings:
-    def test_00_pauses_the_storefront(
+    def test_00_the_storefront_loops_are_held(
         self, storefront_admin_client, dynamic_state: DynamicListingState
     ):
-        """Hold the storefront's timer loops idle for the rest of this scenario.
+        """The storefront's timer loops are held for this scenario.
 
-        Named as a stage rather than hidden in a fixture because every later
-        assertion depends on it: with the loops running, a listing status read
-        after a reserve races the capacity poller's next cycle. Advances are
-        explicit from here on.
-
-        Pausing this early is safe *here* and not in general: a paused storefront
-        also refuses new negotiations, so a scenario that has to agree a deal
-        cannot hold the pause across that step. This one reserves capacity through
-        the admin API and never negotiates, so it can pause at the start; the deal
-        scenarios pause after agreement instead.
+        The module holds them through ``storefront_loops_held``; this stage
+        asserts the hold because every later assertion depends on it: with the
+        loops running, a listing status read after a reserve races the capacity
+        poller's next cycle. Advances are explicit from here on.
         """
-        dynamic_state.storefront_paused = pause_storefront(storefront_admin_client)
+        assert_storefront_loops_held(storefront_admin_client)
+        dynamic_state.storefront_held = True
 
     def test_00a_registers_executor_host_and_syncs_projection(
         self, provisioning_client, storefront_admin_client,
@@ -162,18 +165,16 @@ class TestComputeDynamicListings:
         host registered the projection is empty and `test_02`'s reserve is
         refused with "No available compute VM matched required attributes".
 
-        Registered through the admin API rather than a mounted inventory file:
-        `inventory_path` is docker-compose-specific while the canonical Helm
-        deployment supplies inventory as an inline secret, and a mount is shared
-        state no scenario declares. The projection pull that follows is asserted
+        Registered through the admin API rather than a mounted host definitions
+        document, which is deployment configuration every scenario on the stack
+        would share and no scenario declares. The projection pull that follows is asserted
         rather than slept out.
         """
-        require_state(dynamic_state, "storefront_paused")
+        require_state(dynamic_state, "storefront_held")
 
         # `reserve` matches CapacityBucket rows, which only a capacity declaration
-        # creates — the host-derived projection is a different store. The
-        # declaration's attributes mirror the listing so a claim built from it
-        # matches by equality.
+        # creates: a host record declares nothing. The declaration's attributes
+        # mirror the listing so a claim built from it matches by equality.
         host = provision_e2e_executor(
             provisioning_client,
             site_capacity_admin_client,
@@ -189,10 +190,7 @@ class TestComputeDynamicListings:
                 "sla": "99.0",
             },
         )
-        assert (host.gpu_count or 0) >= E2E_HOST_GPU_COUNT, (
-            f"executor host {E2E_DYNAMIC_HOST} reports {host.gpu_count} GPU(s); "
-            f"this scenario reserves up to {E2E_HOST_GPU_COUNT}"
-        )
+        assert host.host_id == E2E_DYNAMIC_HOST
 
         sites = refresh_storefront_projections(storefront_admin_client)
         _declare_pool_sla(storefront_admin_client, DYNAMIC_POOL_ID)
@@ -231,9 +229,9 @@ class TestComputeDynamicListings:
 
         dynamic_state.executor_host_registered = True
         log.info(
-            "[dynamic] executor host %s registered (gpus=%s); projections "
+            "[dynamic] executor host %s registered; projections "
             "confirmed for %s; deprecated cardinality key reported for %s",
-            E2E_DYNAMIC_HOST, host.gpu_count, sorted(sites), DYNAMIC_POOL_ID,
+            E2E_DYNAMIC_HOST, sorted(sites), DYNAMIC_POOL_ID,
         )
 
     def test_01_creates_slice_listings(
@@ -302,34 +300,10 @@ class TestComputeDynamicListings:
         )
         log.info("[dynamic] reserved reservation %s; statuses=%s", result.capacity_reservation_id, statuses)
 
-    def test_03_usage_started_keeps_oversized_listings_closed(
-        self, storefront_admin_client, storefront_service_client, dynamic_state: DynamicListingState
-    ):
-        require_state(dynamic_state, "capacity_reservation_id")
-
-        result = storefront_service_client.notify_usage_started(
-            dynamic_state.capacity_reservation_id,
-            site_id=capacity_site_id(),
-            escrow_uid="e2e-dynamic-reserve-2x",
-        )
-
-        assert result["state"] == "leased"
-        statuses = _listing_statuses(
-            storefront_admin_client,
-            dynamic_state.listing_ids_by_gpu_count,
-        )
-        assert statuses == {
-            1: "open",
-            2: "open",
-            3: "closed",
-            4: "closed",
-        }
-        dynamic_state.usage_started = True
-
     def test_04_capacity_release_reopens_oversized_listings(
         self, storefront_admin_client, storefront_service_client, dynamic_state: DynamicListingState
     ):
-        require_state(dynamic_state, "capacity_reservation_id", "usage_started")
+        require_state(dynamic_state, "capacity_reservation_id")
 
         result = storefront_service_client.notify_capacity_released(
             dynamic_state.capacity_reservation_id,
@@ -370,10 +344,9 @@ class TestFungibleComputeDynamicListings:
         declarations into one entry carrying `resource_count`, which is the source
         the storefront publishes a fungible listing from.
 
-        Registered through the admin APIs rather than a mounted inventory file:
-        `inventory_path` is docker-compose-specific while the canonical Helm
-        deployment supplies inventory as an inline secret, and a mount is shared
-        state no scenario declares. The projection pull that follows is asserted
+        Registered through the admin APIs rather than a mounted host definitions
+        document, which is deployment configuration every scenario on the stack
+        would share and no scenario declares. The projection pull that follows is asserted
         rather than slept out.
         """
         members = ("compute-e2e-fungible-a", "compute-e2e-fungible-b")
@@ -395,20 +368,15 @@ class TestFungibleComputeDynamicListings:
                 },
             ))
 
-        for host in hosts:
-            assert (host.gpu_count or 0) >= E2E_HOST_GPU_COUNT, (
-                f"executor host {host.host_id} reports {host.gpu_count} GPU(s); "
-                f"this scenario reserves up to {E2E_HOST_GPU_COUNT} from one member"
-            )
+        assert [host.host_id for host in hosts] == list(E2E_FUNGIBLE_HOSTS)
 
         sites = refresh_storefront_projections(storefront_admin_client)
         _declare_pool_sla(storefront_admin_client, FUNGIBLE_POOL_ID)
 
         fungible_state.supply_declared = True
         log.info(
-            "[fungible] executor hosts %s registered (gpus=%s each); "
-            "projections confirmed for %s",
-            list(E2E_FUNGIBLE_HOSTS), E2E_HOST_GPU_COUNT, sorted(sites),
+            "[fungible] executor hosts %s registered; projections confirmed for %s",
+            list(E2E_FUNGIBLE_HOSTS), sorted(sites),
         )
 
     def test_01_creates_one_pool_listing_set(

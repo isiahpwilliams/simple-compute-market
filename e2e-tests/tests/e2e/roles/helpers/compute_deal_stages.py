@@ -1,26 +1,39 @@
 """Stages of the compute family's canonical complete deal, defined once.
 
-The canonical deal settles through Alkahest on the dev chain and delivers through
-the provisioning service's mock profile. Each stage here is one a compute domain
-runs identically; a domain's scenario module declares its stages in order by
-subclassing these with an empty body::
+The canonical deal settles through Alkahest on the dev chain. A mock lane delivers
+through the provisioning service's mock profile; a real lane delivers through a
+real host. Each stage here is one a compute lane runs identically; a lane's
+scenario module declares its stages in order by subclassing these with an empty
+body::
 
     class TestStage05b_NegotiationStartsAndVisible(Stage05b_NegotiationStartsAndVisible):
         pass
 
-and inserts its own stages between them. A domain never replaces a shared stage's
-body, so a change here runs in every lane that uses it; a stage whose body would
-differ between domains is not shared and stays each domain's own. The classes are
-not named ``Test*``, so pytest collects them only through those subclasses.
+and inserts its own stages between them. A lane never replaces a stage's body, so
+a change here runs in every lane that uses it; a stage whose body would differ
+between lanes is not defined here and stays the lane's own. The classes are not
+named ``Test*``, so pytest collects them only through those subclasses.
 
-What differs between domains reaches a stage two ways. Fixtures supply who is
+Two kinds of stage are defined here. A shared stage runs in every compute lane
+and never depends on the mock profile. A mock-lane stage (``MockLaneStage``)
+holds a provisioning job at a mock rule's gate, releases it, evaluates the rule,
+or confirms the mock profile; only lanes that deliver through the mock profile
+declare one, between the shared stages it surrounds. A stage that would both
+advance the deal and touch a gate is split at the gate, so its gate-free part
+stays shared and a real lane runs it unchanged.
+
+What differs between lanes reaches a stage two ways. Fixtures supply who is
 calling, under one set of names every compute domain's conftest provides:
 ``storefront_client`` (buyer), ``storefront_admin_client``, ``registry_client``
-(buyer),
-``provisioning_client``, ``provisioning_test_client``, ``buyer_config``,
-``seller_wallet``, ``buyer_principal``, ``deal_state``, and ``deal_driver``. The
+(buyer), ``provisioning_client``, ``buyer_config``, ``seller_wallet``,
+``buyer_principal``, ``deal_state``, and ``deal_driver``; a mock lane also
+provides ``provisioning_test_client``, which only mock-lane stages request. The
 ``deal_driver`` fixture supplies what is the domain's own, through
-``ComputeDealDriver``.
+``ComputeDealDriver``, and a mock lane's driver also supplies its gates, through
+``MockGates``. A shared stage never uses ``MockGates``: a gate a real driver
+answered with a no-op would let the shared stage report a hold that never
+happened, and an assertion that holds under one driver would be vacuous under
+another.
 
 Every stage previews a transition before it advances it, and names each earlier
 result it depends on with ``require_state``, so a failed stage skips its
@@ -35,9 +48,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Protocol
 
+from compute_provisioning_contracts import MockJobEvaluation
+
 from tests.e2e.roles.helpers.compute_deal import (
     advance_fulfillment_to,
-    pause_storefront,
+    assert_lease_watchdog_held,
+    assert_storefront_loops_held,
+    latest_stage_event_id,
     wait_for_stage_event,
 )
 from tests.e2e.roles.helpers.domain_deal import DomainDealState, require_state
@@ -88,13 +105,43 @@ BUYER_MAX_PRICE = 12 * 10**18
 #: lease must be past its end for the watchdog to begin releasing, but it must
 #: NOT be past `lease_watchdog_grace_period_seconds` (300s), because the release
 #: path marks `release_failed` the moment grace elapses with teardown
-#: unfinished — and stages 11a/11b deliberately hold teardown at a mock gate.
+#: unfinished — and a mock lane deliberately holds teardown at its gate from
+#: 11a until 11a2 releases it.
 #: A back-date past grace would have the first cycle both dispatch the removal
 #: and time it out.
 #:
-#: One minute expires the lease and leaves roughly four minutes for the gated
-#: stages, which is ample for three stages that make no network waits.
+#: One minute expires the lease and leaves roughly four minutes for the stages
+#: from 10b to 11b, ample for a mock lane, whose stages make no network waits.
 E2E_LEASE_EXPIRY_BACKDATE = timedelta(minutes=1)
+
+
+def alkahest_opening(listing: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A listing's one Alkahest option, and the escrow an opening for it names.
+
+    The escrow is the contract the option's accepted escrow is on, its literal
+    fields, and the release condition the listing advertises on that chain, as
+    a buyer deriving its proposal from the option names them: a storefront
+    refuses an escrow naming no contract, and its shape guard one selecting no
+    advertised condition.
+    """
+    (option,) = [
+        dict(entry)
+        for entry in listing.settlement_options
+        if dict(entry)["mechanism"] == "alkahest.v1"
+    ]
+    escrow = option["params"]["accepted_escrow"]
+    chain = escrow["chain_name"]
+    condition = next(
+        dict(demand)
+        for demand in listing.demands
+        if dict(demand).get("chain_name") in (None, chain)
+    )
+    return option, {
+        "chain_name": chain,
+        "escrow_address": escrow["escrow_address"],
+        "literal_fields": dict(escrow.get("literal_fields") or {}),
+        "demand": condition,
+    }
 
 
 def _expired_lease_end() -> str:
@@ -123,13 +170,14 @@ class ComputeDealState(DomainDealState):
     `seller_listing_id` and `listing_published` by its listing stages, and
     `_listing_reconciled` by the stage that steps its listing's reconciliation
     after the deal holds the capacity. `_supply_seeded` is produced here and
-    required by each domain's first listing stage.
+    required by the lane's stage after it: a mock lane's first listing stage,
+    or a real lane's check of the host it registered.
     """
 
     # Phase 0 — readiness. Each check gates the stages that depend on it.
     #: The storefront's timer loops are held, so every later effect is one a
     #: stage asked for. Required before the first write.
-    _lifecycle_paused: bool = False
+    _lifecycle_held: bool = False
     _storefront_healthy: bool = False
     _registry_reachable: bool = False
     _provisioning_healthy: bool = False
@@ -138,7 +186,10 @@ class ComputeDealState(DomainDealState):
     #: later failure cannot be explained away as version skew.
     _contract_pins_agree: bool = False
     _negotiation_strategy_viable: bool = False
-    _provisioning_mock_mode: bool = False
+    #: The provisioning service executes jobs the way this lane delivers, as the
+    #: lane's own check confirmed it (00e in a mock lane). Required before the
+    #: first write over the provisioning wire and before the escrow.
+    _provisioning_execution_confirmed: bool = False
     #: The deal's supply is declared at the site and the storefront holds its
     #: projection.
     _supply_seeded: bool = False
@@ -157,13 +208,21 @@ class ComputeDealState(DomainDealState):
     agreed_amount: Optional[int] = None
     # Settlement and delivery.
     real_escrow_uid: Optional[str] = None
+    #: A mock lane's create rule is armed, so its create job will be held.
     provisioning_gate_armed: bool = False
     _evaluate_settle_host_id: Optional[str] = None
     _evaluate_settle_passed: bool = False
-    _provision_job_evaluated: bool = False
+    #: The lane's last check before settlement passed, so 08b may submit it.
+    #: Written by the lane's stage immediately before 08b (08c, the mock rule's
+    #: evaluation, in a mock lane).
+    _settle_preflight_passed: bool = False
     #: Durable fulfillment identity, from the settle-status response at 08b;
     #: the buyer-facing path surfaces no raw executor job id.
     fulfillment_id: Optional[str] = None
+    #: The create job reached its result, as the lane's stage before 09a
+    #: observed it (08b2's release and drain in a mock lane). Required by 09a's
+    #: advance.
+    _create_job_completed: bool = False
     provisioning_result_injected: bool = False
     #: The domain stepped its listing's reconciliation after the deal took the
     #: capacity, so 09b's closed listing is an effect the scenario asked for.
@@ -182,7 +241,12 @@ class ComputeDealState(DomainDealState):
     #: at 09c from the driver, never from a buyer-facing response: physical
     #: identity is opaque across the ordinary reservation boundary.
     reserved_resource_id: Optional[str] = None
+    #: A mock lane's teardown rule is armed, so provider teardown will be held.
+    _teardown_gate_armed: bool = False
     _termination_requested: bool = False
+    #: Provider teardown reached its result, as the lane's stage before 11b
+    #: observed it (11a2's release and drain in a mock lane). Required by 11b.
+    _teardown_job_completed: bool = False
 
 
 class LeaseView(Protocol):
@@ -205,19 +269,26 @@ class LeaseView(Protocol):
 
 
 class ComputeDealDriver(Protocol):
-    """What a compute domain supplies to the shared stages.
+    """What a compute lane supplies to the shared stages.
 
     A driver holds its domain's own clients and constants; a stage passes it
     only the deal's identities. Negotiation needs nothing from it: a domain
     that negotiates differently resolves that in its storefront composition.
+
+    Nothing here touches the provisioning mock profile, so a real lane's driver
+    implements this alone. The mock gates are ``MockGates``, which only
+    mock-lane stages use: a shared stage calling a gate would need a real
+    driver to answer it, and a gate answered with a no-op would make the
+    stage's assertion hold under one driver and mean nothing under another.
     """
 
-    #: The mock rule that holds the create job before it reports (07, 08c, 09a).
-    create_rule_id: str
-    #: The mock rule that holds provider teardown (10a, 11b).
-    teardown_rule_id: str
     #: The resource the deal holds, as the storefront's capacity reads name it.
     reserved_resource_id: str
+
+    @property
+    def listing_status_after_first_fulfillment(self) -> str:
+        """Listing status implied by this lane's remaining sellable capacity."""
+        ...
 
     def seed_supply(self) -> None:
         """Declare the deal's supply at the site and load the storefront's projection."""
@@ -225,25 +296,24 @@ class ComputeDealDriver(Protocol):
     def provision_terms(self) -> dict[str, Any]:
         """The provision terms the buyer negotiates."""
 
-    def arm_create_gate(self) -> None:
-        """Arm `create_rule_id` so the create job pauses before its result."""
-
-    def release_create_gate(self) -> None:
-        """Release the create job `arm_create_gate` held."""
-
-    def evaluate_create_job(self, host_id: str) -> dict[str, Any]:
-        """The provisioning job evaluation: `params_valid`, `host_exists`,
-        `rule_matched`, and `would_pause`."""
-
     def evaluate_settle_arguments(self) -> dict[str, Any]:
         """The domain's arguments to the settlement preview."""
 
     def check_evaluate_settle(self, result: dict[str, Any]) -> str:
         """Assert the domain's preview expectations; return the host it placed."""
 
-    def settle_dispatched(self, settle_response: Any, deal_state: ComputeDealState) -> str:
+    def settle_dispatched(
+        self, settle_response: Any, deal_state: ComputeDealState, *, events_since: int
+    ) -> str:
         """Assert the domain's settle response and return the fulfillment it
-        dispatched, read where the domain reports it."""
+        dispatched, read where the domain reports it.
+
+        ``events_since`` is the id of the latest stage event naming the deal's
+        negotiation before settlement was submitted. A domain that learns of
+        its dispatch from an event waits for one naming the same negotiation
+        after it: the mark counts only that negotiation's events, so the
+        negotiation filter is what passes over another deal's.
+        """
 
     def assert_delivery(self, deal_state: ComputeDealState) -> None:
         """Assert the ready settlement's result and access, where the domain
@@ -259,12 +329,6 @@ class ComputeDealDriver(Protocol):
     def lease_view(self, deal_state: ComputeDealState) -> LeaseView:
         """The deal's lease, found by the deal reference its hold names."""
 
-    def arm_teardown_gate(self) -> None:
-        """Arm `teardown_rule_id` so provider teardown pauses before its result."""
-
-    def release_teardown_gate(self) -> None:
-        """Release the provider teardown `arm_teardown_gate` held."""
-
     def reserve_released_capacity(
         self, storefront_admin_client: Any, *, listing_id: str, escrow_uid: str
     ) -> Any:
@@ -276,29 +340,67 @@ class ComputeDealDriver(Protocol):
         would, so no hold outlives the scenario."""
 
 
+class MockGates(Protocol):
+    """The provisioning mock profile's gates, as a mock lane's driver supplies them.
+
+    Only a driver whose lane delivers through the mock profile implements this,
+    beside ``ComputeDealDriver``, and only ``MockLaneStage`` stages use it.
+    """
+
+    #: The mock rule that holds the create job before it reports.
+    create_rule_id: str
+    #: The mock rule that holds provider teardown.
+    teardown_rule_id: str
+
+    def arm_create_gate(self) -> None:
+        """Arm `create_rule_id` so the create job pauses before its result."""
+
+    def release_create_gate(self) -> None:
+        """Release the create job `arm_create_gate` held."""
+
+    def evaluate_create_job(self, host_id: str) -> MockJobEvaluation:
+        """The provisioning job evaluation of the domain's create job."""
+
+    def arm_teardown_gate(self) -> None:
+        """Arm `teardown_rule_id` so provider teardown pauses before its result."""
+
+    def release_teardown_gate(self) -> None:
+        """Release the provider teardown `arm_teardown_gate` held."""
+
+
+class MockLaneStage:
+    """A stage only lanes that deliver through the provisioning mock profile run.
+
+    It confirms the mock profile, or holds, releases, or evaluates a mock rule's
+    gate. A lane delivering through a real host declares none of these; it
+    inserts its own stages where it needs to observe the same transitions.
+    """
+
+
 # ===========================================================================
 # Phase 0 — readiness
 # ===========================================================================
 
-class Stage00_LifecyclePause:
-    def test_00_pauses_the_storefront_loops(
+class Stage00_LifecycleHeld:
+    def test_00_the_storefront_loops_are_held(
         self, storefront_admin_client, deal_state: ComputeDealState
     ):
-        """Hold the storefront's timer loops idle for the rest of this scenario.
+        """The storefront's timer loops are held for this scenario.
 
-        A named stage rather than a fixture because every later assertion depends
-        on it: with the loops running, a listing status read after a reserve races
-        the capacity poller's next cycle, and a defect that reorders two writes
-        shows up as an intermittent failure instead of a reproducible one.
+        The module holds them through its lane's storefront hold fixture; this
+        stage asserts the hold, through system status, because every later
+        assertion depends on it: with the loops running, a listing status read
+        after a reserve races the capacity poller's next cycle, and a defect that
+        reorders two writes shows up as an intermittent failure instead of a
+        reproducible one.
 
-        Trading is unaffected — this pauses the loops, not the storefront's
-        willingness to negotiate — so the deal stages below still work. Loops are
-        held, not stopped: nothing is torn down and no cycle is cut in half. Work
-        a loop would have done is requested explicitly from here on, through
+        Trading is unaffected — the hold stops the loops, not the storefront's
+        willingness to negotiate — so the deal stages below still work. Work a
+        loop would have done is requested explicitly, through
         `advance_storefront`.
         """
-        pause_storefront(storefront_admin_client)
-        deal_state._lifecycle_paused = True
+        assert_storefront_loops_held(storefront_admin_client)
+        deal_state._lifecycle_held = True
 
 
 class Stage00a_StorefrontHealth:
@@ -365,7 +467,8 @@ class Stage00c_ProvisioningHealth:
             f"Provisioning execution is not ready: checks.execution={execution!r}, "
             f"components not ready={not_ready!r}, "
             f"components={[c.name for c in status.components]!r}\n"
-            "Ensure ACTIVE_PROFILES=mock is set on the provisioning container.\n"
+            "A mock lane's provisioning container needs ACTIVE_PROFILES to "
+            "include mock; a real lane's needs its executors' tooling.\n"
             f"Full status: {status!r}"
         )
         deal_state._provisioning_healthy = True
@@ -470,14 +573,15 @@ class Stage00d_NegotiationStrategy:
         log.info("[00d] Negotiation strategy viable: %s", strat)
 
 
-class Stage00e_ProvisioningMockMode:
+class Stage00e_ProvisioningMockMode(MockLaneStage):
     def test_00e_provisioning_is_in_mock_mode(
         self, provisioning_client, deal_state: ComputeDealState
     ):
         """GET /api/v1/system/status → execution.mocked.
 
-        Guards the full e2e deal flow from accidentally targeting a production
-        provisioning service. If any composed executor is real, a settlement
+        A mock lane's confirmation that provisioning executes the way the lane
+        delivers. Guards the deal from accidentally targeting a production
+        provisioning service: if any composed executor is real, a settlement
         attempt would run an actual playbook against a real host.
 
         Fix: set provisioning.mockMode=true in the helm values and redeploy,
@@ -494,7 +598,7 @@ class Stage00e_ProvisioningMockMode:
             "set ACTIVE_PROFILES=production,provisioning-secrets,mock on the "
             "provisioning container."
         )
-        deal_state._provisioning_mock_mode = True
+        deal_state._provisioning_execution_confirmed = True
         log.info("[00e] Provisioning mock mode confirmed: %s", execution.executors)
 
 
@@ -523,13 +627,14 @@ class Stage00f1_ExecutorHostRegistry:
         sells it on.
 
         The first write over the provisioning wire, so it requires the
-        contract pins to agree and the storefront's loops held.
+        contract pins to agree, the storefront's loops held, and provisioning
+        to execute the way the lane delivers.
         """
         require_state(
             deal_state,
-            "_lifecycle_paused",
+            "_lifecycle_held",
             "_storefront_healthy",
-            "_provisioning_mock_mode",
+            "_provisioning_execution_confirmed",
             "_contract_pins_agree",
         )
         deal_driver.seed_supply()
@@ -557,8 +662,8 @@ class Stage00g_AlkahestConfigured:
             f"Storefront alkahest client is not configured for anvil: "
             f"checks.alkahest={alkahest_check!r}\n"
             "The on-chain escrow phases (07, 07b) will fail without a working AlkahestClient.\n"
-            "Fix: configure the anvil chain's rpc_url and "
-            "alkahest_address_config_path for the storefront."
+            "Fix: configure the anvil chain's rpc_url, and its book under "
+            "[Settlement.alkahest.address_books], for the storefront."
         )
         deal_state._alkahest_configured = True
         log.info("[00g] Alkahest configured: checks.alkahest=%s", alkahest_check)
@@ -652,8 +757,8 @@ class Stage04a_PrimaryRegistryPublish:
 
 class Stage05a_EvaluateNegotiate:
     def test_05a_evaluate_negotiate_would_not_exit(
-        self, storefront_admin_client, buyer_principal, deal_driver: ComputeDealDriver,
-        deal_state: ComputeDealState,
+        self, storefront_admin_client, registry_client, buyer_principal,
+        deal_driver: ComputeDealDriver, deal_state: ComputeDealState,
     ):
         """POST /api/v1/admin/listings/{id}/evaluate-negotiate → would_negotiate=True (dry-run).
 
@@ -666,11 +771,13 @@ class Stage05a_EvaluateNegotiate:
             "_negotiation_strategy_viable",
         )
 
+        _option, escrow = alkahest_opening(
+            registry_client.get_listing(deal_state.seller_listing_id)
+        )
         result = storefront_admin_client.evaluate_negotiate(
             deal_state.seller_listing_id,
             proposal={
-                "chain_name": "anvil",
-                "escrow_address": "0x" + "0" * 40,
+                **escrow,
                 "fields": {
                     # Decimal-digit string: the request body is
                     # canonicalized for signing, and a base-unit
@@ -735,14 +842,11 @@ class Stage05b_NegotiationStartsAndVisible:
         deal_state._escrow_expiration_unix = int(time.time()) + ESCROW_TTL_SECONDS
 
         # The listing's one Alkahest option, which the domain's opening names
-        # where its storefront needs the selection stated explicitly.
-        (alkahest_option,) = [
-            dict(option)
-            for option in registry_client.get_listing(
-                deal_state.seller_listing_id
-            ).settlement_options
-            if dict(option)["mechanism"] == "alkahest.v1"
-        ]
+        # where its storefront needs the selection stated explicitly, and the
+        # escrow every opening names.
+        alkahest_option, escrow = alkahest_opening(
+            registry_client.get_listing(deal_state.seller_listing_id)
+        )
 
         resp = storefront_client.negotiate_new(
             listing_id=deal_state.seller_listing_id,
@@ -754,6 +858,10 @@ class Stage05b_NegotiationStartsAndVisible:
             # supplied later.
             provision_terms=deal_driver.provision_terms(),
             token=DEAL_TOKEN["contract_address"],
+            chain_name=escrow["chain_name"],
+            escrow_address=escrow["escrow_address"],
+            literal_fields=escrow["literal_fields"],
+            demands=[escrow["demand"]],
             settlement_selection=deal_driver.opening_selection(
                 alkahest_option, deal_state._escrow_expiration_unix
             ),
@@ -863,15 +971,14 @@ class Stage06b_ForceAcceptAndTerminal:
 
 
 # ===========================================================================
-# Phase 7 — On-chain escrow + provisioning gate setup
+# Phase 7 — On-chain escrow, and a mock lane's create gate
 # ===========================================================================
 
-class Stage07_OnChainEscrowAndProvGate:
-    def test_07_create_real_escrow_and_arm_gate(
-        self, buyer_config, seller_wallet, deal_driver: ComputeDealDriver,
-        deal_state: ComputeDealState,
+class Stage07_OnChainEscrow:
+    def test_07_create_real_escrow(
+        self, buyer_config, seller_wallet, deal_state: ComputeDealState,
     ):
-        """Create a real on-chain escrow attestation + arm provisioning pause gate.
+        """Create a real on-chain escrow attestation.
 
         Why on-chain (not a placeholder uid): the storefront reads the EAS
         attestation by uid before it starts provisioning, so a placeholder uid
@@ -883,15 +990,11 @@ class Stage07_OnChainEscrowAndProvGate:
         production the buyer signs and sends this transaction themselves —
         so we do it here from the buyer's wallet, against the just-finalized
         negotiation terms.
-
-        The pause gate holds the mock create job before it reports success,
-        giving stage 08b a window to assert the fulfillment dispatching before
-        stage 09a releases it.
         """
         # Alkahest readiness is required before the escrow is created, not only
         # before 07b verifies it: an escrow created on chain cannot be undone.
         require_state(deal_state, "negotiation_terminal_state", "agreed_amount",
-                      "_provisioning_mock_mode", "_escrow_expiration_unix",
+                      "_provisioning_execution_confirmed", "_escrow_expiration_unix",
                       "_alkahest_configured")
 
         escrow_uid = create_buyer_escrow(
@@ -907,9 +1010,21 @@ class Stage07_OnChainEscrowAndProvGate:
         log.info("[07] Created on-chain escrow %s for negotiation %s",
                  escrow_uid, deal_state.negotiation_id)
 
+
+class Stage07a_ArmCreateGate(MockLaneStage):
+    def test_07a_arm_the_create_gate(
+        self, deal_driver: MockGates, deal_state: ComputeDealState,
+    ):
+        """Arm the mock rule that holds the create job before it reports.
+
+        The hold gives 08b a window to assert the fulfillment dispatching
+        before 08b2 releases it. Armed only once the escrow exists, so a deal
+        whose escrow could not be created leaves no rule armed.
+        """
+        require_state(deal_state, "real_escrow_uid", "_provisioning_execution_confirmed")
         deal_driver.arm_create_gate()
         deal_state.provisioning_gate_armed = True
-        log.info("[07] Provisioning gate armed with rule=%s", deal_driver.create_rule_id)
+        log.info("[07a] Provisioning gate armed with rule=%s", deal_driver.create_rule_id)
 
 
 # ===========================================================================
@@ -918,28 +1033,25 @@ class Stage07_OnChainEscrowAndProvGate:
 
 class Stage07b_VerifyEscrow:
     def test_07b_storefront_verifies_on_chain_escrow(
-        self, storefront_admin_client, seller_wallet, deal_state: ComputeDealState
+        self, storefront_admin_client, deal_state: ComputeDealState
     ):
         """POST /api/v1/admin/settle/{uid}/verify → valid=True (dry-run).
 
-        Exercises getRecordFromChain in isolation: reads the escrow from chain
-        and confirms token, amount, and seller recipient match. No DB writes.
+        Reads the escrow from chain and confirms it is the obligation the
+        accepted negotiation's committed settlement plan names, exactly as
+        settle verifies it. No DB writes.
         """
-        require_state(deal_state, "real_escrow_uid", "seller_listing_id", "agreed_amount",
-                      "_alkahest_configured")
+        require_state(deal_state, "real_escrow_uid", "negotiation_id", "_alkahest_configured")
 
         result = storefront_admin_client.verify_settle(
             deal_state.real_escrow_uid,
-            seller_wallet=seller_wallet,
-            agreed_price=deal_state.agreed_amount,
-            agreed_duration_seconds=DURATION_HOURS * 3600,
-            listing_id=deal_state.seller_listing_id,
+            negotiation_id=deal_state.negotiation_id,
         )
         assert result.get("valid") is True, (
             f"Storefront could not verify on-chain escrow {deal_state.real_escrow_uid}.\n"
             f"reason={result.get('reason')!r}\n"
-            "Check that the token address, amount, arbiter, and seller wallet "
-            "all match what was set at escrow creation time."
+            "Check that the escrow funds the obligation the accepted settlement "
+            "plan names: its token, amount, arbiter, demand, and expiry."
         )
         log.info("[07b] Storefront verified escrow %s: valid=True", deal_state.real_escrow_uid)
 
@@ -986,15 +1098,18 @@ class Stage08a_EvaluateSettle:
 # Phase 8c — Evaluate provisioning job (provisioning service dry-run)
 # ===========================================================================
 
-class Stage08c_EvaluateProvisioningJob:
+class Stage08c_EvaluateProvisioningJob(MockLaneStage):
     def test_08c_evaluate_provisioning_job(
-        self, deal_driver: ComputeDealDriver, deal_state: ComputeDealState
+        self, deal_driver: MockGates, deal_state: ComputeDealState
     ):
-        """POST /test/evaluate-job → params_valid=True, the create rule matched (dry-run).
+        """The domain's evaluate-job → params_valid=True, the create rule matched (dry-run).
 
         Exercises the provisioning service's job routing in isolation:
         confirms the host exists in inventory, the job params are valid,
         and the armed mock rule would match and pause. No job is created.
+
+        A mock lane's last check before settlement: 08b submits only once it
+        passes.
         """
         require_state(deal_state, "_evaluate_settle_passed", "provisioning_gate_armed")
 
@@ -1004,20 +1119,20 @@ class Stage08c_EvaluateProvisioningJob:
         )
 
         result = deal_driver.evaluate_create_job(host_id)
-        assert result.get("params_valid") is True, (
-            f"Provisioning job params invalid. errors={result.get('errors')!r}"
+        assert result.params_valid is True, (
+            f"Provisioning job params invalid. errors={result.errors!r}"
         )
-        assert result.get("host_exists") is True, (
+        assert result.host_exists is True, (
             f"Host {host_id!r} not found in provisioning inventory."
         )
-        assert result.get("rule_matched") == deal_driver.create_rule_id, (
+        assert result.rule_matched == deal_driver.create_rule_id, (
             f"Expected mock rule {deal_driver.create_rule_id!r} to match, "
-            f"got rule_matched={result.get('rule_matched')!r}."
+            f"got rule_matched={result.rule_matched!r}."
         )
-        assert result.get("would_pause") is True
-        deal_state._provision_job_evaluated = True
+        assert result.would_pause is True
+        deal_state._settle_preflight_passed = True
         log.info("[08c] Provisioning job evaluate: host=%s rule=%s",
-                 host_id, result.get("rule_matched"))
+                 host_id, result.rule_matched)
 
 
 # ===========================================================================
@@ -1026,7 +1141,7 @@ class Stage08c_EvaluateProvisioningJob:
 
 class Stage08b_SettlementSubmittedAndJobQueued:
     def test_08b_settlement_submitted_and_provisioning_job_queued(
-        self, storefront_client, provisioning_client, buyer_config,
+        self, storefront_client, storefront_admin_client, provisioning_client, buyer_config,
         deal_driver: ComputeDealDriver, deal_state: ComputeDealState,
     ):
         """Settlement submitted + fulfillment dispatched — advance + observe.
@@ -1034,11 +1149,23 @@ class Stage08b_SettlementSubmittedAndJobQueued:
         Advance: POST /api/v1/settle/{uid}.
         Observe: the domain's driver asserts what settle answered and reads the
           dispatched fulfillment where the domain reports it.
-        Confirms: fulfillment visible in provisioning API, gated in
-          "dispatching" state by the paused mock rule armed in stage 07.
-        """
-        require_state(deal_state, "negotiation_id", "real_escrow_uid", "_provision_job_evaluated")
+        Confirms: fulfillment visible in provisioning API in "dispatching".
 
+        "dispatching" holds whatever the create job does meanwhile: fulfillment
+        convergence is held for the module, and only a stage's explicit advance
+        observes the provider's outcome, so a job that has already finished
+        moves nothing until 09a advances.
+
+        Settlement is submitted only once the lane's last check before it has
+        passed (``_settle_preflight_passed``).
+        """
+        require_state(deal_state, "negotiation_id", "real_escrow_uid", "_settle_preflight_passed")
+
+        # The deal's own events as they stand before settling, so an event the
+        # domain then waits for under this negotiation followed settlement.
+        events_since = latest_stage_event_id(
+            storefront_admin_client, negotiation_id=deal_state.negotiation_id
+        )
         settle_resp = storefront_client.settle_evm(
             deal_state.real_escrow_uid,
             negotiation_id=deal_state.negotiation_id,
@@ -1046,15 +1173,16 @@ class Stage08b_SettlementSubmittedAndJobQueued:
         )
         # What settle answers and where the dispatched fulfillment is read are
         # the domain's; that a fulfillment was dispatched, and is held, is not.
-        fulfillment_id = deal_driver.settle_dispatched(settle_resp, deal_state)
+        fulfillment_id = deal_driver.settle_dispatched(
+            settle_resp, deal_state, events_since=events_since
+        )
         assert fulfillment_id, (
             f"no fulfillment was dispatched after settlement: {settle_resp}"
         )
 
         status = provisioning_client.get_fulfillment_status(fulfillment_id).model_dump(mode="json")
         assert status.get("state") == "dispatching", (
-            f"Expected fulfillment dispatched but gated on the paused mock "
-            f"rule, got: {status}"
+            f"Expected fulfillment dispatched and not yet converged, got: {status}"
         )
         deal_state.fulfillment_id = fulfillment_id
         log.info("[08b] Fulfillment %s in state %s", fulfillment_id, status.get("state"))
@@ -1064,44 +1192,51 @@ class Stage08b_SettlementSubmittedAndJobQueued:
 # Phase 9 — Provisioning completion
 # ===========================================================================
 
-class Stage09a_ProvisioningCompletes:
-    def test_09a_release_gate_and_job_succeeds(
-        self, provisioning_test_client, provisioning_client,
-        deal_driver: ComputeDealDriver, deal_state: ComputeDealState,
+class Stage08b2_ReleaseCreateGateAndDrain(MockLaneStage):
+    def test_08b2_release_the_create_gate_and_drain(
+        self, provisioning_test_client, deal_driver: MockGates,
+        deal_state: ComputeDealState,
     ):
-        """Release the provisioning gate, then deterministically converge
-        the fulfillment to a terminal state.
+        """Release the create job from its gate and wait for it to finish.
 
         The durable fulfillment path surfaces no raw executor job id to the
-        storefront (see stage 08b), so this cannot wait on one job by id. Two
-        separate things must happen, neither implied by the other:
+        storefront (see stage 08b), so this cannot wait on one job by id.
+        ``drain()`` waits for every outstanding test job to reach a terminal
+        state without needing to know its id, which is equivalent to waiting
+        for this one specific job in this single-deal, single-job scenario.
+        """
+        require_state(deal_state, "fulfillment_id", "provisioning_gate_armed")
+        deal_driver.release_create_gate()
+        provisioning_test_client.drain(timeout=30)
+        deal_state._create_job_completed = True
+        log.info("[08b2] Create gate %s released and drained", deal_driver.create_rule_id)
 
-        1. The gated job actually finishes once the mock rule releases it --
-           ``drain()`` waits for every outstanding test job to reach a
-           terminal state without needing to know its id, which is
-           equivalent to waiting for this one specific job in this
-           single-deal, single-job e2e scenario.
-        2. The *fulfillment* record separately converges to ``active`` only
-           once the convergence watchdog observes the provider's terminal
-           status (openspec/specs/fulfillment/spec.md's fulfillment
-           convergence worker requirement) -- job completion alone doesn't
-           advance it. ``advance_fulfillment_convergence_cycle()``
-           triggers that deterministically instead of sleeping against
-           its real background interval.
+
+class Stage09a_FulfillmentConvergesToActive:
+    def test_09a_convergence_advances_the_fulfillment_to_active(
+        self, provisioning_client, deal_state: ComputeDealState,
+    ):
+        """Deterministically converge the fulfillment once its create job finished.
+
+        The *fulfillment* record converges to ``active`` only once the
+        convergence watchdog observes the provider's terminal status
+        (openspec/specs/fulfillment/spec.md's fulfillment convergence worker
+        requirement) -- job completion alone doesn't advance it.
+        ``advance_fulfillment_convergence_cycle()`` triggers that
+        deterministically instead of sleeping against its real background
+        interval.
 
         ``advance`` rather than ``run``: a plain cycle is an advance
         *attempt*. The watchdog keeps its claim on a row whose provider
         answered "pending", so the claim lease spaces the next poll and a
         further cycle inside that lease reaches nothing. Here that is a
-        race -- the timer could have claimed this row while the job above
-        was still gated -- the same race 11b's advances avoid.
+        race -- the timer could have claimed this row while the job was
+        still running -- the same race 11b's advances avoid.
         The advance releases the watchdog's own claims first; the timer is
-        paused for the module by ``convergence_advanced_explicitly``.
+        held for the module by ``fulfillment_convergence_held``.
         """
-        require_state(deal_state, "fulfillment_id")
+        require_state(deal_state, "fulfillment_id", "_create_job_completed")
 
-        deal_driver.release_create_gate()
-        provisioning_test_client.drain(timeout=30)
         provisioning_client.advance_fulfillment_convergence_cycle()
 
         status = provisioning_client.get_fulfillment_status(deal_state.fulfillment_id).model_dump(mode="json")
@@ -1119,18 +1254,18 @@ class Stage09b_SettlementReadyAndCredentials:
         self, storefront_admin_client, deal_driver: ComputeDealDriver,
         deal_state: ComputeDealState,
     ):
-        """Settlement ready, the domain's delivery present, listing closed.
+        """Settlement ready, delivery present, listing reflects remaining capacity.
 
-        The listing closes because its capacity is held by this deal; the
-        domain's own reconciliation stage before this one is what asked for
-        the close.
+        A whole-capacity deal closes its listing; a smaller deal leaves it
+        open for another guest. The lane states the expected result, and its
+        preceding reconciliation stage applies the current capacity view.
 
         Combined observation of all post-provisioning state:
           1. wait_for_settlement — server-side long-poll until the settlement is
              ready (no client polling)
           2. the domain's delivery, read where the domain delivers it, through
              its driver
-          3. GET /api/v1/listings/{id} → status=closed
+          3. GET /api/v1/listings/{id} → the lane's expected status
         """
         require_state(deal_state, "real_escrow_uid", "provisioning_result_injected",
                       "seller_listing_id", "negotiation_id",
@@ -1151,8 +1286,9 @@ class Stage09b_SettlementReadyAndCredentials:
         deal_driver.assert_delivery(deal_state)
 
         listing = storefront_admin_client.get_listing(deal_state.seller_listing_id)
-        assert listing.status == "closed", (
-            f"Expected listing status=closed while capacity is held, got {listing.status!r}"
+        expected = deal_driver.listing_status_after_first_fulfillment
+        assert listing.status == expected, (
+            f"Expected listing status={expected!r} after the first fulfillment, got {listing.status!r}"
         )
 
         deal_state.settlement_status = wait_result.status
@@ -1227,15 +1363,35 @@ class Stage09c_LeaseRecorded:
 # Phase 10 — Lease expiry enters durable teardown
 # ===========================================================================
 
-class Stage10a_LeaseExpirySetup:
-    def test_10a_expire_lease_and_arm_teardown_gate(
-        self, provisioning_client, deal_driver: ComputeDealDriver,
-        deal_state: ComputeDealState,
+class Stage09c2_ArmTeardownGate(MockLaneStage):
+    def test_09c2_arm_the_teardown_gate(
+        self, deal_driver: MockGates, deal_state: ComputeDealState,
     ):
-        """Expire the deal's lease and hold provider teardown at its gate.
+        """Arm the mock rule that holds provider teardown before it reports.
 
-        The watchdog is paused first so the expiry sits unobserved until 10b runs
-        one cycle: that keeps the trigger and the reaction as separate, asserted
+        Armed before the lease expires, so the teardown 11a dispatches is
+        held, and 11a can assert the fulfillment tearing down while capacity
+        stays held, until 11a2 releases it.
+        """
+        # The same prerequisites as 10a's expiry, so no rule is armed for a
+        # teardown this deal will not reach.
+        require_state(deal_state, "lease_id", "real_escrow_uid",
+                      "reserved_resource_id", "deal_lease",
+                      "_provisioning_storefront_ok")
+        deal_driver.arm_teardown_gate()
+        deal_state._teardown_gate_armed = True
+        log.info("[09c2] Teardown gate armed with rule=%s", deal_driver.teardown_rule_id)
+
+
+class Stage10a_LeaseExpirySetup:
+    def test_10a_expire_lease(
+        self, provisioning_client, deal_state: ComputeDealState,
+    ):
+        """Expire the deal's lease.
+
+        The module holds the lease watchdog (``lease_watchdog_held``), which
+        this stage reads back, so the expiry sits unobserved until 10b runs one
+        cycle: that keeps the trigger and the reaction as separate, asserted
         steps rather than one race.
 
         Release reaches the storefront through the capacity-released callback,
@@ -1247,15 +1403,14 @@ class Stage10a_LeaseExpirySetup:
         require_state(deal_state, "lease_id", "real_escrow_uid",
                       "reserved_resource_id", "deal_lease",
                       "_provisioning_storefront_ok")
-        assert provisioning_client.pause_lease_watchdog().get("paused") is True
-        deal_driver.arm_teardown_gate()
+        assert_lease_watchdog_held(provisioning_client)
         # Expire the lease rather than interrupting the deal. Expiry is what ends
         # a lease in production; interruption is an operator escape hatch for a
         # deal sold as interruptible, and driving the main teardown path with the
         # escape hatch would leave the ordinary path uncovered.
         #
-        # The watchdog is paused above, so nothing acts on the expiry until 10b
-        # runs one cycle deliberately.
+        # The watchdog is held for the module, so nothing acts on the expiry
+        # until 10b runs one cycle deliberately.
         lease = deal_state.deal_lease.backdate(_expired_lease_end())
         assert lease.get("id") == deal_state.lease_id, (
             f"back-dated the wrong reservation: {lease}"
@@ -1274,7 +1429,7 @@ class Stage10b_LeaseCycleBeginsTeardown:
         require_state(deal_state, "_termination_requested", "deal_lease",
                       "reserved_resource_id")
         summary = provisioning_client.check_leases()
-        assert summary.get("checked", 0) >= 1, summary
+        assert summary.checked >= 1, summary
         lease = deal_state.deal_lease.refresh()
         assert lease.get("status") == "releasing", lease
         fulfillment_id = lease.get("fulfillment_id")
@@ -1296,8 +1451,7 @@ class Stage11a_TeardownDispatch:
         self, provisioning_client, storefront_admin_client, deal_state: ComputeDealState,
     ):
         require_state(deal_state, "teardown_fulfillment_id", "reserved_resource_id")
-        diagnostics = provisioning_client.advance_fulfillment_convergence_cycle()
-        assert "before" in diagnostics and "after" in diagnostics
+        provisioning_client.advance_fulfillment_convergence_cycle()
         fulfillment = provisioning_client.get_fulfillment_status(
             deal_state.teardown_fulfillment_id
         ).model_dump(mode="json")
@@ -1307,29 +1461,43 @@ class Stage11a_TeardownDispatch:
         )
 
 
-class Stage11b_TeardownCompletion:
-    def test_11b_provider_completion_releases_lease_and_capacity(
-        self, provisioning_client, provisioning_test_client,
-        storefront_admin_client, deal_driver: ComputeDealDriver,
+class Stage11a2_ReleaseTeardownGateAndDrain(MockLaneStage):
+    def test_11a2_release_the_teardown_gate_and_drain(
+        self, provisioning_test_client, deal_driver: MockGates,
         deal_state: ComputeDealState,
     ):
+        """Release provider teardown from its gate and wait for it to finish."""
+        require_state(deal_state, "teardown_fulfillment_id", "_teardown_gate_armed")
+        deal_driver.release_teardown_gate()
+        provisioning_test_client.drain(timeout=30)
+        deal_state._teardown_job_completed = True
+        log.info("[11a2] Teardown gate %s released and drained", deal_driver.teardown_rule_id)
+
+
+class Stage11b_TeardownCompletion:
+    def test_11b_provider_completion_releases_lease_and_capacity(
+        self, provisioning_client, storefront_admin_client,
+        deal_driver: ComputeDealDriver, deal_state: ComputeDealState,
+    ):
         require_state(deal_state, "teardown_fulfillment_id", "lease_id",
-                      "reserved_resource_id")
+                      "reserved_resource_id", "_teardown_job_completed")
+        # The release below is this stage's own lease cycle, not the timer's.
+        assert_lease_watchdog_held(provisioning_client)
+        # Convergence and the lease watchdog are held, so the release this
+        # stage observes comes from its own advances below, after this mark,
+        # however long ago the provider job finished.
         sync_stage, sync_event = deal_state.deal_lease.released_stage_event
         existing = storefront_admin_client.get_events(limit=500, stage=sync_stage)
         since_id = max((ev.id for ev in existing.events), default=0)
 
-        deal_driver.release_teardown_gate()
-        provisioning_test_client.drain(timeout=30)
-        # Convergence-driven, not one-shot: `drain` returns when the provider
-        # job is no longer gated, which is not the same instant its outcome is
-        # durably readable by `converge_teardowns`.
+        # Convergence-driven, not one-shot: a finished provider job is not the
+        # same instant its outcome is durably readable by `converge_teardowns`.
         advance_fulfillment_to(
             provisioning_client, deal_state.teardown_fulfillment_id, "torn_down",
         )
 
         release_summary = provisioning_client.check_leases()
-        assert release_summary.get("released", 0) >= 1, release_summary
+        assert release_summary.released >= 1, release_summary
         lease = deal_state.deal_lease.refresh()
         assert lease.get("status") == "released", lease
 
@@ -1362,4 +1530,3 @@ class Stage11b_TeardownCompletion:
         # `admin_release_reservations` is fleet-wide and would clear other
         # scenarios' holds.
         deal_driver.release_reserved(reserved_again)
-        provisioning_client.resume_lease_watchdog()

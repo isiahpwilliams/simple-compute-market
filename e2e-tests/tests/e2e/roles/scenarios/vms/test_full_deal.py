@@ -1,10 +1,11 @@
 """Full buyer-seller deal lifecycle — sequential e2e test suite.
 
-VM's run of the compute family's canonical deal. The stages VM shares with
-bare metal are defined once in ``helpers/compute_deal_stages.py`` and declared
-here, in order, by subclassing; VM's own stages (02b, 03a, 03b, 09a2, 09bb)
-are inserted in place, and ``VmComputeDealDriver`` supplies VM's part of the
-shared ones.
+VM's run of the compute family's canonical deal, through the provisioning mock
+profile. The stages VM shares with bare metal, and the mock-lane stages that hold
+and release its jobs at the mock rules' gates, are defined once in
+``helpers/compute_deal_stages.py`` and declared here, in order, by subclassing;
+VM's own stages (02b, 03a, 03b, 09a2, 09bb) are inserted in place, and
+``VmComputeDealDriver`` supplies VM's part of them.
 
 Stage map
 ---------
@@ -53,10 +54,13 @@ Phase 6 — Negotiation settlement
                                           escrows=[] (none until phase 7)
 
 Phase 7 — On-chain escrow + provisioning gate setup
-  07   Create real escrow_uid; add provisioning mock rule (pause_before_result=True)
+  07   Create real escrow_uid
+  07a  Add provisioning mock rule (pause_before_result=True)
   07b  Verify escrow via storefront dry-run
 
 Phase 8 — Settlement pipeline
+  08a  Evaluate settle dry-run → would_submit=True, host chosen
+  08c  Evaluate provisioning job dry-run → the create rule would match and pause
   08b  Settlement submitted + fulfillment dispatched:
          POST /api/v1/settle/{uid} → status=provisioning
          wait_for_stage_event(provision, job_submitted)
@@ -64,7 +68,8 @@ Phase 8 — Settlement pipeline
          (resource identity is confirmed later, via admin introspection, at 09c)
 
 Phase 9 — Provisioning completion
-  09a  Release gate + job completes: resume_rule; wait_for_job → succeeded
+  08b2 Release the create gate and drain the job
+  09a  Advance convergence → fulfillment active
   09b  Settlement ready + credentials + listing closed:
          wait_for_settlement (server-side long-poll) → ready=True, status=ready
          GET /settle/{uid}/status → status=ready, tenant_credentials present
@@ -75,17 +80,19 @@ Phase 9 — Provisioning completion
          GET provisioning /api/v1/leases/by-escrow/{uid} -> active/pending lease
 
 Phase 10 — Lease expiry and durable teardown
-  10a  Pause automatic lease servicing, arm the provider teardown gate, and
-       back-date the lease end so the watchdog reads it as expired. Expiry is
-       what ends a lease in production; admin interruption is an escape hatch
-       for a deal sold as interruptible and is covered elsewhere.
+  09c2 Arm the provider teardown gate.
+  10a  Assert the module's lease-watchdog hold and back-date the lease end so
+       the watchdog reads it as expired. Expiry is what ends a lease in
+       production; admin interruption is an escape hatch for a deal sold as
+       interruptible and is covered elsewhere.
   10b  Run one lease cycle → reservation releasing, fulfillment id recorded,
        fulfillment teardown_dispatch_pending, capacity still held.
 
 Phase 11 — Fulfillment convergence and resource release
   11a  Run one fulfillment cycle → tearing_down while capacity remains held.
-  11b  Complete provider teardown, converge to torn_down, run one lease cycle →
-       released; observe storefront release, capacity reuse, and cleanup.
+  11a2 Release the teardown gate and drain provider teardown.
+  11b  Converge to torn_down, run one lease cycle → released; observe
+       storefront release, capacity reuse, and cleanup.
 """
 
 from __future__ import annotations
@@ -95,18 +102,17 @@ import logging
 import pytest
 from market_alkahest.alkahest import (
     get_alkahest_network,
-    get_recipient_arbiter,
     resolve_alkahest_address_config,
 )
 from market_alkahest.dev_chain import anvil_address_book_path
 from registry_client import ValidatePublishRequest
 
-from tests.e2e.roles.helpers.compute_deal import advance_storefront, dry_run_storefront
+from tests.e2e.roles.helpers.compute_deal import advance_storefront
 from tests.e2e.roles.helpers.compute_deal_stages import (
     DEAL_TOKEN,
     DURATION_HOURS,
     LISTED_HOURLY_RATE,
-    Stage00_LifecyclePause,
+    Stage00_LifecycleHeld,
     Stage00a_StorefrontHealth,
     Stage00b_RegistryReachable,
     Stage00c_ProvisioningHealth,
@@ -120,32 +126,45 @@ from tests.e2e.roles.helpers.compute_deal_stages import (
     Stage05a_EvaluateNegotiate,
     Stage05b_NegotiationStartsAndVisible,
     Stage06b_ForceAcceptAndTerminal,
-    Stage07_OnChainEscrowAndProvGate,
+    Stage07_OnChainEscrow,
+    Stage07a_ArmCreateGate,
     Stage07b_VerifyEscrow,
     Stage08a_EvaluateSettle,
+    Stage08b2_ReleaseCreateGateAndDrain,
     Stage08b_SettlementSubmittedAndJobQueued,
     Stage08c_EvaluateProvisioningJob,
-    Stage09a_ProvisioningCompletes,
+    Stage09a_FulfillmentConvergesToActive,
     Stage09b_SettlementReadyAndCredentials,
+    Stage09c2_ArmTeardownGate,
     Stage09c_LeaseRecorded,
     Stage10a_LeaseExpirySetup,
     Stage10b_LeaseCycleBeginsTeardown,
+    Stage11a2_ReleaseTeardownGateAndDrain,
     Stage11a_TeardownDispatch,
     Stage11b_TeardownCompletion,
 )
 from tests.e2e.roles.scenarios.vms.compute_deal_driver import E2E_RESOURCE_ID
 from tests.e2e.roles.helpers.domain_deal import require_state
-from tests.e2e.roles.scenarios.vms.conftest import DealState, capacity_source_for, one_site
+from tests.e2e.roles.scenarios.vms.conftest import (
+    DealState,
+    capacity_source_for,
+    step_listing_reconciliation,
+)
 
 log = logging.getLogger(__name__)
 
 pytestmark = [
+    # Listed first, so the holds are taken before, and released after, every
+    # other fixture of the module; the lane's cleanup follows them, so it runs
+    # while the holds stand.
+    # The module steps the storefront's loops, fulfillment convergence (a timer
+    # cycle could claim a row mid-provider-call, and the module's own explicit
+    # cycle would then reach nothing), and lease expiry itself.
+    pytest.mark.usefixtures(
+        "storefront_loops_held", "fulfillment_convergence_held", "lease_watchdog_held",
+        "ensure_storefront_resumed", "reap_buyer_settle_subprocess", "release_reserved_resources",
+    ),
     pytest.mark.e2e_deal,
-    # This module advances fulfillment convergence itself, so the
-    # 30s timer is stopped for its duration -- otherwise a timer
-    # cycle can claim a row mid-provider-call and the module's own
-    # explicit cycle reaches nothing.
-    pytest.mark.usefixtures("convergence_advanced_explicitly"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -184,21 +203,11 @@ ACCEPTED_ESCROWS = [{
 }]
 
 
-def _recipient_demands(seller_wallet: str) -> list[dict]:
-    return [{
-        "chain_name": "anvil",
-        "arbiter": get_recipient_arbiter(
-            "anvil", config_path=_ALKAHEST_ADDRESSES_PATH,
-        ).lower(),
-        "demand_data": {"recipient": seller_wallet.lower()},
-    }]
-
-
 # ===========================================================================
 # Phase 0 — E2E readiness
 # ===========================================================================
 
-class TestStage00_LifecyclePause(Stage00_LifecyclePause):
+class TestStage00_LifecycleHeld(Stage00_LifecycleHeld):
     pass
 
 
@@ -246,7 +255,7 @@ class TestStage00h_ProvisioningStorefrontLink(Stage00h_ProvisioningStorefrontLin
 class TestStage02b_CreateListingPaused:
     def test_02b_create_listing_paused_local_only(
         self, storefront_admin_client,
-        storefront_seller_client, seller_wallet, registry_client, deal_state: DealState
+        storefront_seller_client, registry_client, deal_state: DealState
     ):
         """Create listing with paused=True; confirm locally visible and registry absent.
 
@@ -264,7 +273,6 @@ class TestStage02b_CreateListingPaused:
             listing_resource=OFFER_RESOURCE,
             capacity_source=capacity_source_for(OFFER_RESOURCE),
             accepted_escrows=ACCEPTED_ESCROWS,
-            demands=_recipient_demands(seller_wallet),
             max_duration_seconds=DURATION_HOURS * 3600,
             paused=True,
         )
@@ -399,7 +407,11 @@ class TestStage06b_ForceAcceptAndTerminal(Stage06b_ForceAcceptAndTerminal):
     pass
 
 
-class TestStage07_OnChainEscrowAndProvGate(Stage07_OnChainEscrowAndProvGate):
+class TestStage07_OnChainEscrow(Stage07_OnChainEscrow):
+    pass
+
+
+class TestStage07a_ArmCreateGate(Stage07a_ArmCreateGate):
     pass
 
 
@@ -419,7 +431,11 @@ class TestStage08b_SettlementSubmittedAndJobQueued(Stage08b_SettlementSubmittedA
     pass
 
 
-class TestStage09a_ProvisioningCompletes(Stage09a_ProvisioningCompletes):
+class TestStage08b2_ReleaseCreateGateAndDrain(Stage08b2_ReleaseCreateGateAndDrain):
+    pass
+
+
+class TestStage09a_FulfillmentConvergesToActive(Stage09a_FulfillmentConvergesToActive):
     pass
 
 
@@ -430,71 +446,16 @@ class TestStage09a2_CapacityEventCycle:
         """Step the capacity-event loop before asserting its effect.
 
         VM's listing-reconciliation stage. The deal holds this scenario's
-        sellable unit, so its listing is no longer satisfiable. The settle path reserves capacity and leaves the
-        derived-listing reconciliation to the capacity-delta subscriber, which
-        this scenario holds paused -- so 09b's `status=closed` is only true
-        once a cycle has run, and this stage is where it is asked for.
-
-        Dry run first, while the listing is still open: that is the cause,
-        named, and separable from the effect 09b asserts.
+        sellable unit, so its listing is no longer satisfiable; the loop that
+        closes it is held, so 09b's `status=closed` is only true once a cycle
+        has run, and this stage is where it is asked for
+        (`step_listing_reconciliation`).
         """
         require_state(deal_state, "seller_listing_id", "provisioning_result_injected")
 
-        preview = dry_run_storefront(storefront_admin_client, "capacity-events")
-        pending = one_site(preview)
-        assert pending["error"] is None, (
-            f"capacity-event dry run failed for site {pending['site']!r}: "
-            f"{pending['error']}"
-        )
-        assert not pending["would_position"], (
-            "the dry run would position at the feed head rather than apply "
-            "this deal's events, so the poller's cursor was lost"
-        )
-        assert pending["pending_count"] >= 1, (
-            "the deal reserved capacity, so its authority has events waiting; "
-            f"the feed reports none (cursor={pending['cursor']!r} "
-            f"head={pending['feed_head']!r})"
-        )
-
-        # Projections before deltas. The close path decides from the
-        # storefront's own projection cache, and only the site-projections
-        # loop refills it -- held here like every other loop. Applying the
-        # deltas against a pre-deal projection closes nothing however many of
-        # them there are, which is exactly what the previous run showed: four
-        # events applied, listing still open.
-        projections = advance_storefront(storefront_admin_client, "site-projections")
-        assert projections.get("sites"), (
-            "the site-projections advance reported no site state, so the "
-            "projection the close path reads was not refreshed and the "
-            "capacity cycle below would decide from stale availability"
-        )
-
-        applied_total = 0
-        for step in range(5):
-            cycle = one_site(
-                advance_storefront(storefront_admin_client, "capacity-events")
-            )
-            assert cycle["error"] is None, (
-                f"capacity-event cycle {step} failed for site "
-                f"{cycle['site']!r}: {cycle['error']}"
-            )
-            applied_total += int(cycle["applied_count"])
-            if not cycle["truncated"]:
-                break
-        else:
-            raise AssertionError(
-                "capacity-event feed still reports a truncated page after "
-                f"five cycles (applied {applied_total} events)"
-            )
-        assert applied_total >= pending["pending_count"], (
-            f"the advance applied {applied_total} event(s) where the dry run "
-            f"named {pending['pending_count']} pending"
-        )
+        pending, applied = step_listing_reconciliation(storefront_admin_client)
         deal_state._listing_reconciled = True
-        log.info(
-            "[09a2] Capacity events stepped: %s pending, %s applied",
-            pending["pending_count"], applied_total,
-        )
+        log.info("[09a2] Capacity events stepped: %s pending, %s applied", pending, applied)
 
 
 class TestStage09b_SettlementReadyAndCredentials(Stage09b_SettlementReadyAndCredentials):
@@ -577,6 +538,10 @@ class TestStage09c_LeaseRecorded(Stage09c_LeaseRecorded):
 # Phases 10 and 11 — lease expiry, teardown, and release
 # ===========================================================================
 
+class TestStage09c2_ArmTeardownGate(Stage09c2_ArmTeardownGate):
+    pass
+
+
 class TestStage10a_LeaseExpirySetup(Stage10a_LeaseExpirySetup):
     pass
 
@@ -586,6 +551,10 @@ class TestStage10b_LeaseCycleBeginsTeardown(Stage10b_LeaseCycleBeginsTeardown):
 
 
 class TestStage11a_TeardownDispatch(Stage11a_TeardownDispatch):
+    pass
+
+
+class TestStage11a2_ReleaseTeardownGateAndDrain(Stage11a2_ReleaseTeardownGateAndDrain):
     pass
 
 

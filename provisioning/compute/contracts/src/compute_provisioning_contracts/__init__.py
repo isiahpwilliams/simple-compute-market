@@ -1,10 +1,10 @@
 """The compute provisioning family's wire contract.
 
-Versioned contract models, the host, job, and system models, and the route
-contracts the provisioning service authenticates and every typed client signs
-from. A thin distribution: it carries no service code, so the family kit, the
-service, its adapters, and its clients all depend on it without depending on
-each other.
+Versioned contract models, the host, job, relay, system, and mock-rule models, and the
+route contracts the provisioning service authenticates and every typed client
+signs from, the mock mechanism's as a template each compute domain mounts. A
+thin distribution: it carries no service code, so the family kit, the service,
+its adapters, and its clients all depend on it without depending on each other.
 """
 
 from .contracts import (
@@ -45,6 +45,13 @@ from .hosts import (
     ConnectionView,
     ConnectivityResult,
     HostCreate,
+    HostDefinition,
+    HostDefinitionConnection,
+    HostDefinitionProblem,
+    HostDefinitionProblemCode,
+    HostDefinitionsDiff,
+    HostDefinitionsImportRequest,
+    HostDefinitionsImportResponse,
     HostListResponse,
     HostResponse,
     HostUpdate,
@@ -57,13 +64,42 @@ from .jobs import (
     JobStatusResponse,
     JobSubmitResponse,
 )
+from .mock_rules import (
+    MockJobEvaluation,
+    MockRouteMount,
+    MockRuleAdded,
+    MockRuleCreate,
+    MockRuleDeleted,
+    MockRuleResumed,
+    MockRuleView,
+)
+from .relays import (
+    RelayActiveGrantKey,
+    RelayCreate,
+    RelayGrantKeyStage,
+    RelayGrantKeys,
+    RelayLeaseListResponse,
+    RelayLeaseView,
+    RelayListResponse,
+    RelayResponse,
+    RelayRetiredGrantKey,
+    RelayStagedGrantKey,
+    RelayTokenRotate,
+    RelayUpdate,
+)
 from .system import (
+    ConvergenceCycleResponse,
+    ConvergenceDiagnostics,
+    ConvergenceStateCounts,
     ExecutionStatus,
     ExecutorStatus,
     HealthResponse,
+    LeaseCheckResponse,
+    PrincipalRotationResponse,
     SystemStatusComponent,
     SystemStatusResponse,
     VersionResponse,
+    WorkerPauseResponse,
 )
 from .routes import (
     ADMIN_PROVISIONING_OPERATIONS,
@@ -73,6 +109,10 @@ from .routes import (
     PROVISIONING_ROUTE_CONTRACTS,
     PROVISIONING_ROUTE_TABLE,
     ProvisioningRouteContract,
+    ProvisioningRouteMethodNotAllowed,
+    ProvisioningRouteNotFound,
+    ProvisioningRouteResolutionError,
+    ProvisioningRouteResourceUnbound,
     ProvisioningRouteTable,
     REQUEST_ID_HEADER,
     ROLE_HEADER,
@@ -120,6 +160,13 @@ __all__ = [
     "ConnectionView",
     "ConnectivityResult",
     "HostCreate",
+    "HostDefinition",
+    "HostDefinitionConnection",
+    "HostDefinitionProblem",
+    "HostDefinitionProblemCode",
+    "HostDefinitionsDiff",
+    "HostDefinitionsImportRequest",
+    "HostDefinitionsImportResponse",
     "HostListResponse",
     "HostResponse",
     "HostUpdate",
@@ -129,12 +176,37 @@ __all__ = [
     "JobLogsResponse",
     "JobStatusResponse",
     "JobSubmitResponse",
+    "MockJobEvaluation",
+    "MockRouteMount",
+    "MockRuleAdded",
+    "MockRuleCreate",
+    "MockRuleDeleted",
+    "MockRuleResumed",
+    "MockRuleView",
+    "RelayActiveGrantKey",
+    "RelayCreate",
+    "RelayGrantKeyStage",
+    "RelayGrantKeys",
+    "RelayLeaseListResponse",
+    "RelayLeaseView",
+    "RelayListResponse",
+    "RelayResponse",
+    "RelayRetiredGrantKey",
+    "RelayStagedGrantKey",
+    "RelayTokenRotate",
+    "RelayUpdate",
     "ExecutionStatus",
     "ExecutorStatus",
     "HealthResponse",
     "SystemStatusComponent",
     "SystemStatusResponse",
     "VersionResponse",
+    "WorkerPauseResponse",
+    "ConvergenceCycleResponse",
+    "ConvergenceDiagnostics",
+    "ConvergenceStateCounts",
+    "LeaseCheckResponse",
+    "PrincipalRotationResponse",
     "ADMIN_PROVISIONING_OPERATIONS",
     "IDENTITY_IDENTIFIER_HEADER",
     "IDENTITY_SCHEME_HEADER",
@@ -142,6 +214,10 @@ __all__ = [
     "PROVISIONING_ROUTE_CONTRACTS",
     "PROVISIONING_ROUTE_TABLE",
     "ProvisioningRouteContract",
+    "ProvisioningRouteMethodNotAllowed",
+    "ProvisioningRouteNotFound",
+    "ProvisioningRouteResolutionError",
+    "ProvisioningRouteResourceUnbound",
     "ProvisioningRouteTable",
     "REQUEST_ID_HEADER",
     "ROLE_HEADER",

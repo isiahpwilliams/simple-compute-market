@@ -523,8 +523,8 @@ def register(
             chain=negotiation_chain,
             decode_provision_terms=contributions.provision_terms.model_validate,
             decode_escrow_proposal=escrow.decode_proposal,
-            decode_escrow_terms=escrow.decode_terms,
             validate_acceptance=settlement.validate_acceptance,
+            accepted_listing_record=settlement.accepted_listing_record,
         )
         run = BuyRun(
             config=config,

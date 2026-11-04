@@ -19,8 +19,11 @@ def _stage(**collaborators) -> AlkahestSellerStage:
     defaults = {
         "fulfils_through_capacity": True,
         "release_models": frozenset({RECIPIENT_RELEASE}),
-        "chains": lambda: {"anvil": SimpleNamespace(alkahest_address_config_path="/books/anvil.json")},
+        "chains": lambda: {"anvil": SimpleNamespace(rpc_url="http://anvil.test")},
+        "address_books": lambda: {"anvil": "/books/anvil.json"},
         "seller_wallet": lambda: "",
+        "seller_wallet_key": lambda: "",
+        "chain_probe": lambda: None,
         "composition": lambda: None,
         "sqlite_client": lambda: None,
         "backfill_escrows": AsyncMock(return_value=0),
@@ -37,20 +40,40 @@ def _composition(clients=None):
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_a_configured_section_naming_an_undeliverable_release_model_is_refused(enabled):
+def test_a_configured_section_naming_contradictory_release_models_is_refused(enabled):
     stage = _stage()
     registry = build_settlement_registry(SettlementStageTable({ALKAHEST_MECHANISM_ID: stage}))
     config = registry.resolve(
         {
             "schema_version": 1,
             "priority": [ALKAHEST_MECHANISM_ID] if enabled else [],
-            "alkahest": {"enabled": enabled, "interruptible": True},
+            "alkahest": {
+                "enabled": enabled,
+                "interruptible": True,
+                "oracle_gated": True,
+                "trusted_oracle_addresses": ["0x" + "cd" * 20],
+            },
         },
         role="seller",
     )
 
-    with pytest.raises(ReleaseModelError, match="'interruptible' release model"):
+    with pytest.raises(ReleaseModelError, match="mutually exclusive"):
         stage.validate_configuration(config)
+
+
+def test_an_undeliverable_release_model_is_left_to_readiness():
+    """A coherent model the stage cannot deliver starts; readiness reports it."""
+    stage = _stage()
+    registry = build_settlement_registry(SettlementStageTable({ALKAHEST_MECHANISM_ID: stage}))
+    config = registry.resolve(
+        {"schema_version": 1, "priority": [], "alkahest": {"enabled": False, "interruptible": True}},
+        role="seller",
+    )
+
+    stage.validate_configuration(config)
+    assert stage.composition_resources()["deliverable_release_models"] == frozenset(
+        {RECIPIENT_RELEASE}
+    )
 
 
 def test_health_names_the_chains_the_composition_holds_clients_for():
@@ -90,7 +113,7 @@ def test_the_servicing_client_is_built_over_the_chains_address_books():
 
     assert stage.client({
         "get_client": get_client, "default_chain": "anvil",
-        "chains": {"anvil": SimpleNamespace(alkahest_address_config_path="/books/anvil.json")},
+        "chains": {"anvil": SimpleNamespace(rpc_url="http://anvil.test")},
     }) == "client"
     assert built == {
         "get_client": get_client, "default_chain": "anvil",

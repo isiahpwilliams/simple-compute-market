@@ -95,25 +95,39 @@ from market_site_client import SiteCapacityAdminClient
 from storefront_client import SyncStorefrontClient
 from compute_provisioning_client import SyncComputeProvisioningClient
 
-from market_identity import (
-    Identity,
-    TrustedIdentitySet,
-    create_signer,
-)
+from market_identity import create_signer
 from e2e_harness.settings import settings
 from tests.e2e.roles.scenarios.vms.host_registry import (
-    E2E_HOST_GPU_COUNT,
     E2E_MULTI_REGISTRY_HOST,
     E2E_MULTI_REGISTRY_POOL_ID,
     provision_e2e_executor,
     refresh_storefront_projections,
 )
-from tests.e2e.roles.helpers.compute_deal import pause_storefront
-from tests.e2e.roles.scenarios.vms.conftest import _require_setting, _signer, _trust, capacity_source_for
+from tests.e2e.roles.helpers.compute_deal import assert_storefront_loops_held
+from tests.e2e.roles.helpers.compute_deal_stages import alkahest_opening
+from tests.e2e.roles.scenarios.vms.conftest import (
+    _alice_publisher_trust,
+    _alice_url,
+    _buyer_signer,
+    _publisher_trust,
+    _require_setting,
+    _signer,
+    _trust,
+    capacity_source_for,
+)
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.multi_registry
+pytestmark = [
+    # Listed first, so the holds are taken before, and released after, every
+    # other fixture of the module; the lane's cleanup follows them, so it runs
+    # while the holds stand.
+    pytest.mark.usefixtures(
+        "storefront_loops_held", "alice_loops_held",
+        "ensure_storefront_resumed", "reap_buyer_settle_subprocess", "release_reserved_resources",
+    ),
+    pytest.mark.multi_registry,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -251,51 +265,9 @@ def _require(state: MRState, *fields: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Bob is covered by the shared conftest fixtures (storefront_admin_client,
-# storefront_client, seller_wallet, seller_agent_id). Alice needs her own
-# parallel set.
+# storefront_client, seller_wallet, seller_agent_id), as is Alice's admin
+# client, which her loops' hold needs. Alice's other clients are here.
 # ---------------------------------------------------------------------------
-
-def _alice_url() -> str:
-    return _require_setting(
-        getattr(settings, "ALICE", None) and settings.ALICE.API_URL, "ALICE.API_URL"
-    )
-
-
-def _alice_publisher_trust():
-    identity = create_signer(
-        "eip191",
-        _require_setting(settings.ALICE.PRIVATE_KEY, "ALICE.PRIVATE_KEY"),
-    ).identity
-    return TrustedIdentitySet(
-        identities=(
-            Identity(scheme="eip191", identifier=identity.identifier),
-        )
-    )
-
-
-@pytest.fixture(scope="module")
-def alice_admin_client():
-    """Admin-role client for Alice's storefront: system controls only.
-
-    Alice's administrator is a distinct principal from Alice's seller, exactly
-    as Bob's is, and is pinned as ``Identity.administrators.operator`` in
-    ``storefront.alice.toml``.
-    """
-
-    client = SyncStorefrontClient(
-        _alice_url(),
-        create_signer(
-            str(settings.ALICE.get("admin_scheme", "eip191") or "eip191"),
-            _require_setting(
-                settings.ALICE.get("admin_credential", ""), "ALICE.ADMIN_CREDENTIAL"
-            ),
-        ),
-        caller_role="admin",
-        expected_publishers=_alice_publisher_trust(),
-    )
-    yield client
-    client.close()
-
 
 @pytest.fixture(scope="module")
 def alice_seller_client():
@@ -336,28 +308,35 @@ def alice_agent_id(alice_admin_client) -> str:
 # Registry trust configuration and typed client composition.
 # ---------------------------------------------------------------------------
 
-def _buyer_signer():
-    return _signer(
-        "eip191", settings.BUYER.MARKETPLACE_CREDENTIAL,
-        "BUYER.MARKETPLACE_CREDENTIAL",
-    )
-
-
 def _registry_client(url: str) -> SyncRegistryClient:
     pins = _registry_pins(url)
     return SyncRegistryClient(
         url, signer=_buyer_signer(), caller_role="buyer",
-        expected_registries=_trust(pins["identifier"]),
+        expected_registries=_trust(pins["identifier"], scheme=pins["scheme"]),
         registry_authority=pins["authority_id"],
         api_key=_REGISTRY_B_TOKEN if url == _REGISTRY_B else None,
         timeout=5.0,
     )
 
 
+def _escrow_named_by(listing_id: str) -> dict:
+    """The escrow an opening for ``listing_id`` names, read from registry A,
+    where both sellers publish: its contract, literal fields, and the release
+    condition the listing advertises."""
+    with _registry_client(_REGISTRY_A) as client:
+        _option, escrow = alkahest_opening(client.get_listing(listing_id))
+    return {
+        "chain_name": escrow["chain_name"],
+        "escrow_address": escrow["escrow_address"],
+        "literal_fields": escrow["literal_fields"],
+        "demands": [escrow["demand"]],
+    }
+
+
 def _registry_authority(url: str) -> RegistryAuthority:
     pins = _registry_pins(url)
     return RegistryAuthority(
-        authority=pins["authority_id"], principals=_trust(pins["identifier"]),
+        authority=pins["authority_id"], principals=_trust(pins["identifier"], scheme=pins["scheme"]),
     )
 
 
@@ -376,6 +355,7 @@ def _registry_pins(url: str) -> dict[str, str]:
                 "identifier": _require_setting(
                     block.get("identifier", ""), f"{section}.IDENTIFIER"
                 ),
+                "scheme": str(block.get("authority_scheme", "eip191") or "eip191"),
             }
     raise AssertionError(
         f"no configured registry pins for {url!r}; add them rather than "
@@ -387,20 +367,20 @@ def _registry_pins(url: str) -> dict[str, str]:
 # Phase 0 — readiness
 # ===========================================================================
 
-class TestStage00_PausesBothStorefronts:
-    def test_00_pauses_both_storefronts_loops(
+class TestStage00_BothStorefrontsAreHeld:
+    def test_00_both_storefronts_loops_are_held(
         self, storefront_admin_client, alice_admin_client
     ):
-        """Hold both storefronts' timer loops before any listing is created.
+        """Both storefronts' timer loops are held before any listing is created.
 
         Each storefront publishes what its sites declare on its own publication
         loop. This scenario creates its listings explicitly, so a loop left
         running could bind the same slice first and the explicit create would
-        be refused. It holds the loops rather than relying on an earlier
-        scenario having done so, which a marker-selected run would not.
+        be refused. The module holds both itself rather than relying on an
+        earlier scenario having done so, which a marker-selected run would not.
         """
-        pause_storefront(storefront_admin_client)
-        pause_storefront(alice_admin_client)
+        assert_storefront_loops_held(storefront_admin_client)
+        assert_storefront_loops_held(alice_admin_client)
 
 
 class TestStage00a_BobHealth:
@@ -526,7 +506,7 @@ class TestStage02a_BobInventory:
             attributes={"gpu_model": "RTX 5080", "region": BOB_OFFER["region"],
                         "sla": "90.0"},
         )
-        assert (host.gpu_count or 0) >= E2E_HOST_GPU_COUNT
+        assert host.host_id == E2E_MULTI_REGISTRY_HOST
         refresh_storefront_projections(storefront_admin_client)
         mr_state.bob_inventory_seeded = True
 
@@ -547,7 +527,7 @@ class TestStage02b_AliceInventory:
             attributes={"gpu_model": "RTX 5080", "region": ALICE_OFFER["region"],
                         "sla": "90.0"},
         )
-        assert (host.gpu_count or 0) >= E2E_HOST_GPU_COUNT
+        assert host.host_id == f"{E2E_MULTI_REGISTRY_HOST}-ny"
         refresh_storefront_projections(alice_admin_client)
         mr_state.alice_inventory_seeded = True
 
@@ -716,13 +696,9 @@ class TestStage06a_NegotiateWithBob:
         # thread against whichever principal opened it.
         buyer_to_bob = SyncStorefrontClient(
             str(settings.SELLER.API_URL),
-            _signer("eip191", settings.BUYER.MARKETPLACE_CREDENTIAL,
-                    "BUYER.MARKETPLACE_CREDENTIAL"),
+            _buyer_signer(),
             caller_role="buyer",
-            expected_publishers=_trust(
-                _signer("eip191", settings.SELLER.PRIVATE_KEY,
-                        "SELLER.PRIVATE_KEY").identity.identifier
-            ),
+            expected_publishers=_publisher_trust(),
         )
         try:
             resp = buyer_to_bob.negotiate_new(
@@ -741,6 +717,7 @@ class TestStage06a_NegotiateWithBob:
                     },
                 },
                 token=DEMAND_RESOURCE["token"]["contract_address"],
+                **_escrow_named_by(mr_state.bob_listing_id),
             )
         finally:
             buyer_to_bob.close()
@@ -774,8 +751,7 @@ class TestStage06b_NegotiateWithAlice:
         # This client signs as the buyer.
         buyer_to_alice = SyncStorefrontClient(
             str(settings.ALICE.API_URL),
-            _signer("eip191", settings.BUYER.MARKETPLACE_CREDENTIAL,
-                    "BUYER.MARKETPLACE_CREDENTIAL"),
+            _buyer_signer(),
             caller_role="buyer",
             expected_publishers=_alice_publisher_trust(),
         )
@@ -796,6 +772,7 @@ class TestStage06b_NegotiateWithAlice:
                     },
                 },
                 token=DEMAND_RESOURCE["token"]["contract_address"],
+                **_escrow_named_by(mr_state.alice_listing_id),
             )
         finally:
             buyer_to_alice.close()

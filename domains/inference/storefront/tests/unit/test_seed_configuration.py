@@ -38,16 +38,12 @@ def test_the_seed_card_publishes_under_its_quota_and_passes_the_guard() -> None:
 
 
 def test_the_seed_names_one_alkahest_escrow_at_one_base_unit_per_credit() -> None:
-    chains = {
-        "anvil": ChainConfig(
-            name="anvil",
-            rpc_url="http://anvil.test",
-            chain_id=31337,
-            alkahest_address_config_path=str(anvil_address_book_path()),
-        )
-    }
+    chains = {"anvil": ChainConfig(name="anvil", rpc_url="http://anvil.test", chain_id=31337)}
+    books = {"anvil": str(anvil_address_book_path())}
 
-    (escrow,) = alkahest_stage(chains=lambda: chains).seed_accepted_escrows(_seed())
+    (escrow,) = alkahest_stage(
+        chains=lambda: chains, address_books=lambda: books
+    ).seed_accepted_escrows(_seed())
 
     assert escrow["literal_fields"]["token"] == _seed()["token"]
     assert escrow["rates"] == [{"field": "amount", "per": "credit", "value": "1"}]

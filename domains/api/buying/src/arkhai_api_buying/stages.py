@@ -34,13 +34,11 @@ from arkhai_api_buying.credentials import (
 
 
 class EscrowCodec(Protocol):
-    """Encodes the buyer's escrow proposal and decodes the seller's accepted escrow payloads."""
+    """Encodes the buyer's escrow proposal and decodes the seller's accepted one."""
 
     def encode_proposal(self, proposal: Any) -> dict[str, Any]: ...
 
     def decode_proposal(self, value: Any) -> Any: ...
-
-    def decode_terms(self, value: Any) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -126,6 +124,9 @@ class BuyerStage(Protocol):
 
     def resources(self) -> dict[str, Any]: ...
 
+    def check_configuration(self, document: Mapping[str, Any]) -> None:
+        """Refuse a buyer configuration this stage cannot read, naming what to state instead."""
+
     def chain_config_paths(self) -> Mapping[str, str | None]:
         """Per settlement chain, the configuration path the negotiation guards read this stage's payloads with."""
 
@@ -151,6 +152,9 @@ class BuyerStage(Protocol):
     def validate_acceptance(self, outcome: Any) -> None: ...
 
     def enrich(self, deal: Any) -> None: ...
+
+    def listing_record(self, listing: Any) -> dict[str, Any]:
+        """What a run records about the listing at acceptance, which a resumed run settles from."""
 
     def listing_rows(self, listing: Mapping[str, Any]) -> tuple[tuple[str, str], ...]: ...
 

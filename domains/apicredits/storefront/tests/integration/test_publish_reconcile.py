@@ -10,6 +10,7 @@ import pytest
 
 from core_storefront.auth import signed_response_headers
 from core_storefront.capacity import CapacityDelta
+from market_alkahest import ALKAHEST_CONFIG_KEY, AlkahestSettlementConfig
 from market_alkahest.dev_chain import anvil_address_book_path
 from market_capacity_publication import CapacityReconcileContext
 from market_config.config_loader import ChainConfig
@@ -21,6 +22,7 @@ from apicredits_storefront.server import build_listing_service
 from apicredits_storefront.container import SELLER_STAGES
 from market_site_client import SiteCapacityClient
 from market_identity import Ed25519Signer, TrustedIdentitySet
+from market_settlement_runtime import MechanismReadiness, ReadinessBlocker
 from tests.integration.credit_negotiation import payment_option
 from tests.listing_bindings import upsert_bound_listing
 
@@ -120,27 +122,34 @@ class _QuotaRuntime:
         }
 
 
-class _NoMechanismSections:
-    def mechanism_config(self, _key):
-        return None
+class _AnvilAddressBook:
+    """An Alkahest section naming only the development chain's address book."""
+
+    def mechanism_config(self, key):
+        if key != ALKAHEST_CONFIG_KEY:
+            return None
+        return AlkahestSettlementConfig.model_validate(
+            {"address_books": {"anvil": str(anvil_address_book_path())}}
+        )
 
 
 class _SettlementComposition:
+    """Stands in for settlement: Alkahest ready, so the escrows a request
+    supplies publish, their release conditions derived from the development
+    chain's address book."""
+
     stages = SELLER_STAGES
-    # The escrow's release conditions derive from the development chain's
-    # address book under no configured section.
-    settlement_config = _NoMechanismSections()
+    settlement_config = _AnvilAddressBook()
     mechanism_resources = {
-        "chains": {
-            "anvil": ChainConfig(
-                name="anvil", rpc_url="http://anvil.test", chain_id=31337,
-                alkahest_address_config_path=str(anvil_address_book_path()),
-            )
-        }
+        "chains": {"anvil": ChainConfig(name="anvil", rpc_url="http://anvil.test", chain_id=31337)}
     }
 
-    async def readiness(self) -> tuple[()]:
-        return ()
+    async def readiness(self, *, accepted_escrows=()) -> tuple[MechanismReadiness, ...]:
+        return (
+            MechanismReadiness(
+                mechanism="alkahest.v1", configured=True, enabled=True, ready=True
+            ),
+        )
 
     async def publication_artifacts(
         self,
@@ -148,6 +157,9 @@ class _SettlementComposition:
         _clauses,
     ) -> tuple[list[dict], list[dict], tuple[()]]:
         return [], [], ()
+
+    def canonical_mechanism(self, name: str) -> str:
+        return name
 
 
 def _listing_service(db, composition):
@@ -193,6 +205,71 @@ async def _insert_listing(db, listing_id: str, resource_id: str, status: str):
         storefront_url="http://seller:8002",
         seller_principal=SELLER_PRINCIPAL,
     )
+
+
+class _ChainJudgedComposition(_SettlementComposition):
+    """Alkahest ready on the clauses' chain and unready on the chains of the
+    escrows a request supplies, each readiness reported as the composition
+    judges it."""
+
+    _CLAUSE_ESCROW = {
+        "chain_name": "anvil",
+        "escrow_address": "0x" + "11" * 20,
+        "literal_fields": {"token": "0x" + "01" * 20},
+        "rates": [{"field": "amount", "per": "token", "value": "100"}],
+    }
+
+    async def readiness(self, *, accepted_escrows=()):
+        return (
+            MechanismReadiness(
+                mechanism="alkahest.v1",
+                configured=True,
+                enabled=True,
+                ready=False,
+                blockers=(
+                    ReadinessBlocker(
+                        code="alkahest.chain_unreachable",
+                        message="no answer",
+                        kind="reachability",
+                    ),
+                ),
+            ),
+        )
+
+    async def publication_artifacts(self, _facts, _clauses):
+        return (
+            [dict(self._CLAUSE_ESCROW)],
+            [],
+            (
+                MechanismReadiness(
+                    mechanism="alkahest.v1", configured=True, enabled=True, ready=True
+                ),
+            ),
+        )
+
+
+async def test_supplied_escrows_are_judged_on_their_own_chains_beside_clauses(
+    db, monkeypatch
+):
+    """An escrow a request supplies publishes only while Alkahest is ready on
+    its own chain, whatever the clauses beside it compile."""
+    monkeypatch.setattr(container, "_sqlite_client", db)
+    runtime = _QuotaRuntime({"svc-quota": 42})
+    monkeypatch.setattr(container.QUOTA_CAPACITY, "runtime", lambda factory: runtime)
+    svc = _listing_service(db, _ChainJudgedComposition())
+
+    result = await svc.publish_from_quota(
+        resource_id="svc-quota",
+        service_name="Acme Inference",
+        accepted_escrows=[{**_ChainJudgedComposition._CLAUSE_ESCROW, "chain_name": "base"}],
+        settlement_clauses=[{"mechanism": "alkahest.v1", "asset": "0x" + "01" * 20}],
+        paused=True,
+    )
+
+    row = await db.load_listing(listing_id=result["listing_id"])
+    escrows = row["accepted_escrows"]
+    escrows = json.loads(escrows) if isinstance(escrows, str) else escrows
+    assert [escrow["chain_name"] for escrow in escrows] == ["anvil"]
 
 
 async def test_publish_from_quota_requires_registered_sellable_resource(

@@ -86,6 +86,8 @@ It is also not either domain's, since a domain importing its sibling couples two
 
 `unflatten_shape` is the exact inverse of `flatten_shape`, and it serves this sharing. A shape derived from a declaration's flat fields has the same digest as the same shape stated by hand, so asking rates, overrides, and derivation keys agree whether a shape was stated, generated, or derived.
 
+A field the schema marks `required` is required whenever the shape names its family, not in every shape. The compute schema requires no family: a machine without GPUs states no `gpu` family, and `{cpu: {count: 8}, memory: {gib: 32}}` is a valid compute shape. It marks `gpu.count` and `gpu.model` required, so a shape states both or neither, because a GPU commitment always names how many and which model. A model with no count would publish a GPU model on a listing whose claim reserves, and whose fulfillment attaches, no GPU; and a GPU count with a constraint mapping but no `offer` still leaves its base shape unreadable, which holds the pool rather than publishing silently, because the admissibility kit reads base shapes under the same schema. A plain optional field would admit both. A compute-only check outside the kit would split shape validation in two, and the admissibility kit's base-shape read would not see it. Every compute shape still carries a quantity, since the kit refuses an empty shape.
+
 ## Capability shape admissibility
 
 Admissibility answers which capability shapes a seller will sell for a listing: a listing offered at one GPU may also be sold with up to four, or with memory at or under 512 GiB. The concept is the same for VM vCPUs, pod memory, or inference tokens, so it lives in a foundation kit, `kit/capability-admissibility` (`market_capability_admissibility`), beside the shape and pricing kits, depending only on `kit/capability-shape` and the standard library. A domain supplies its capability schema; the kit names no family or field. It is not part of `kit/capability-shape`, which is capacity vocabulary kept free of commercial evaluation, nor of `kit/capability-pricing`, which changes for different reasons and shares no code with it, nor of `kit/resource-pools`, an authority kit buyers should not install to evaluate a seller's policy.
@@ -120,7 +122,7 @@ Each domain composes independent buyer and seller role tables. Registrations
 control fresh admission; accepted work resolves its recorded Agreement through
 the table even when publication is disabled. VM and API-credit tables bind
 Alkahest and payments; bare-metal purchase binds payments while its seller also
-binds Alkahest and fused contact exchange. Delivery consumes validated source
+binds Alkahest and contact exchange. Delivery consumes validated source
 and domain facts, not the mechanism ID or an escrow-shaped progress row.
 
 Every domain's seller stage-table entry declares `fulfils_through_capacity`:
@@ -131,17 +133,30 @@ opaque by design. A stage that does not declare it cannot be constructed, so no
 mechanism is classified lazily or by a separate map that could drift from the
 table.
 
-Compatible kits may opt into a stage convention, but no shared convention or
-adapter is required or implemented. Its package is chosen when concrete reuse
-justifies implementation: a kit, never core or either mechanism package. Contact,
-seller-first and fused stages need no adapter. The obligation runtime is not an
-assumed home for a convention consumed by non-escrow mechanisms.
+Beside it, every seller stage-table entry in VM and bare metal declares
+`completes_outside_settlement`: whether a deal through the entry completes
+outside settlement and fulfillment, so that it has no settle, delivery, or refund
+operation. Contact exchange is such a stage, completing by its introduction. The
+two declarations are separate because they answer different questions.
+`fulfils_through_capacity` says whether settling delivers through capacity and
+decides what an unbacked listing may publish; `completes_outside_settlement`
+says whether there is a settlement at all. They agree today only because contact
+exchange is the one stage that does not fulfil through capacity; a mechanism that
+takes settlement without delivering through capacity, such as hosted settlement
+over unbacked supply, would be refused wrongly by a rule reading the first. A
+stage that omits either cannot be constructed.
+
+A stage convention lives in a kit, never in core, whose stage table is opaque, or
+in a mechanism package. The obligation runtime is not an assumed home for a
+convention consumed by non-escrow mechanisms. The first shared convention is the
+introduction refusal in `kit/storefront` (see "Storefront composition kit").
+Seller-first and fused stages need no adapter.
 
 ## Settlement configuration registration
 
 Composition roots register installed settlement mechanisms explicitly. Each registration contributes its canonical ID, typed configuration, role applicability, preflight, client factory, listing-option builder, buyer compatibility, and optional command group. Core roles consume only ordered registrations and common readiness; they neither branch on mechanism IDs nor import concrete configuration models.
 
-A domain's seller stage for a mechanism may also declare what the domain can deliver under it. Each domain's Alkahest seller stage declares the release models it can deliver — VM all three, bare metal `recipient` and `oracle_gated`, API credits `recipient` — and its composition refuses a configured model the domain does not declare, enabled or not, before it opens a database. A stage's `settles_from_agreement` likewise says whether a deal under its mechanism settles from the accepted Agreement alone; an exact selection of a mechanism whose registration builds no accepted obligation is accepted without a plan only when it does.
+A domain's seller stage for a mechanism may also declare what the domain can deliver under it. Each domain's Alkahest seller stage declares the release models it can deliver — VM all three, bare metal `recipient` and `oracle_gated`, API credits `recipient` — and a configured model the domain does not declare makes Alkahest unready with a configuration blocker naming it, so the storefront starts and publishes its other mechanisms (see the [settlement configuration architecture](../settlement-configuration/architecture.md)). A stage's `settles_from_agreement` likewise says whether a deal under its mechanism settles from the accepted Agreement alone; an exact selection of a mechanism whose registration builds no accepted obligation is accepted without a plan only when it does.
 
 Registration controls construction, not lifecycle ownership. A composition injects the marketplace signer, wallet, chains, or other shared resources only into mechanisms that declare them, then composes only the lifecycle the selected mechanism uses. An Arkhai-payment-only VM composition starts without EVM resources. Its mandate and receipt feed the existing selected-site fulfillment stage, not the obligation journal.
 
@@ -186,11 +201,32 @@ up globally or interprets their payloads.
 The kit also owns storefront mechanisms whose control flow is common across
 domains. Alkahest client construction receives an immutable tuple of chain
 name, RPC URL, address-config path, private-key readiness, and missing
-requirements. The negotiation watchdog receives an existing repository plus
+requirements, and yields the per-chain constructor the Alkahest chain probe in
+`kit/alkahest` builds each client with; scheduling the probe and rebuilding
+clients stay in `kit/alkahest`, so this kit gains no Alkahest behaviour. The
+negotiation watchdog receives an existing repository plus
 timeout, interval, terminal-state, and event hooks. These inputs preserve
 operator and domain configuration without copying the factory or sweep loop.
 Per-chain construction failures remain isolated, and stale-thread write or
 event failures do not stop later threads or later sweeps.
+
+The kit holds the first shared stage convention: how a storefront answers a deal
+settled by introduction. `refuse_introduction_settle` answers a settle request
+409 and `refuse_introduction_fulfillment` answers a fulfillment read or teardown
+404, each when the stage the deal's accepted Agreement selected declares
+`completes_outside_settlement`, never by comparing a mechanism identifier or the
+listing's backing. They sit beside the framework-free deal-control route services
+and raise their `LifecycleRouteError`, which every storefront already composes
+and translates. The domain resolves the accepted stage and passes the kit its
+declaration and the reason text: the kit owns the decision and the status codes
+but not the wording that names contact exchange, and it imports neither
+`core_storefront` nor a stage type. A fulfillment route checks ownership against
+the accepted thread's recorded buyer first, so a stranger cannot learn that a deal
+was an introduction, then the stage and the refusal, and only then loads a
+fulfillment context, which an unbacked deal's host-less binding could not supply.
+The two compute domains' delivery route surfaces differ — VM reports
+delivery through settle status, bare metal through negotiation-keyed fulfillment
+routes — and unifying them keeps this rule at the stage.
 
 Multi-site capacity publication follows the same inversion. The capacity kit
 owns exact site projection, event reconciliation, registry fan-out, durable
@@ -307,6 +343,10 @@ the thread, saves the message, and runs `persist_opening` as separate writes.
 Core defines shared-reader carriers: public settlement options, accepted Agreements, role tables and settlement evidence. Mechanism status, refunds and provisioning translation stay in the supporting domain/kit composition. `make_settle_hook` looks up `Agreement.settlement.mechanism` in the injected buyer table and passes the exact negotiation to its domain-owned invoker. Missing entries fail before effects. `make_escrow_settle_hook` is an explicit helper for an applicable entry, never a default.
 
 Acceptance fixes exact Agreement bytes and puts the seller-derived mandate in opaque `settlement_data`; both are committed together in `negotiation_threads` and carried in responses and outcomes. VM, bare-metal, and API-credit sellers load the mandate by negotiation ID, poll its deterministic transaction ID, verify the signed receipt, and only then provision or issue. Pending evidence is retryable, completed calls are idempotent, and nonterminal domain work is re-driven. Receipt evidence and physical/grant progress remain domain-owned.
+
+## Current and historical payment wire compatibility
+
+Before a consumer, endpoint, or server change, verify rebuilt consumer responses against both the currently deployed authority contract and the selected publication. Bind each check to the contract it observed. One check may cover both only when their identity is established; if they differ, establish a compatible rollout order before mutation. Historical signed-byte verification is additional evidence, not a substitute for current response parsing. Do not change or downgrade the external authority to match the consumer. The vendored payment kit records source and transformation provenance, current and historical vectors, and generation rules in its README and schema source notes. Local vector conformance does not establish live funding, deployed service compatibility, or physical delivery.
 
 ## Identity composition
 

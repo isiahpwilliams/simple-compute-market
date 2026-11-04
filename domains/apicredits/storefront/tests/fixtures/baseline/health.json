@@ -13,6 +13,7 @@
   "principal": null,
   "provisioning_contract_version": null,
   "publication_derivation": null,
+  "settlement": null,
   "site_projections": null,
   "status": "ok",
   "storefront_domains": null

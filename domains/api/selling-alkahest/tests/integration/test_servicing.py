@@ -43,7 +43,8 @@ class ReadyEscrow:
 def _stages(escrow: ReadyEscrow) -> SettlementStageTable:
     stage = AlkahestSellerStage(
         EXAMPLE, fulfils_through_capacity=True, release_models=frozenset({RECIPIENT_RELEASE}),
-        chains=lambda: {}, seller_wallet=lambda: "", composition=lambda: None,
+        chains=lambda: {}, seller_wallet=lambda: "", seller_wallet_key=lambda: "",
+        address_books=lambda: {}, chain_probe=lambda: None, composition=lambda: None,
         sqlite_client=lambda: None, backfill_escrows=None, stage_event=lambda *a, **k: None,
         escrow_client=lambda **_resources: escrow,
     )

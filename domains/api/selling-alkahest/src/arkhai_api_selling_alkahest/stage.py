@@ -20,6 +20,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from arkhai_api_selling.contributions import SellingContributions
+from arkhai_api_selling.lifecycle import ContributedLoop
 from arkhai_api_selling.issuance import (
     SettlementRefusal,
     SettleResult,
@@ -33,18 +34,22 @@ from arkhai_api_selling.issuance import (
 from arkhai_api_selling.quota_listing import accepted_listing
 from arkhai_api_selling.settlement_composition import SellingSettlementComposition
 from market_alkahest import (
+    ALKAHEST_CHAIN_PROBE_LOOP,
+    ALKAHEST_CHAIN_PROBE_ROUTE,
     ALKAHEST_CONFIG_KEY,
     ALKAHEST_MECHANISM_ID,
+    AlkahestChainProbe,
     AlkahestConditionalEscrowClient,
     AlkahestFulfillmentPublisher,
+    configured_release_model,
     create_alkahest_registration,
-    require_deliverable_release_model,
 )
-from market_alkahest.escrow_verification import verify_escrow_for_settlement
+from market_alkahest.escrow_verification import verify_escrow_against_plan
 from market_core import SettlementEvidence
 from market_core.schemas import EscrowProposal
 from market_identity import Identity
 from market_negotiation_runtime import OfferUnfulfillableError
+from market_storefront_kit import LifecycleRouteError
 from market_settlement_runtime import (
     FULFILLMENT_REFERENCE_KEY,
     FULFILLMENT_SUBMISSION_KEY,
@@ -56,7 +61,6 @@ from market_settlement_runtime import (
 
 from arkhai_api_selling_alkahest.negotiation import (
     AlkahestEscrowAcceptance,
-    accepted_escrow_artifacts,
     accepted_escrow_proposal,
 )
 from arkhai_api_selling_alkahest.publication import (
@@ -101,8 +105,10 @@ class AlkahestSettlementProjection:
 class AlkahestSellerStage:
     """The seller's Alkahest entry, over the collaborators its storefront injects.
 
-    ``chains`` and ``seller_wallet`` read the storefront's chain configuration
-    and wallet; ``composition`` and ``sqlite_client`` its lifespan's settlement
+    ``chains``, ``address_books``, ``seller_wallet``, and ``seller_wallet_key``
+    read the storefront's chain configuration, each chain's Alkahest address
+    book, and its wallet; ``chain_probe`` the probe over its chains, while
+    Alkahest is enabled; ``composition`` and ``sqlite_client`` its lifespan's settlement
     composition and persistence; ``backfill_escrows`` the storefront's identity
     backfill for escrows that predate their obligation records. Every other
     collaborator — the delivery callable, the credits client, the evidence
@@ -114,9 +120,9 @@ class AlkahestSellerStage:
     mechanism = ALKAHEST_MECHANISM_ID
     registration = staticmethod(create_alkahest_registration)
     retry_uncertain = True
-    # An escrow is verified against the plan its escrow proposal materializes
-    # under the listing's release condition, which an exact selection cannot
-    # build, so a selection of it is refused.
+    # An escrow is verified against the plan committed when its escrow proposal
+    # was accepted, which an exact selection cannot build, so a selection of it
+    # is refused.
     settles_from_agreement = False
     escrow_proposal_step = staticmethod(accepted_escrow_proposal)
     seed_escrow_settings = SEED_ESCROW_SETTINGS
@@ -128,12 +134,15 @@ class AlkahestSellerStage:
         fulfils_through_capacity: bool,
         release_models: frozenset[str],
         chains: Callable[[], Mapping[str, Any]],
+        address_books: Callable[[], Mapping[str, str | None]],
         seller_wallet: Callable[[], str],
+        seller_wallet_key: Callable[[], str],
+        chain_probe: Callable[[], AlkahestChainProbe | None],
         composition: Callable[[], SellingSettlementComposition | None],
         sqlite_client: Callable[[], Any | None],
         backfill_escrows: BackfillFn,
         stage_event: StageEventFn,
-        verify_escrow: Callable[..., Awaitable[Any]] = verify_escrow_for_settlement,
+        verify_escrow: Callable[..., Awaitable[Any]] = verify_escrow_against_plan,
         escrow_client: Callable[..., Any] = AlkahestConditionalEscrowClient,
         worker_id: str = "alkahest-attestation",
         rate_unit: str = "token",
@@ -149,7 +158,10 @@ class AlkahestSellerStage:
         # condition its deal could not honour.
         self.release_models = release_models
         self._chains = chains
+        self._address_books = address_books
         self._seller_wallet = seller_wallet
+        self._seller_wallet_key = seller_wallet_key
+        self._chain_probe = chain_probe
         self._composition = composition
         self._sqlite_client = sqlite_client
         self._backfill_escrows = backfill_escrows
@@ -161,7 +173,23 @@ class AlkahestSellerStage:
         self.escrow_acceptance = AlkahestEscrowAcceptance(self._chain_config_paths)
 
     def _chain_config_paths(self) -> dict[str, str | None]:
-        return {name: chain.alkahest_address_config_path for name, chain in self._chains().items()}
+        books = self._address_books()
+        return {name: books.get(name) for name in self._chains()}
+
+    def composition_resources(self) -> dict[str, Any]:
+        """What Alkahest's seller readiness reads beyond the chains, their clients, and the probe.
+
+        With neither a wallet address nor a key no escrow could pay the seller;
+        an address its key does not sign as names two accounts. The storefront
+        submits its issuance evidence on chain with the key, so a missing key
+        makes Alkahest unready, as does a configured release model this stage
+        cannot deliver.
+        """
+        return {
+            "wallet": {"address": self._seller_wallet(), "private_key": self._seller_wallet_key()},
+            "signs_transactions": True,
+            "deliverable_release_models": self.release_models,
+        }
 
     # Composition-time contributions.
 
@@ -169,32 +197,59 @@ class AlkahestSellerStage:
         return None
 
     def validate_configuration(self, settlement_config: Any) -> None:
-        """Refuse a configured section's release model this stage cannot deliver.
+        """Refuse a configured section selecting contradictory release models.
 
-        A configured section owns the deals accepted under it, enabled or not.
+        That is incoherent configuration rather than an unusable mechanism, so it
+        stops startup, enabled or not; a coherent model this stage cannot deliver
+        makes Alkahest unready instead.
         """
-        section = settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY)
-        if section is not None:
-            require_deliverable_release_model(section, self.release_models)
+        configured_release_model(settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY))
 
     def release_conditions(
-        self, composition: SellingSettlementComposition, accepted_escrows: list[Mapping[str, Any]]
+        self,
+        composition: SellingSettlementComposition,
+        accepted_escrows: list[Mapping[str, Any]],
+        *,
+        readiness: Any,
     ) -> list[dict[str, Any]]:
         return release_conditions(
             composition.settlement_config,
             chains=composition.mechanism_resources["chains"],
             wallet_address=self._seller_wallet(),
             accepted_escrows=accepted_escrows,
+            readiness=readiness,
         )
 
     def accepted_escrow(self, **fields: Any) -> dict[str, Any]:
         return accepted_escrow(**fields, rate_unit=self.rate_unit)
 
     def seed_accepted_escrows(self, seed: Mapping[str, Any]) -> list[dict[str, Any]]:
-        return seed_accepted_escrows(seed, self._chains(), rate_unit=self.rate_unit)
+        return seed_accepted_escrows(
+            seed, self._chains(), self._address_books(), rate_unit=self.rate_unit
+        )
 
-    def contributed_loops(self) -> tuple[Any, ...]:
-        return ()
+    def contributed_loops(self) -> tuple[ContributedLoop, ...]:
+        """The chain probe's loop while it is composed, its first cycle as its timer
+        starts, since readiness reads every chain unprobed until it has run."""
+        probe = self._chain_probe()
+        if probe is None:
+            return ()
+        return (
+            ContributedLoop(
+                name=ALKAHEST_CHAIN_PROBE_LOOP,
+                route=ALKAHEST_CHAIN_PROBE_ROUTE,
+                step=self.chain_probe_step,
+                interval_seconds=probe.interval_seconds,
+                initial_delay_seconds=0.0,
+            ),
+        )
+
+    async def chain_probe_step(self) -> Mapping[str, Any]:
+        """Probe each configured chain."""
+        probe = self._chain_probe()
+        if probe is None:
+            raise LifecycleRouteError(503, "Alkahest chain probe is not composed")
+        return {"loop": ALKAHEST_CHAIN_PROBE_LOOP, **(await probe.step())}
 
     def startup_steps(self) -> tuple[Callable[[], Awaitable[None]], ...]:
         return (self.backfill_escrow_records,)
@@ -232,9 +287,11 @@ class AlkahestSellerStage:
         return {"accepted_escrows": [{"chain_name": chain} for chain in chains]} if chains else {}
 
     def client(self, resources: Mapping[str, Any]) -> Any:
+        # Claims on each chain are serviced against that chain's own book.
+        books = self._address_books()
         return self._escrow_client(
             get_client=resources["get_client"],
-            chain_config_paths={name: chain.alkahest_address_config_path for name, chain in resources["chains"].items()},
+            chain_config_paths={name: books.get(name) for name in resources["chains"]},
             default_chain=resources["default_chain"],
         )
 
@@ -334,29 +391,11 @@ class AlkahestSellerStage:
         proposal = (
             EscrowProposal.model_validate(proposal_raw) if isinstance(proposal_raw, dict) else None
         )
-        # Verification and the plan below materialize the escrow under the
-        # release condition the listing authorizes; the kit refuses any other.
-        matched_index = await self._verify_escrow(
-            escrow_uid=escrow_uid,
-            seller_wallet=self._seller_wallet(),
-            agreed_price=int(thread["agreed_price"]),
-            agreed_duration_seconds=0,
-            listing=order,
-            alkahest_client=mechanism_client,
-            chain_name=chain_name,
-            alkahest_address_config_path=chain.alkahest_address_config_path,
-            escrow_proposal=proposal,
-        )
-
-        accepted = accepted_escrow_artifacts(
-            proposal=proposal,
-            agreed_amount=int(thread["agreed_price"]),
-            buyer_principal=buyer_principal,
-            seller_principal=seller_principal,
-            listing=order,
-            chain_config_paths=self._chain_config_paths(),
-        )
-        plan = accepted.get("settlement_plan")
+        if proposal is None:
+            raise ValueError(f"Negotiation {negotiation_id} recorded no escrow proposal")
+        # The deal settles under the plan committed when it was accepted, which is
+        # what the buyer funded; a listing or wallet changed since cannot change it.
+        plan = thread.get("settlement_plan")
         obligations_raw = plan.get("obligations") if isinstance(plan, dict) else None
         if not isinstance(obligations_raw, list) or not obligations_raw:
             raise ValueError(f"Negotiation {negotiation_id} has no accepted settlement obligations")
@@ -368,16 +407,19 @@ class AlkahestSellerStage:
                 raise ValueError("settlement obligation payer principal mismatch")
             if obligation.get("claimant_principal") != expected_claimant:
                 raise ValueError("settlement obligation claimant principal mismatch")
+        matched_index = await self._verify_escrow(
+            escrow_uid=escrow_uid,
+            settlement_plan=plan,
+            alkahest_client=mechanism_client,
+            chain_name=chain_name,
+            escrow_address=proposal.escrow_address,
+            address_book=self._address_books().get(chain_name),
+        )
         if not isinstance(matched_index, int) or not 0 <= matched_index < len(obligations):
             raise ValueError(f"Verified obligation index {matched_index!r} is outside the accepted plan")
 
-        proposal_chain = proposal.chain_name if proposal is not None else None
-        escrow_address = proposal.escrow_address if proposal is not None else None
-        if proposal_chain is None or escrow_address is None:
-            accepted_escrows = order.get("accepted_escrows") or []
-            if accepted_escrows and isinstance(accepted_escrows[0], dict):
-                proposal_chain = proposal_chain or accepted_escrows[0].get("chain_name")
-                escrow_address = escrow_address or accepted_escrows[0].get("escrow_address")
+        proposal_chain = proposal.chain_name
+        escrow_address = proposal.escrow_address
 
         return PreparedSettlement(
             agreement_ref=negotiation_id,
@@ -407,6 +449,12 @@ class AlkahestSellerStage:
             raise ValueError("chain_name is required for Alkahest")
         client = composition.mechanism_resources["get_client"](body.chain_name)
         if client is None:
+            # A configured chain whose client the chain probe has not built yet,
+            # at start or while its endpoint is down, is retryable.
+            if body.chain_name in self._chains():
+                raise SettlementRefusal(
+                    503, f"Alkahest chain {body.chain_name!r} is unavailable; retry"
+                )
             raise ValueError("Alkahest chain client is unavailable")
         await coordinator.start(
             escrow_uid=reference, negotiation_id=body.negotiation_id,

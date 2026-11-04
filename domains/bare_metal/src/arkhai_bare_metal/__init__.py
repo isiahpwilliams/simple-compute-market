@@ -7,6 +7,8 @@ from .evidence import (
     BareMetalAcceptedAlkahestBinding,
     BareMetalAcceptedBinding,
     BareMetalLeaseReadyEvidence,
+    BareMetalLeaseReadyEvidenceDocument,
+    BareMetalLeaseReadyResultDocument,
     BareMetalLeaseReadyResult,
     CanonicalPrincipal,
     bare_metal_digest,
@@ -20,6 +22,7 @@ from .publication import (
 )
 from .projections import (
     BareMetalResourceProjection,
+    BareMetalViewProblems,
     TrustedBareMetalProjection,
     TrustedBareMetalResource,
 )
@@ -45,14 +48,17 @@ from .provision_terms import (
     BareMetalProvisionTerms,
     make_bare_metal_provision_terms,
 )
-from .provisioning_client import (
-    BARE_METAL_PROVISIONING_ROUTES,
+from .provisioning_routes import (
+    BARE_METAL_MOCK_OPERATION_PREFIX,
+    BARE_METAL_MOCK_ROUTE_PREFIX,
 )
 from .schema import (
     BARE_METAL_ACCESS_ACTIONS,
     BARE_METAL_OFFERING_MODE,
     BARE_METAL_DOMAIN_IDENTITY,
+    BARE_METAL_LISTING_DELIVERY_TERMS,
     BARE_METAL_SCHEMA_KIND,
+    BARE_METAL_VIEW_DELIVERY_TERMS,
     EXCLUSIVE_ALLOCATION_MODE,
     NODE_GRANT_ACCESS_ACTION,
     NODE_RECLAIM_ACCESS_ACTION,
@@ -121,7 +127,9 @@ __all__ = [
     "BARE_METAL_PROVISION_VERSION",
     "BARE_METAL_PUBLICATION_VIEW",
     "BARE_METAL_DOMAIN_IDENTITY",
+    "BARE_METAL_LISTING_DELIVERY_TERMS",
     "BARE_METAL_SCHEMA_KIND",
+    "BARE_METAL_VIEW_DELIVERY_TERMS",
     "EXCLUSIVE_ALLOCATION_MODE",
     "NODE_GRANT_ACCESS_ACTION",
     "NODE_RECLAIM_ACCESS_ACTION",
@@ -136,12 +144,15 @@ __all__ = [
     "BareMetalAcceptedBinding",
     "BareMetalResult",
     "BareMetalLeaseReadyEvidence",
+    "BareMetalLeaseReadyEvidenceDocument",
+    "BareMetalLeaseReadyResultDocument",
     "BareMetalLeaseReadyResult",
     "CanonicalPrincipal",
     "bare_metal_digest",
     "build_bare_metal_lease_ready_evidence",
     "derive_bare_metal_fulfillment_identity",
-    "BARE_METAL_PROVISIONING_ROUTES",
+    "BARE_METAL_MOCK_OPERATION_PREFIX",
+    "BARE_METAL_MOCK_ROUTE_PREFIX",
     "BareMetalAccessGrant",
     "BareMetalAskingRate",
     "BareMetalListing",
@@ -152,6 +163,7 @@ __all__ = [
     "BareMetalReceipt",
     "BareMetalResourceProjection",
     "BareMetalShapeError",
+    "BareMetalViewProblems",
     "ListingSourceCheck",
     "BareMetalTerms",
     "TrustedBareMetalProjection",

@@ -261,12 +261,22 @@ The `arkhai.payments.v1` seller kit MUST derive a mandate from the exact accepte
 
 ### Requirement: The payments mandate is derived exactly from the Agreement
 
-The mandate's `deal` MUST be `sha256(JCS(agreement))` and its transaction ID `sha256(JCS(mandate))`. It MUST name `settlement_params.payer_account` as `from`, the selected option's payee account as `to`, and one `once` part for the agreed amount and asset. It MUST use the service's published fee policy and the fixed nonce `arkhai.payments.v1`, and authorize `start` and `stop` for buyer and seller and `reverse` for the seller and Arkhai dispute authority.
+The mandate's `deal` MUST be `sha256(JCS(agreement))` and its transaction ID `sha256(JCS(mandate))`. It MUST name `settlement_params.payer_account` as `from`, the selected option's payee account as `to`, and one `once` part for the agreed amount and asset. It MUST use the service's published fee policy and the fixed nonce `arkhai.payments.v1`. The part MUST carry its own lifecycle authorities: `stop` for buyer and seller, each with no notice and the partial period charged; `reverse` for the seller and the Arkhai dispute authority; and an empty `extend`, with a zero maximum hold extension. The mandate MUST NOT carry mandate-level authorities, and a stored mandate that does is refused, never rewritten.
 
 #### Scenario: Hold and approval expiry follow the accepted timing
 
 - **WHEN** a seller derives a mandate from an Agreement accepted at `accepted_at`
 - **THEN** the hold is `ceil(start_utc - accepted_at) + duration_seconds + window` whole seconds, approval expires at `floor(accepted_at) + window`, and fractional timestamps stay unchanged in the Agreement and its deal hash
+
+#### Scenario: The part's own authorities grant nothing beyond immediate stop and reversal
+
+- **WHEN** a seller derives a mandate and the buyer checks it
+- **THEN** both derive the identical mandate, whose one `once` part lets buyer and seller stop it with `P0D` notice and the partial period charged, lets the seller and the dispute authority reverse it, lets nobody extend its hold, and states `maxHoldExtension` `P0D`, and the mandate has no mandate-level `authorities`
+
+#### Scenario: A mandate in the previous wire is refused
+
+- **WHEN** stored settlement data or a counterparty's mandate carries mandate-level `authorities`, or a part without its own authorities or maximum hold extension
+- **THEN** it is refused before any approval or verification, and the stored Agreement bytes and mandate are left as they are
 
 ### Requirement: The buyer approves only a mandate it has checked
 
@@ -354,7 +364,9 @@ A fulfillment attempt MUST report one of three outcomes: fulfilled, failed, or d
 Deferred means work remains that the domain's own convergence will finish: the workload
 exists, but a step after it did not complete. A deferred outcome MUST be persisted through
 the domain, so the domain can leave its deal open; no fulfillment MAY be bound for it, and
-servicing MUST NOT be woken for it.
+servicing MUST NOT be woken for it. A deferred outcome is distinct from a ready step
+awaiting delivery, whose fulfillment has not started and which servicing rechecks every
+cycle.
 
 #### Scenario: A domain defers a fulfillment
 
@@ -429,6 +441,122 @@ an operator, by mechanism status or by any operation.
 
 - **WHEN** obligations wait for an operator by mechanism status or by an operation
 - **THEN** the repository's count includes each such obligation once
+
+### Requirement: Settlement verifies against the accepted plan
+
+Every storefront that settles Alkahest deals MUST verify a buyer's escrow, register its
+obligations, and settle against the settlement plan committed when the deal was
+accepted, and MUST NOT re-derive the plan, its release condition, or its escrow terms
+from the listing as currently stored or from current settlement configuration. Every
+other reader of an accepted deal's settlement terms — an administrator's preview of its
+verification, its oracle evidence's heartbeat interval, and an administrator's interrupt
+deciding whether it is interruptible — MUST read the same plan. A seller's change to its
+release policy, its wallet, or the address-book entries of its release conditions after
+acceptance MUST NOT change how an accepted deal is verified. The address book is read only
+to find the codec of the escrow contract a deal funded, so an address book that stops
+naming that contract leaves the deal unverifiable, and the buyer's escrow reclaimable at
+expiry.
+
+#### Scenario: The seller changes its release policy after acceptance
+
+- **WHEN** a VM, bare-metal, or API-credit deal is accepted under the recipient release
+  model, the seller then configures another model, and the buyer settles an escrow funded
+  under the accepted plan
+- **THEN** settlement verifies the escrow against the accepted plan and proceeds
+
+#### Scenario: The seller's address book moves the arbiter after acceptance
+
+- **WHEN** a deal is accepted and the seller's address book then names another recipient
+  arbiter, and the buyer settles an escrow funded under the accepted plan
+- **THEN** settlement verifies the escrow against the accepted plan and proceeds
+
+#### Scenario: An escrow does not match the accepted plan
+
+- **WHEN** a buyer settles an escrow whose arbiter, demand, token, or contract differs
+  from the accepted plan's obligation
+- **THEN** settlement refuses it, whatever the listing now states
+
+#### Scenario: An administrator previews verification after a policy change
+
+- **WHEN** a seller changes its release policy after acceptance and an administrator
+  previews verification of the deal's escrow
+- **THEN** the preview checks the escrow against the accepted plan and agrees with
+  settlement's verification
+
+### Requirement: A ready step awaiting delivery is rechecked every cycle
+
+A servicing worker's ready step that finds its domain's delivery not yet active, and
+leaves the obligation awaiting delivery, MUST NOT count that as a failed attempt: the
+obligation MUST be due again on the worker's next servicing cycle, and the error backoff
+MUST NOT lengthen. A failed ready step keeps the error backoff.
+
+The settlement operation journal MUST record the wait: a ready step leaves its obligation
+awaiting delivery through the runtime's operation for it, which in one write releases the
+fulfillment lease, returns the attempt its reservation counted, marks the operation
+awaiting delivery while it stays pending, and makes it due at once. The worker MUST read
+the operation after the ready step returns and MUST NOT apply the error backoff to an
+operation awaiting delivery; an operation still pending and not awaiting delivery keeps
+the error backoff. A release that does not know the mark MUST still find the operation
+pending and due.
+
+#### Scenario: Delivery takes several cycles
+
+- **WHEN** a ready step leaves an obligation awaiting delivery because its delivery is not
+  yet active, on several consecutive cycles
+- **THEN** each time the obligation is due on the next cycle, and its attempts are not
+  counted toward the backoff
+
+#### Scenario: The process stops just after the mark is written
+
+- **WHEN** a ready step's awaiting-delivery mark is written and the process stops before
+  the worker schedules anything
+- **THEN** the restarted worker finds the obligation due, its lease free, and the
+  attempt not counted
+
+#### Scenario: A ready step returns without starting or awaiting delivery
+
+- **WHEN** a ready step returns, has not marked its obligation awaiting delivery, and has
+  bound no fulfillment
+- **THEN** the obligation takes the error backoff
+
+#### Scenario: A release without the mark services the obligation
+
+- **WHEN** a release that predates the awaiting-delivery mark runs against a journal
+  holding an operation awaiting delivery
+- **THEN** it finds the operation pending and due, and retries it on the error backoff
+
+#### Scenario: A ready step fails
+
+- **WHEN** a ready step raises
+- **THEN** the obligation is retried after the error backoff, as before
+
+### Requirement: Every failing servicing step is reported
+
+A servicing worker MUST log every step it schedules for retry, naming the obligation, the
+operation, and the error, whether or not an event callback is composed. Each storefront
+that composes the worker MUST compose its event callback.
+
+#### Scenario: A step fails without a callback
+
+- **WHEN** a servicing step fails in a worker composed with no event callback
+- **THEN** the worker logs the retry with the obligation, operation, and error
+
+### Requirement: The settle wait polls through a failed status read
+
+An administrator's settle wait MUST treat a failed read of a settlement's status as a
+poll that did not reach a terminal state, keep polling until its deadline, and on reaching
+the deadline report `ready: false` with the last error.
+
+#### Scenario: The site is briefly unreachable
+
+- **WHEN** one status read during a settle wait fails and a later one reports the
+  settlement terminal
+- **THEN** the wait reports ready
+
+#### Scenario: Every read fails
+
+- **WHEN** every status read until the deadline fails
+- **THEN** the wait reports `ready: false` with the last error, rather than failing
 
 ## Evidence
 

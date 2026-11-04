@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from market_core import ImmutableCodecCapability
+from market_settlement_runtime import MechanismReadiness
 from pydantic import BaseModel, ConfigDict, Field
 
 from arkhai_api_selling.listings import ListingService
@@ -75,8 +76,15 @@ class _Stage:
 class _Composition:
     stages = {"example.escrow.v1": _Stage()}
 
-    async def readiness(self) -> tuple:
-        return ()
+    async def readiness(self, *, accepted_escrows=()) -> tuple:
+        return (
+            MechanismReadiness(
+                mechanism="example.escrow.v1", configured=True, enabled=True, ready=True
+            ),
+        )
+
+    def canonical_mechanism(self, name: str) -> str:
+        return name
 
 
 class _Store:
@@ -121,7 +129,7 @@ async def test_a_listing_is_the_bundles_mapping_of_the_request_over_its_quota_re
     result = await _service(
         store,
         escrow_mechanism="example.escrow.v1",
-        release_conditions=lambda escrows: [{"chain_name": escrows[0]["chain_name"]}],
+        release_conditions=lambda escrows, *, readiness: [{"chain_name": escrows[0]["chain_name"]}],
     ).publish_from_quota(resource_id="quota-a", accepted_escrows=[ESCROW], product="Example")
 
     assert result["registry_status"] == "published"

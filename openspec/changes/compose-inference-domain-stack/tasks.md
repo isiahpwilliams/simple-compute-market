@@ -248,7 +248,7 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       pattern, creating `grant_terms` when absent; `_validate_grant_schema` and
       every earlier step unchanged (review 03 F3 "Validation ordering"; D15 —
       the inference database runs this chain from its first step).
-      *Note:* step `20261030_006_grant_terms` creates the table in explicit DDL,
+      *Note:* step `20261030_007_grant_terms` creates the table in explicit DDL,
       as the chain's other steps write theirs, so it does not follow later edits
       to the model; `run_migrations`' `create_all` creates the table first on a
       fresh or upgraded database, and the step creates it where the chain runs
@@ -363,7 +363,7 @@ and F2; api-family delta "The issuance subject may carry accepted terms" and
       note). **Baseline re-records:** the served OpenAPI gained the optional `service`
       and `resource_id` on `VerifyRequest` and `ConsumeRequest`, and the schema
       baseline (`schema.json`) gained the `grant_terms` table and migration
-      `20261030_006_grant_terms`; both were re-recorded once, in place, from the
+      `20261030_007_grant_terms`; both were re-recorded once, in place, from the
       running service, each diff additions only, on the owner's section 1 decision
       for additive changes.
 - [x] 2.9 **Verification.** `make test-api-authority` (library integration),

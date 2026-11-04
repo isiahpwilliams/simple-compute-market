@@ -6,10 +6,17 @@ with the family's own routes into the table its request authentication reads,
 and VM's typed client signs each request from the declaration naming it.
 
 Order is significant within this tuple: the first declaration whose path fully
-matches decides. The test routes are mounted only under the mock profile.
+matches decides. The mock routes are the compute family's mock mechanism, which
+VM mounts under ``VM_MOCK_ROUTE_MOUNT``; they are mounted only under the mock
+profile.
 """
 
 from __future__ import annotations
+
+from compute_provisioning_contracts import MockRouteMount
+
+#: Where VM mounts the family's mock rule and evaluate-job routes.
+VM_MOCK_ROUTE_MOUNT = MockRouteMount("/test", "provisioning_test")
 
 VM_PROVISIONING_ROUTES = (
     {
@@ -82,82 +89,8 @@ VM_PROVISIONING_ROUTES = (
         "roles": ("admin",),
         "path_resource": ("host", "vm_name"),
     },
-    # Relay administration, the administrator's alone: relays are operator
-    # infrastructure, and no storefront administers them. Ordered so the
-    # token, enable, and disable sub-resources match before the bare relay id
-    # pattern, which would otherwise swallow them and authenticate a rotation
-    # as an ordinary read.
-    {"method": "GET", "path": r"/api/v1/relays/?$", "operation": "provisioning_relays_list", "roles": ("admin",)},
-    {
-        "method": "POST",
-        "path": r"/api/v1/relays/(?P<relay_id>[^/]+)/token",
-        "operation": "provisioning_relay_rotate_token",
-        "roles": ("admin",),
-        "path_resource": "relay_id",
-    },
-    {
-        "method": "POST",
-        "path": r"/api/v1/relays/(?P<relay_id>[^/]+)/enable",
-        "operation": "provisioning_relay_enable",
-        "roles": ("admin",),
-        "path_resource": "relay_id",
-    },
-    {
-        "method": "POST",
-        "path": r"/api/v1/relays/(?P<relay_id>[^/]+)/disable",
-        "operation": "provisioning_relay_disable",
-        "roles": ("admin",),
-        "path_resource": "relay_id",
-    },
-    {
-        "method": "GET",
-        "path": r"/api/v1/relays/(?P<relay_id>[^/]+)",
-        "operation": "provisioning_relay_get",
-        "roles": ("admin",),
-        "path_resource": "relay_id",
-    },
-    {"method": "POST", "path": r"/api/v1/relays/?$", "operation": "provisioning_relay_create", "roles": ("admin",)},
-    {
-        "method": "PATCH",
-        "path": r"/api/v1/relays/(?P<relay_id>[^/]+)",
-        "operation": "provisioning_relay_update",
-        "roles": ("admin",),
-        "path_resource": "relay_id",
-    },
-    {
-        "method": "POST",
-        "path": r"/test/mock-rules",
-        "operation": "provisioning_test_rule_add",
-        "roles": ("admin",),
-    },
-    {
-        "method": "GET",
-        "path": r"/test/mock-rules",
-        "operation": "provisioning_test_rules_list",
-        "roles": ("admin",),
-    },
-    {
-        "method": "DELETE",
-        "path": r"/test/mock-rules/(?P<rule_id>[^/]+)",
-        "operation": "provisioning_test_rule_delete",
-        "roles": ("admin",),
-        "path_resource": "rule_id",
-    },
-    {
-        "method": "POST",
-        "path": r"/test/mock-rules/(?P<rule_id>[^/]+)/resume",
-        "operation": "provisioning_test_rule_resume",
-        "roles": ("admin",),
-        "path_resource": "rule_id",
-    },
-    {
-        "method": "POST",
-        "path": r"/test/evaluate-job",
-        "operation": "provisioning_test_job_evaluate",
-        "roles": ("admin",),
-    },
+    *VM_MOCK_ROUTE_MOUNT.route_declarations(),
 )
-
 
 
 def vm_route(operation: str) -> dict:
@@ -169,4 +102,4 @@ def vm_route(operation: str) -> dict:
     raise KeyError(operation)
 
 
-__all__ = ["VM_PROVISIONING_ROUTES", "vm_route"]
+__all__ = ["VM_MOCK_ROUTE_MOUNT", "VM_PROVISIONING_ROUTES", "vm_route"]

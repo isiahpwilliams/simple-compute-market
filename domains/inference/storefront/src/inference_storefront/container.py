@@ -13,7 +13,7 @@ from arkhai_api_selling.auth import StorefrontAuth
 from arkhai_api_selling.capacity import QuotaCapacity
 from arkhai_api_selling.contributions import ConsumptionRule, SellingContributions
 from arkhai_api_selling.evidence_store import IssuanceEvidenceService, PrivateResultRepository
-from arkhai_api_selling.lifecycle import ContributedLoop, StorefrontLoops
+from arkhai_api_selling.lifecycle import ContributedLoop, ListingSeedProgress, StorefrontLoops
 from arkhai_api_selling.listings import ListingService
 from arkhai_api_selling.persistence import StorefrontSQLiteClient
 from arkhai_api_selling.publication import QuotaPublication, RegistryPublication
@@ -149,7 +149,11 @@ def alkahest_stage(**collaborators: Any) -> AlkahestSellerStage:
         # The inference schema prices escrow per credit.
         "rate_unit": "credit",
         "chains": lambda: config.CHAINS,
-        "seller_wallet": lambda: resolved_seller_wallet or "",
+        "address_books": config.chain_address_books,
+        "seller_wallet": lambda: resolved_seller_wallet or str(config.settings.get("wallet.address", "") or ""),
+        "seller_wallet_key": lambda: str(config.settings.get("wallet.private_key", "") or ""),
+        # The chain clients are built at startup, so no probe is composed.
+        "chain_probe": lambda: None,
         "composition": lambda: resolved_settlement_composition,
         "sqlite_client": lambda: resolved_sqlite_client,
         "backfill_escrows": backfill_escrow_obligation_records,
@@ -187,6 +191,7 @@ STOREFRONT_LOOPS = StorefrontLoops(
     capacity=QUOTA_CAPACITY,
     settings=config.LOOP_SETTINGS,
     contributed_loops=lambda: mechanism_loops(SELLER_STAGES),
+    listing_seed=lambda: resolved_listing_seed,
 )
 
 AUTH = StorefrontAuth(
@@ -231,6 +236,8 @@ resolved_settlement_composition: "SellingSettlementComposition | None" = None
 resolved_issuance_evidence_service: "IssuanceEvidenceService | None" = None
 resolved_private_result_repository: "PrivateResultRepository | None" = None
 resolved_listing_service: "ListingService | None" = None
+#: The configured seed listing's progress; None without a ``[seed]`` table.
+resolved_listing_seed: ListingSeedProgress | None = None
 resolved_negotiation_service: "NegotiationService | None" = None
 resolved_negotiation_runtime: "NegotiationRuntime | None" = None
 resolved_system_service: "SystemService | None" = None
@@ -265,6 +272,7 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     global resolved_issuance_evidence_service
     global resolved_private_result_repository
     global resolved_listing_service
+    global resolved_listing_seed
     global resolved_negotiation_service
     global resolved_system_service
     global resolved_marketplace_signer
@@ -287,6 +295,7 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     resolved_issuance_evidence_service = None
     resolved_private_result_repository = None
     resolved_listing_service = None
+    resolved_listing_seed = None
     resolved_negotiation_service = None
     resolved_system_service = None
     resolved_marketplace_signer = None

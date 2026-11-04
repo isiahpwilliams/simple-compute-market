@@ -23,6 +23,10 @@ _ESCROW = "0x" + "11" * 20
 FLOOR = "quota.floor"
 
 
+#: A proposal selecting the listing's one accepted escrow.
+_SELECTS_ESCROW = {"chain_name": "anvil", "escrow_address": _ESCROW}
+
+
 def _listing(rate="100"):
     return {
         "listing_id": "L-example",
@@ -64,22 +68,69 @@ def _selecting(option):
 
 
 def test_unit_price_from_advertised_rate():
-    assert extract_unit_price_from_order(_listing(rate="250"), noun="credit", floor_key=FLOOR) == 250
+    assert extract_unit_price_from_order(_listing(rate="250"), noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW) == 250
 
 
 def test_unit_price_hidden_reserve_falls_back_then_refuses():
     listing = _listing()
     listing["accepted_escrows"][0]["rates"] = []
-    assert extract_unit_price_from_order(listing, default_min_price="7", noun="credit", floor_key=FLOOR) == 7
+    assert extract_unit_price_from_order(listing, default_min_price="7", noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW) == 7
     with pytest.raises(ValueError, match="hidden reserve"):
-        extract_unit_price_from_order(listing, noun="credit", floor_key=FLOOR)
+        extract_unit_price_from_order(listing, noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW)
+
+
+@pytest.mark.parametrize(
+    "proposal",
+    [
+        pytest.param(None, id="no proposal"),
+        pytest.param({**_SELECTS_ESCROW, "escrow_address": "0x" + "00" * 20}, id="unpinned"),
+        pytest.param({**_SELECTS_ESCROW, "escrow_address": "0x" + "22" * 20}, id="unlisted"),
+    ],
+)
+def test_a_proposal_selecting_nothing_is_priced_from_no_entry(proposal):
+    """Not from the listing's first accepted escrow, nor from the floor: the
+    extractor refuses it, and the round prices it at zero for its guards to
+    refuse."""
+    with pytest.raises(ValueError, match="selects no settlement option"):
+        extract_unit_price_from_order(
+            _listing(rate="250"), noun="credit", floor_key=FLOOR,
+            default_min_price="7", proposal=proposal,
+        )
+    assert seller_reference_amount(
+        _listing(rate="250"), 2, noun="credit", floor_key=FLOOR,
+        default_min_price="7", proposal=proposal,
+    ) == 0
+
+
+def test_a_selection_matching_no_option_is_refused_by_pricing():
+    unknown = {
+        "settlement_selection": {
+            "mechanism": "example.rated.v1",
+            "option_id": "f" * 64,
+            "expiration_unix": 2_000_000_000,
+        }
+    }
+    with pytest.raises(ValueError, match="does not exact-match"):
+        seller_reference_amount(
+            _listing(rate="250"), 2, noun="credit", floor_key=FLOOR,
+            default_min_price="7", proposal=unknown,
+        )
+
+
+def test_a_listing_accepting_no_escrow_prices_an_escrow_from_no_entry():
+    listing = _listing(rate="250")
+    listing["accepted_escrows"] = []
+    assert seller_reference_amount(
+        listing, 2, noun="credit", floor_key=FLOOR, default_min_price="7",
+        proposal=_SELECTS_ESCROW,
+    ) == 0
 
 
 def test_float_floor_is_refused():
     hidden = _listing()
     hidden["accepted_escrows"][0]["rates"] = []
     with pytest.raises(ValueError, match="decimal text"):
-        extract_unit_price_from_order(hidden, default_min_price=1.5, noun="credit", floor_key=FLOOR)
+        extract_unit_price_from_order(hidden, default_min_price=1.5, noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW)
 
 
 def test_a_credit_total_is_exact_and_bounded():
@@ -108,10 +159,14 @@ def test_a_stored_listing_resource_is_read_through_the_domains_schema():
 def test_round_reference_amount_is_exact_for_a_rational_floor_and_a_long_rate():
     hidden = _listing()
     hidden["accepted_escrows"][0]["rates"] = []
-    assert seller_reference_amount(hidden, 3, noun="credit", floor_key=FLOOR, default_min_price="1.5") == 4
+    assert seller_reference_amount(
+        hidden, 3, noun="credit", floor_key=FLOOR, default_min_price="1.5", proposal=_SELECTS_ESCROW
+    ) == 4
 
     long_rate = "123456789012345678901234567"
-    assert seller_reference_amount(_listing(rate=long_rate), 1000, noun="credit", floor_key=FLOOR) == int(long_rate) * 1000
+    assert seller_reference_amount(
+        _listing(rate=long_rate), 1000, noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW
+    ) == int(long_rate) * 1000
 
 
 def test_a_selected_escrow_other_than_the_first_is_the_reference():
@@ -165,13 +220,14 @@ DURATION = {"field": "duration_seconds", "per": "token", "value": "7"}
 
 
 def test_an_escrows_amount_rate_is_its_price_wherever_it_sits_in_the_list():
-    assert extract_unit_price_from_order(_escrow_listing(DURATION, AMOUNT), noun="credit", floor_key=FLOOR) == 100
-    assert extract_unit_price_from_order(_escrow_listing(AMOUNT, DURATION), noun="credit", floor_key=FLOOR) == 100
+    assert extract_unit_price_from_order(_escrow_listing(DURATION, AMOUNT), noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW) == 100
+    assert extract_unit_price_from_order(_escrow_listing(AMOUNT, DURATION), noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW) == 100
 
 
 def test_an_escrow_with_no_amount_rate_falls_to_the_floor():
     assert extract_unit_price_from_order(
-        _escrow_listing(DURATION), noun="credit", floor_key=FLOOR, default_min_price="9"
+        _escrow_listing(DURATION), noun="credit", floor_key=FLOOR, default_min_price="9",
+        proposal=_SELECTS_ESCROW,
     ) == 9
 
 
@@ -186,7 +242,7 @@ def test_an_escrow_with_no_amount_rate_falls_to_the_floor():
 )
 def test_an_ambiguous_or_invalid_escrow_rate_is_refused(rates, refusal):
     with pytest.raises(ValueError, match=refusal):
-        extract_unit_price_from_order(_escrow_listing(*rates), noun="credit", floor_key=FLOOR, default_min_price="9")
+        extract_unit_price_from_order(_escrow_listing(*rates), noun="credit", floor_key=FLOOR, proposal=_SELECTS_ESCROW, default_min_price="9")
 
 
 def test_refusals_name_what_is_sold_by_the_noun_they_are_given():
@@ -194,5 +250,6 @@ def test_refusals_name_what_is_sold_by_the_noun_they_are_given():
         checked_credit_total(True, 1, noun="widget")
     with pytest.raises(ValueError, match="^selected widget escrow rate is not per credit$"):
         extract_unit_price_from_order(
-            _escrow_listing({**AMOUNT, "per": "hour"}), noun="widget", floor_key=FLOOR
+            _escrow_listing({**AMOUNT, "per": "hour"}), noun="widget", floor_key=FLOOR,
+            proposal=_SELECTS_ESCROW,
         )

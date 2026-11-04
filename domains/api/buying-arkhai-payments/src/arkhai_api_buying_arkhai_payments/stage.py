@@ -141,6 +141,9 @@ class PaymentBuyerStage:
     def chain_config_paths(self) -> Mapping[str, str | None]:
         return {}
 
+    def check_configuration(self, document: Mapping[str, Any]) -> None:
+        pass
+
     def negotiation_run_fields(self, options: Any, selected: Any | None) -> Mapping[str, Any]:
         return {}
 
@@ -169,6 +172,10 @@ class PaymentBuyerStage:
 
     def enrich(self, deal: Any) -> None:
         pass
+
+    def listing_record(self, listing: Any) -> dict[str, Any]:
+        # A payment derives from its mandate, which acceptance records.
+        return {}
 
     def listing_rows(self, listing: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
         return ()

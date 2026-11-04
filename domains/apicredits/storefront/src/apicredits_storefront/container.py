@@ -49,6 +49,7 @@ from market_storefront_kit import TradingPause
 from apicredits_storefront.utils import config
 
 if TYPE_CHECKING:
+    from market_alkahest import AlkahestChainProbe
     from market_core import MarketDomainContract
     from core_storefront.services.negotiation_service import NegotiationService
     from market_negotiation_runtime import NegotiationRuntime
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
         SettlementServicingWorker,
         SettlementSQLiteRepository,
     )
+    from arkhai_api_selling.lifecycle import ListingSeedProgress
     from arkhai_api_selling.settlement_composition import SellingSettlementComposition
     from market_identity import Signer
     from market_storefront_kit import StorefrontLoopController
@@ -183,7 +185,10 @@ def alkahest_stage(**collaborators: Any) -> AlkahestSellerStage:
         "fulfils_through_capacity": True,
         "release_models": frozenset({RECIPIENT_RELEASE}),
         "chains": lambda: config.CHAINS,
-        "seller_wallet": lambda: str(config.settings.get("wallet.address", "") or ""),
+        "address_books": config.chain_address_books,
+        "seller_wallet": config.seller_wallet_address,
+        "seller_wallet_key": lambda: str(config.settings.get("wallet.private_key", "") or ""),
+        "chain_probe": lambda: resolved_alkahest_chain_probe,
         "composition": lambda: resolved_settlement_composition,
         "sqlite_client": lambda: resolved_sqlite_client,
         "backfill_escrows": backfill_escrow_obligation_records,
@@ -240,6 +245,7 @@ STOREFRONT_LOOPS = StorefrontLoops(
     capacity=QUOTA_CAPACITY,
     settings=config.LOOP_SETTINGS,
     contributed_loops=lambda: mechanism_loops(SELLER_STAGES),
+    listing_seed=lambda: resolved_listing_seed,
 )
 
 AUTH = StorefrontAuth(
@@ -283,7 +289,12 @@ resolved_failure_policy: "FailurePolicy | None" = None
 resolved_settlement_composition: "SellingSettlementComposition | None" = None
 resolved_issuance_evidence_service: "IssuanceEvidenceService | None" = None
 resolved_private_result_repository: "PrivateResultRepository | None" = None
+#: The probe over each configured chain, owning the live chain-client map;
+#: None while no Alkahest section is configured.
+resolved_alkahest_chain_probe: "AlkahestChainProbe | None" = None
 resolved_listing_service: "ListingService | None" = None
+#: The configured seed listing's progress; None without a ``[seed]`` table.
+resolved_listing_seed: "ListingSeedProgress | None" = None
 resolved_negotiation_service: "NegotiationService | None" = None
 resolved_negotiation_runtime: "NegotiationRuntime | None" = None
 resolved_system_service: "SystemService | None" = None
@@ -315,7 +326,9 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     global resolved_settlement_composition
     global resolved_issuance_evidence_service
     global resolved_private_result_repository
+    global resolved_alkahest_chain_probe
     global resolved_listing_service
+    global resolved_listing_seed
     global resolved_negotiation_service
     global resolved_system_service
     global resolved_marketplace_signer
@@ -336,7 +349,9 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     resolved_settlement_composition = None
     resolved_issuance_evidence_service = None
     resolved_private_result_repository = None
+    resolved_alkahest_chain_probe = None
     resolved_listing_service = None
+    resolved_listing_seed = None
     resolved_negotiation_service = None
     resolved_system_service = None
     resolved_marketplace_signer = None

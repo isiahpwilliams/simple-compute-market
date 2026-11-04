@@ -20,6 +20,8 @@ Semantic correctness of the shell inside those tasks is covered by
 
 from __future__ import annotations
 
+import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -56,6 +58,81 @@ def task_files() -> list[Path]:
             continue
         files.extend(sorted(p for p in tasks.rglob("*.yml") if "backup" not in p.parts))
     return files
+
+
+def syntax_checked_playbooks() -> list[str]:
+    """The playbooks `scripts/validate_playbooks.sh` syntax-checks, as listed."""
+    script = (ROOT / "scripts/validate_playbooks.sh").read_text(encoding="utf-8")
+    match = re.search(r"^PLAYBOOKS=\(\n(.*?)^\)$", script, re.MULTILINE | re.DOTALL)
+    assert match, "validate_playbooks.sh lists no PLAYBOOKS"
+    return match.group(1).split()
+
+
+def refuses_under_every_tag(tasks: list) -> bool:
+    """Whether a parse-only play's first task is a refusal tagged ``always``.
+
+    A tag-selected run skips an untagged task but still runs the ``always`` tasks
+    its imports bring, so only a refusal tagged ``always`` comes first under every
+    ``--tags`` selection. An operator's explicit ``--skip-tags always`` or
+    ``--start-at-task`` still passes over it; no task can refuse those.
+    """
+    first = tasks[0] if tasks else {}
+    tags = first.get("tags", [])
+    tags = [tags] if isinstance(tags, str) else list(tags or [])
+    return "fail" in first and "always" in tags
+
+
+def native_gate_modules() -> list[str]:
+    """The test modules the native Ansible gate runs: its runner's ``NATIVE``.
+
+    Read from the Python the gate passes to its interpreter, as Python, so the
+    list is the one the gate runs whatever the script around it says.
+    """
+    script = (ROOT / "scripts/native_ansible_gate.sh").read_text(encoding="utf-8")
+    match = re.search(r"""<<'EOF'\n(.*?)^EOF$""", script, re.MULTILINE | re.DOTALL)
+    assert match, "native_ansible_gate.sh passes its interpreter no inline Python"
+    for node in ast.parse(match.group(1)).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "NATIVE" for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError("the native gate's runner assigns no NATIVE list")
+
+
+def native_test_modules() -> set[str]:
+    """Every test module that runs a shipped task through a real ansible-playbook:
+    those defining the ``_ansible`` guard that skips them where no supported
+    Ansible and callback are installed."""
+    return {
+        path.name for path in sorted((ROOT / "tests").glob("test_*.py"))
+        if any(
+            isinstance(node, ast.FunctionDef) and node.name == "_ansible"
+            for node in ast.parse(path.read_text(encoding="utf-8")).body
+        )
+    }
+
+
+def included_task_files(path: Path) -> set[str]:
+    """Every task file `path` reaches through include_tasks or import_tasks, and
+    every file those reach, by file name in its tasks directory."""
+    reached: set[str] = set()
+    pending = [path]
+    while pending:
+        document = yaml.safe_load(pending.pop().read_text(encoding="utf-8")) or []
+        stack = list(document)
+        while stack:
+            task = stack.pop()
+            if not isinstance(task, dict):
+                continue
+            for section in BLOCK_KEYWORDS & set(task):
+                stack.extend(task[section] or [])
+            for key in ("include_tasks", "import_tasks"):
+                spec = task.get(key)
+                name = spec if isinstance(spec, str) else (spec or {}).get("file")
+                if name and name not in reached:
+                    reached.add(name)
+                    pending.append(path.parent / name)
+    return reached
 
 
 def walk(tasks: list, path: Path, findings: list[str], where: str = "") -> None:
@@ -157,6 +234,88 @@ class TestPlaybookStructure(unittest.TestCase):
         self.assertTrue(any("import_tasks" in task for task in tasks))
         self.assertFalse(any("include_tasks" in task for task in tasks))
 
+    def test_vm_management_task_files_are_imported_for_the_syntax_check(self) -> None:
+        """So that --syntax-check parses the task files a create, a remove, an
+        undefine, and a capacity check run, which the role reaches only through
+        include_tasks.
+
+        Each is imported statically and in the role's context, the play refuses to
+        run before any import under any tag selection, and `make
+        validate-playbooks` checks it.
+        """
+        path = ANSIBLE / "playbooks/single-tenant/vm-management-task-files.yaml"
+        tasks = yaml.safe_load(path.read_text(encoding="utf-8"))[0]["tasks"]
+        self.assertTrue(refuses_under_every_tag(tasks), tasks[0])
+        self.assertFalse(any(
+            key in task for task in tasks
+            for key in ("include_tasks", "include_role", "import_tasks")
+        ))
+        role_tasks = ANSIBLE / "roles/vm-management/tasks"
+        imported = []
+        for task in tasks[1:]:
+            role = task["import_role"]
+            self.assertEqual(role["name"], "../../roles/vm-management")
+            self.assertTrue((role_tasks / f"{role['tasks_from']}.yml").is_file())
+            imported.append(role["tasks_from"])
+        self.assertEqual(sorted(imported), sorted([
+            "prerequisites", "vm-create", "gpu-virt-install-retry",
+            "gpu-virt-install-multi-retry", "vm-remove", "vm-undefine", "vm-check",
+        ]))
+        self.assertIn(str(path.relative_to(ROOT)), syntax_checked_playbooks())
+
+    def test_vm_setup_task_files_are_imported_for_the_syntax_check(self) -> None:
+        """So that --syntax-check parses every task file that prepares a host,
+        which the vm-setup role reaches only through include_tasks.
+
+        Each file the role's main.yml includes, and each file those include, is
+        imported statically and in the role's context, exactly once; the play
+        refuses to run before any import under any tag selection; and the syntax
+        check lists it.
+        """
+        path = ANSIBLE / "playbooks/host-kit/vm-setup-task-files.yaml"
+        tasks = yaml.safe_load(path.read_text(encoding="utf-8"))[0]["tasks"]
+        self.assertTrue(refuses_under_every_tag(tasks), tasks[0])
+        self.assertFalse(any(
+            key in task for task in tasks
+            for key in ("include_tasks", "include_role", "import_tasks")
+        ))
+        imported = []
+        for task in tasks[1:]:
+            role = task["import_role"]
+            self.assertEqual(role["name"], "../../roles/vm-setup")
+            imported.append(f"{role['tasks_from']}.yml")
+        role_tasks = ANSIBLE / "roles/vm-setup/tasks"
+        self.assertEqual(len(imported), len(set(imported)))
+        self.assertEqual(set(imported), included_task_files(role_tasks / "main.yml"))
+        # Every task file but main.yml is one the role reaches.
+        self.assertEqual(
+            set(imported),
+            {p.name for p in role_tasks.glob("*.yml")} - {"main.yml"},
+        )
+        self.assertIn(str(path.relative_to(ROOT)), syntax_checked_playbooks())
+
+    def test_the_syntax_check_lists_every_playbook_and_both_targets_run_it(self) -> None:
+        """One list, in the script `make validate-playbooks` and the native
+        Ansible gate both run, names every playbook this tree ships."""
+        shipped = {
+            str(p.relative_to(ROOT)) for p in (ANSIBLE / "playbooks").rglob("*.yaml")
+        }
+        listed = syntax_checked_playbooks()
+        self.assertEqual(len(listed), len(set(listed)))
+        self.assertEqual(set(listed), shipped)
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("validate-playbooks:\n\tscripts/validate_playbooks.sh\n", makefile)
+        gate = (ROOT / "scripts/native_ansible_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("\nbash scripts/validate_playbooks.sh\n", gate)
+
+    def test_the_native_gate_runs_every_native_test_module(self) -> None:
+        """A module that skips without a supported Ansible would otherwise skip in
+        the default suite and go unrun by the gate too, with nothing to say so."""
+        listed = native_gate_modules()
+        self.assertEqual(len(listed), len(set(listed)))
+        self.assertTrue(listed)
+        self.assertEqual(set(listed), native_test_modules())
+
     def test_audit_playbook_writes_nothing(self) -> None:
         """The audit runs against hardware nothing else has touched.
 
@@ -189,6 +348,32 @@ class TestPlaybookStructure(unittest.TestCase):
         for task in document:
             if "shell" in task:
                 self.assertEqual(task.get("changed_when"), False, task.get("name"))
+
+
+def _included(task: dict) -> str:
+    """The task file an `include_tasks` task names, or an empty string."""
+    spec = task.get("include_tasks")
+    return spec if isinstance(spec, str) else (spec or {}).get("file", "")
+
+
+def _tags(tags) -> list:
+    if tags is None:
+        return []
+    return [tags] if isinstance(tags, str) else list(tags)
+
+
+def _flatten(tasks: list) -> list:
+    """Every task in a task list, the tasks inside blocks included."""
+    flat = []
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        if set(task) & BLOCK_KEYWORDS:
+            for section in sorted(set(task) & BLOCK_KEYWORDS):
+                flat.extend(_flatten(task[section]))
+        else:
+            flat.append(task)
+    return flat
 
 
 class TestPassthroughSequencing(unittest.TestCase):
@@ -253,13 +438,11 @@ class TestPassthroughSequencing(unittest.TestCase):
 
     def test_the_bind_phase_runs_after_the_reboot(self) -> None:
         tasks = self._tasks("main.yml")
-        names = []
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            spec = task.get("include_tasks")
-            included = spec if isinstance(spec, str) else (spec or {}).get("file", "")
-            names.append(("reboot" if "reboot" in task else included) or "")
+        names = [
+            "reboot" if "reboot" in task else _included(task)
+            for task in tasks
+            if isinstance(task, dict)
+        ]
         reboot = names.index("reboot")
         bind = names.index("gpu-bind.yml")
         self.assertLess(reboot, bind, "gpu-bind.yml runs before the IOMMU reboot")
@@ -290,6 +473,218 @@ class TestPassthroughSequencing(unittest.TestCase):
         )
         self.assertIn("blacklist_host_gpu_drivers", source)
         self.assertIn("rejectattr('bindable') | list | length) == 0", source)
+
+
+class TestHostPreparationFailsClosed(unittest.TestCase):
+    """A host is refused before it changes, and its boot changes only for a GPU.
+
+    Host preparation must fail on a host that cannot run KVM before it
+    configures anything, refuse an override value it does not know, and leave
+    the boot configuration of a host with no GPU as it was.
+    """
+
+    PASSTHROUGH_INCLUDES = (
+        "gpu-passthrough.yml",
+        "rescue-boot-entry.yml",
+        "gpu-detection-service.yml",
+        "gpu-bind.yml",
+    )
+
+    def _main(self) -> list:
+        path = ANSIBLE / "roles/vm-setup/tasks/main.yml"
+        return [t for t in yaml.safe_load(path.read_text(encoding="utf-8")) if isinstance(t, dict)]
+
+    def _index(self, tasks: list, predicate) -> int:
+        return next(i for i, task in enumerate(tasks) if predicate(task))
+
+    def test_host_preparation_defaults_to_the_scratch_image(self) -> None:
+        path = ANSIBLE / "playbooks/host-kit/vm-setup.yaml"
+        (play,) = yaml.safe_load(path.read_text(encoding="utf-8"))
+        image = play["vars"]["vm_image_type"]
+        self.assertIn("image_setup_type", image)
+        self.assertIn("default('scratch')", image)
+
+    def test_the_override_defaults_to_presence(self) -> None:
+        path = ANSIBLE / "roles/vm-setup/defaults/main.yml"
+        defaults = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self.assertEqual(defaults["gpu_passthrough"], "auto")
+
+    def test_the_preconditions_precede_every_change_to_the_host(self) -> None:
+        tasks = self._main()
+        override = self._index(tasks, lambda t: "assert" in t)
+        self.assertEqual(
+            set(tasks[override]["assert"]["that"]),
+            {"gpu_passthrough in ['auto', 'enabled', 'disabled']"},
+        )
+        self.assertIn("gpu_passthrough", tasks[override]["assert"]["fail_msg"])
+        probe = self._index(
+            tasks, lambda t: "shell" in t and "/proc/cpuinfo" in str(t["shell"])
+        )
+        self.assertIn("vmx|svm", tasks[probe]["shell"])
+        self.assertIs(tasks[probe]["changed_when"], False)
+        refusal = self._index(
+            tasks, lambda t: "fail" in t and "cpu_virt_support" in str(t.get("when"))
+        )
+        self.assertIn("Hardware virtualization is unavailable", tasks[refusal]["fail"]["msg"])
+        # The override check is the role's first task and the CPU check follows
+        # it; the first include, system packages, installs software.
+        first_include = self._index(tasks, lambda t: "include_tasks" in t)
+        self.assertEqual((override, probe, refusal), (0, 1, 2))
+        self.assertLess(refusal, first_include)
+        for index in (override, probe, refusal):
+            self.assertIn("always", _tags(tasks[index].get("tags")), tasks[index]["name"])
+
+    def test_passthrough_configuration_follows_the_presence_decision(self) -> None:
+        tasks = self._main()
+        presence = self._index(tasks, lambda t: _included(t) == "gpu-presence.yml")
+        # Both tags: the include's own makes a tag-limited run include it, and
+        # `apply` makes its tasks run there, so the decision every gated
+        # include below reads is always made.
+        self.assertIn("always", _tags(tasks[presence].get("tags")))
+        self.assertIn(
+            "always", _tags(tasks[presence]["include_tasks"]["apply"].get("tags"))
+        )
+        for name in self.PASSTHROUGH_INCLUDES:
+            index = self._index(tasks, lambda t, name=name: _included(t) == name)
+            self.assertLess(presence, index, f"{name} is included before presence is decided")
+            self.assertEqual(
+                tasks[index].get("when"), "gpu_passthrough_configured | bool", name
+            )
+
+    def test_the_presence_decision_honours_the_override(self) -> None:
+        path = ANSIBLE / "roles/vm-setup/tasks/gpu-presence.yml"
+        tasks = yaml.safe_load(path.read_text(encoding="utf-8"))
+        (decision,) = [t for t in tasks if "set_fact" in t]
+        expression = " ".join(decision["set_fact"]["gpu_passthrough_configured"].split())
+        self.assertEqual(
+            expression,
+            "{{ gpu_passthrough == 'enabled' or (gpu_passthrough == 'auto' and "
+            "(gpu_presence_probe.stdout | trim) == 'true') }}",
+        )
+        (probe,) = [t for t in tasks if "shell" in t]
+        self.assertIs(probe["changed_when"], False)
+
+    def test_kvm_setup_refuses_a_host_without_a_kvm_device(self) -> None:
+        path = ANSIBLE / "roles/vm-setup/tasks/kvm-setup.yml"
+        tasks = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # The CPU's extensions are checked once, as the role's precondition; a
+        # second probe here could only disagree with it.
+        self.assertEqual(
+            [t["name"] for t in tasks if "vmx" in str(t.get("shell", ""))], []
+        )
+        loaded = max(
+            i for i, t in enumerate(tasks) if "modprobe" in str(t.get("shell", ""))
+        )
+        stat = self._index(
+            tasks, lambda t: (t.get("stat") or {}).get("path") == "/dev/kvm"
+        )
+        refusal = self._index(
+            tasks, lambda t: "fail" in t and "kvm_device" in str(t.get("when"))
+        )
+        self.assertLess(loaded, stat)
+        self.assertLess(stat, refusal)
+        self.assertIn("Hardware virtualization is unavailable", tasks[refusal]["fail"]["msg"])
+
+
+class TestSshRestartHandler(unittest.TestCase):
+    """The SSH hardening takes effect, or preparation fails.
+
+    Security hardening writes sshd_config and notifies a handler to restart the
+    daemon. The daemon's unit is `ssh` on the Debian family, where `sshd` is at
+    most an alias (a default Ubuntu 24.04 install has none), and `sshd`
+    elsewhere; a handler that
+    ignored a failed restart would leave the hardening unapplied, unnoticed, on
+    any run that does not reboot after it.
+    """
+
+    ROLE = ANSIBLE / "roles/vm-setup"
+    HANDLER = "restart sshd"
+    UNIT = "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+    SSHD_CONFIG = "/etc/ssh/sshd_config"
+
+    SERVICE_MODULES = {"systemd", "systemd_service", "service"}
+    COMMAND_MODULES = {"shell", "command", "raw"}
+
+    # A service manager given a unit named literally `sshd`, whatever the
+    # action or flags, within one command of a shell line.
+    LITERAL_SSHD_COMMAND = re.compile(
+        r"\b(?:systemctl|service|invoke-rc\.d)\b[^\n;&|]*?"
+        r"(?<![\w.-])sshd(?:\.service)?(?![\w.-])"
+    )
+
+    @staticmethod
+    def _module(key: str) -> str:
+        """A module key without its collection, so `ansible.builtin.x` is `x`."""
+        return key.rsplit(".", 1)[-1]
+
+    def _handlers(self) -> list:
+        path = self.ROLE / "handlers/main.yml"
+        return _flatten(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+    def _role_tasks(self) -> list[tuple[Path, dict]]:
+        # Only what the role runs: tasks and handlers. `templates/` and `files/`
+        # hold what it writes onto the host or into an image. The one of them
+        # that restarts `sshd`, the guest cloud-init `user-data.j2`, is rendered
+        # only by the golden image build; scratch guests take their cloud-init
+        # from vm-management's vm-create.yml, which tries `ssh` before `sshd`.
+        found = []
+        for path in sorted((self.ROLE / "tasks").rglob("*.yml")) + [
+            self.ROLE / "handlers/main.yml"
+        ]:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            found.extend((path, task) for task in _flatten(document))
+        return found
+
+    def test_the_handler_restarts_the_os_familys_unit_and_fails_on_error(self) -> None:
+        (handler,) = [h for h in self._handlers() if h.get("name") == self.HANDLER]
+        (spec,) = [v for k, v in handler.items() if self._module(k) == "systemd"]
+        self.assertEqual(" ".join(spec["name"].split()), self.UNIT)
+        self.assertEqual(spec["state"], "restarted")
+        self.assertNotIn("ignore_errors", handler)
+        self.assertNotIn("failed_when", handler)
+
+    def test_every_notify_in_the_role_names_a_handler(self) -> None:
+        handlers = set()
+        for handler in self._handlers():
+            handlers.add(handler.get("name"))
+            handlers.update(_tags(handler.get("listen")))
+        unresolved = []
+        for path, task in self._role_tasks():
+            for name in _tags(task.get("notify")):
+                if name not in handlers:
+                    unresolved.append(f"{path.relative_to(ROOT)}: {task.get('name')}: {name}")
+        self.assertEqual(unresolved, [])
+
+    def test_every_write_to_sshd_config_notifies_the_restart(self) -> None:
+        writers = []
+        for path, task in self._role_tasks():
+            for key, spec in task.items():
+                if key in TASK_KEYWORDS or not isinstance(spec, dict):
+                    continue
+                if str(spec.get("path") or spec.get("dest") or "") == self.SSHD_CONFIG:
+                    writers.append(task.get("name"))
+                    self.assertIn(
+                        self.HANDLER, _tags(task.get("notify")),
+                        f"{path.relative_to(ROOT)}: {task.get('name')}",
+                    )
+        self.assertTrue(writers, "no task in the role writes sshd_config")
+
+    def test_nothing_in_the_role_hands_a_service_manager_a_literal_sshd_unit(self) -> None:
+        offenders = []
+        for path, task in self._role_tasks():
+            where = f"{path.relative_to(ROOT)}: {task.get('name')}"
+            for key, spec in task.items():
+                module = self._module(key)
+                if module in self.SERVICE_MODULES and isinstance(spec, dict):
+                    if str(spec.get("name", "")).strip() in ("sshd", "sshd.service"):
+                        offenders.append(f"{where}: {key} names sshd")
+                if module in self.COMMAND_MODULES:
+                    body = spec
+                    if isinstance(spec, dict):
+                        body = spec.get("cmd") or " ".join(spec.get("argv") or [])
+                    if isinstance(body, str) and self.LITERAL_SSHD_COMMAND.search(body):
+                        offenders.append(f"{where}: {key} names sshd to a service manager")
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":

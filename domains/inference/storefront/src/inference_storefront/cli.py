@@ -113,7 +113,7 @@ def publish_cmd(
     import inference_storefront.container as _container
     from inference_storefront.domain_runtime import get_market_domain_contract
     from inference_storefront.server import _build_inference_services
-    from inference_storefront.utils.config import CHAINS
+    from inference_storefront.utils.config import CHAINS, chain_address_books
 
     escrow_requested = any(
         value is not None for value in (price_per_token, token, chain)
@@ -137,11 +137,14 @@ def publish_cmd(
 
         address_config_path = None
         if not escrow_address:
-            chain_cfg = CHAINS.get(chain)
-            if chain_cfg is None:
+            if chain not in CHAINS:
                 typer.echo(f"chain {chain!r} is not configured", err=True)
                 raise typer.Exit(code=2)
-            address_config_path = chain_cfg.alkahest_address_config_path
+            try:
+                address_config_path = chain_address_books()[chain]
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(code=2) from exc
         accepted_escrows = [
             _container.ALKAHEST_STAGE.accepted_escrow(
                 chain_name=chain,

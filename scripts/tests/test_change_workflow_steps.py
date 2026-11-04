@@ -57,12 +57,14 @@ def test_the_step_table_names_each_step() -> None:
 
 
 def test_each_step_runs_on_the_models_its_work_needs() -> None:
-    """Design, triage, implementation, and closeout on Opus at high effort; validation
-    and archive cleanup on Sonnet at medium; the review on Codex, then Claude."""
+    """Design, triage, implementation, the merge, and closeout on Opus at high effort;
+    validation and archive cleanup on Sonnet at medium; the review on Codex, then
+    Claude."""
     models = {name: rules.models for name, rules in load_steps().items()}
 
     assert models == {"design": (OPUS,), "plan": (OPUS,), "triage": (OPUS,),
-                      "implement": (OPUS,), "closeout": (OPUS,), "validate": (SONNET,),
+                      "implement": (OPUS,), "merge": (OPUS,), "closeout": (OPUS,),
+                      "validate": (SONNET,),
                       "archive-cleanup": (SONNET,),
                       "review": (Model("codex", "gpt-6-sol", "high"), OPUS)}
 
@@ -116,15 +118,51 @@ def test_a_row_naming_models_the_policy_forbids_is_refused(
 
 PUSHES = ["git push origin HEAD", "make push-branch", "uv run git push",
           "uv run bash -c 'git push'", "make run-e2e", "docker push registry/image",
-          "helm push chart.tgz oci://registry"]
+          "helm push chart.tgz oci://registry", "make push-branch FORCE=1",
+          "git -C ../workspace push"]
+COMMITTING = {"design", "plan", "implement", "triage", "merge", "closeout", "archive-cleanup"}
 
 
-def test_no_step_may_push_except_validations_guarded_push() -> None:
+def test_each_committing_step_pushes_only_through_the_guarded_push() -> None:
+    """Validation pushes the commit it validates and dispatches the pipeline; every
+    step that commits work pushes it; the review pushes nothing."""
     for name, rules in load_steps().items():
         assert "Bash(git push*)" in rules.deny
         allowed = [command for command in PUSHES if _allows(rules, command)]
         assert allowed == (["make push-branch", "make run-e2e"] if name == "validate"
+                           else ["make push-branch"] if name in COMMITTING
                            else []), name
+
+
+def test_only_validation_dispatches_a_ci_workflow() -> None:
+    """The dispatch itself refuses a workflow off its list; the table keeps every
+    other step from dispatching at all."""
+    for name, rules in load_steps().items():
+        assert _allows(rules, "make run-ci WORKFLOW=tests.yml") == (name == "validate"), name
+
+
+def test_every_step_that_commits_its_work_may_commit_and_no_other() -> None:
+    for name, rules in load_steps().items():
+        commits = name in COMMITTING
+        assert _allows(rules, "git add scripts/x.py") == commits, name
+        assert _allows(rules, "git commit -m x") == commits, name
+
+
+def test_triage_and_implementation_may_pull_from_the_workspace_with_ff_only() -> None:
+    for name, rules in load_steps().items():
+        pulls = name in ("triage", "implement")
+        assert _allows(rules, f"git pull --ff-only workspace feat/{CHANGE}") == pulls, name
+        assert not _allows(rules, f"git pull workspace feat/{CHANGE}"), name
+        assert not _allows(rules, f"git pull --no-rebase workspace feat/{CHANGE}"), name
+        assert not _allows(rules, f"git pull --ff-only origin feat/{CHANGE}"), name
+
+
+def test_no_step_runs_git_in_another_checkout() -> None:
+    """A wildcard after `git -C` would also span a push no deny rule names in that
+    form, and a step already runs in the checkout it reads."""
+    for name, rules in load_steps().items():
+        assert not _allows(rules, "git -C ../workspace status"), name
+        assert not _allows(rules, "git -C ../workspace log --oneline"), name
 
 
 def test_every_step_may_check_that_no_round_view_is_open() -> None:
@@ -200,6 +238,24 @@ def test_archive_cleanup_may_write_only_the_index_and_its_pull_request_draft() -
     assert _allows_edit(rules, "Edit", "openspec/changes/README.md")
     assert not _allows_edit(rules, "Write", f"{archived}/specs/pools/spec.md")
     assert not any(rule.startswith("Write(") for rule in rules.allow)
+
+
+def test_the_merge_merges_a_fetched_branch_and_never_abandons_a_merge() -> None:
+    """Whichever branch the change lands on, from origin or, in a clone, the owner's
+    workspace; a merge stopped at its conflicts stays in progress for the owner, so
+    nothing the step may run abandons it or moves the branch."""
+    rules = load_steps()["merge"]
+
+    for remote, branch in (("origin", "dev"), ("origin", "release/2.1"),
+                           ("workspace", "feat/prerequisite")):
+        assert _allows(rules, f"git fetch {remote} {branch}")
+        assert _allows(rules, f"git merge --no-edit {remote}/{branch}")
+    assert _allows(rules, "make lock") and _allows(rules, "git commit -m x")
+    for command in ("git merge --abort", "git merge --quit", "git merge origin/main",
+                    "git merge --no-edit HEAD~3", "git pull origin dev",
+                    "git checkout --theirs uv.lock", "git reset --hard ORIG_HEAD",
+                    "make run-e2e"):
+        assert not _allows(rules, command), command
 
 
 def test_every_step_may_compute_the_next_step_and_read_the_log() -> None:

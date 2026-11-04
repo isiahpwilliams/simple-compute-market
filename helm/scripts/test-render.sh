@@ -225,7 +225,7 @@ expect_present "$TWO_REGISTRIES_RENDERED" 'name: +'"$RELEASE"'-registries-regist
 expect_present "$TWO_REGISTRIES_RENDERED" 'name: +'"$RELEASE"'-registries-api-credits-registry' "dual render creates an independent API-credits Service"
 
 expect_present "$PAYMENTS_DEPLOYMENT" 'name: +\"?payments-bob-marketplace-identity\"?' "wallet-free signer comes from a Secret reference"
-expect_absent "$PAYMENTS_DEPLOYMENT" 'wait-for-rpc|CHAIN_ID|RPC_URL' "wallet-free storefront pod omits chain readiness"
+expect_absent "$PAYMENTS_DEPLOYMENT" 'CHAIN_ID|RPC_URL' "wallet-free storefront pod omits chain configuration"
 expect_absent "$PAYMENTS_DEPLOYMENT" 'STOREFRONT_SETTLEMENT__HOSTED|HOSTED_SETTLEMENT' "wallet-free storefront pod emits no legacy settlement environment"
 expect_absent "$PAYMENTS_REGISTRY" 'CHAIN_ID|RPC_URL' "wallet-free registry pod omits chain configuration"
 expect_present "$PAYMENTS_REGISTRY" 'name: +REGISTRY_AUTHORITY_SCHEME' "wallet-free registry renders its public signer scheme"
@@ -248,7 +248,6 @@ expect_present "$PAYMENTS_RENDERED" 'image: +[^[:space:]]+@sha256:44444444444444
 expect_absent "$PAYMENTS_RENDERED" 'kind: +Secret|sshPrivateKey|golden_root_ssh_password|relay_token' "wallet-free chart renders only pre-existing Secret references"
 
 expect_absent "$OVERLAP_PROVISIONING_CONFIGMAP" '^[[:space:]]+principals:' "overlap profile keeps provisioning bootstrap identities singular"
-expect_present "$EVM_DEPLOYMENT" 'wait-for-rpc' "EVM profile retains chain readiness"
 expect_present "$EVM_DEPLOYMENT" 'name: +\"?evm-bob-marketplace-identity\"?' "EVM marketplace signer is Secret-referenced"
 expect_present "$EVM_DEPLOYMENT" 'secretName: +\"?evm-bob-runtime\"?' "EVM wallet overlay is Secret-referenced"
 expect_absent "$EVM_RENDERED" 'private_key|privateKey|request_credential|sshPrivateKey|golden_root_ssh_password|relay_token' "EVM manifests reference secrets without embedding keys"
@@ -286,6 +285,23 @@ expect_override_failure \
     "$CHART_DIR/fixtures/payments-ed25519-values.yaml" \
     "public registry with an acquisition pointer fails render" \
     --set-string 'registry.descriptor.accessAcquisitionPointer=https://registry.example/access'
+# The provisioning chart derives every definition document's path from its
+# `definitions` value, and the service refuses the retired inventory settings,
+# so a release stating any of them under provisioning `config` fails to render,
+# naming the key; a render failing for another reason does not count.
+for refused in host_definitions_path relay_definitions_path inventory_path inventory_ini; do
+    label="provisioning.config.$refused fails render naming the key"
+    if refusal="$(helm template "$RELEASE-invalid" "$CHART_DIR" \
+        --values "$CHART_DIR/values.yaml" \
+        --values "$CHART_DIR/fixtures/payments-ed25519-values.yaml" \
+        --set-string "provisioning.config.$refused=/app/config/elsewhere.yaml" 2>&1 >/dev/null)"; then
+        fail "$label"
+    elif grep -q "$refused" <<<"$refusal"; then
+        pass "$label"
+    else
+        fail "$label"
+    fi
+done
 # Each chart's own render tests (docs/development/TESTING.md, "Chart Render
 # Tests"), so this one target runs every render check. The storefront and
 # bare-metal storefront charts' tests also load a rendered document with that

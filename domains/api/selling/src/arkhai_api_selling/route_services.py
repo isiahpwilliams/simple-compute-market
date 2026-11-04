@@ -62,7 +62,7 @@ from market_storefront_kit import (
 from pydantic import ValidationError
 
 from arkhai_api_selling.issuance import SettlementRefusal, accepted_agreement
-from arkhai_api_selling.listings import ListingService
+from arkhai_api_selling.listings import ListingService, SettlementMechanismUnreachable
 from arkhai_api_selling.publish_route import PublishFromQuotaRequest, PublishFromQuotaResponse
 from arkhai_api_selling.system import SystemService
 
@@ -198,6 +198,10 @@ class ListingRoutes:
                 paused=body.paused,
                 **body.listing_request(),
             )
+        except SettlementMechanismUnreachable as exc:
+            # Retryable: the resource, its pool, and the configuration were found
+            # sound, and a mechanism the request uses has not been reached yet.
+            raise RouteRefusal(503, str(exc)) from exc
         except ValueError as exc:
             raise RouteRefusal(400, str(exc)) from exc
         except Exception as exc:
@@ -632,7 +636,10 @@ class SettleRoutes:
             is_terminal=lambda status: status.get("status") in {"ready", "failed"},
         ).wait(escrow_uid, timeout=timeout)
         return SettleWaitResponse(
-            ready=waited["ready"], status=waited["status"], elapsed_ms=waited["elapsed_ms"]
+            ready=waited["ready"],
+            status=waited["status"],
+            elapsed_ms=waited["elapsed_ms"],
+            last_error=waited.get("last_error"),
         )
 
     async def refund(self, negotiation_id: str) -> SettleOutcome:

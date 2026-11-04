@@ -50,13 +50,16 @@ from market_identity import (
 from compute_provisioning_client import ComputeProvisioningError, SyncComputeProvisioningClient
 from compute_provisioning_contracts import ConnectionSubmission, HostCreate
 from market_resource_pools_client import SyncResourcePoolClient
+from storefront_client import SyncStorefrontClient
 from vm_provisioning_operator import SyncVmOperatorClient
 from e2e_harness.settings import settings
 from e2e_harness.provisioning_test_client import ProvisioningTestClient
-from tests.e2e.roles.helpers.compute_deal import SiteCapacity, convergence_paused
+from tests.e2e.roles.helpers import compute_deal
+from tests.e2e.roles.helpers.compute_deal import SiteCapacity
 from tests.e2e.roles.helpers.compute_deal_stages import ComputeDealState
 from tests.e2e.roles.helpers.domain_deal import require_state
 from tests.e2e.roles.scenarios.vms.compute_deal_driver import VmComputeDealDriver
+from tests.e2e.roles.scenarios.vms.host_registry import resource_gpus
 
 log = logging.getLogger(__name__)
 
@@ -78,9 +81,11 @@ class DealState(ComputeDealState):
     # VM's own stage of the typed-client deal: 03a validates the publish 03b
     # performs.
     _registry_validate_passed: bool = False
-    # The buyer-CLI and one-shot scenarios' own sentinels: the listing resumed
-    # into publication, the executor host registered, and the capacity-event
-    # loop stepped (`B4c` and the buyer-CLI deal's capacity-event stage).
+    # The buyer-CLI and one-shot scenarios' own sentinels: provisioning runs its
+    # mock profile, the listing resumed into publication, the executor host
+    # registered, and the capacity-event loop stepped (`B4c` and the buyer-CLI
+    # deal's capacity-event stage).
+    _provisioning_mock_mode: bool = False
     resume_confirmed: bool = False
     _executor_host_registered: bool = False
     _capacity_events_advanced: bool = False
@@ -127,9 +132,7 @@ def signed_listing_read_headers(listing_id: str) -> dict[str, str]:
     The signed body must match what the route hashes, which for a query-less
     GET is an empty query list rather than an empty body.
     """
-    signer = _signer(
-        "eip191", settings.BUYER.MARKETPLACE_CREDENTIAL, "BUYER.MARKETPLACE_CREDENTIAL"
-    )
+    signer = _buyer_signer()
     authenticated = sign_request(
         signer=signer,
         envelope=RequestEnvelope(
@@ -170,10 +173,15 @@ def capacity_source_for(resource: dict[str, Any], *, site_id: str | None = None)
     resource publishes, so this is derived from the resource rather than
     restated alongside it — a hand-written copy is a second place that has to
     stay in sync.
+
+    The GPU family appears only for a resource that carries GPUs
+    (`resource_gpus`); a GPU-less shape states its CPU, memory, and storage
+    alone.
     """
-    shape: dict[str, dict[str, Any]] = {
-        "gpu": {"count": resource.get("gpu_count", 1), "model": resource["gpu_model"]},
-    }
+    shape: dict[str, dict[str, Any]] = {}
+    gpus = resource_gpus(resource)
+    if gpus is not None:
+        shape["gpu"] = {"count": gpus[0], "model": gpus[1]}
     for family, field_name, published in (
         ("cpu", "count", "vcpu_count"),
         ("memory", "gib", "ram_gb"),
@@ -221,17 +229,39 @@ def _trust(*identifiers: str, scheme: str = "eip191"):
     )
 
 
-def _publisher_trust():
-    """The storefront's publishing principal, pinned for response verification."""
-
-    return _trust(
-        _signer(
-            settings.SELLER.get("admin_scheme", "eip191"),
-            settings.SELLER.PRIVATE_KEY,
-            "SELLER.PRIVATE_KEY",
-        ).identity.identifier
+def _buyer_signer():
+    return _signer(
+        settings.BUYER.get("marketplace_scheme", "eip191"),
+        settings.BUYER.MARKETPLACE_CREDENTIAL,
+        "BUYER.MARKETPLACE_CREDENTIAL",
     )
 
+
+def _seller_signer():
+    credential = settings.SELLER.get("marketplace_credential")
+    if credential:
+        return _signer(
+            settings.SELLER.get("marketplace_scheme", "eip191"),
+            credential,
+            "SELLER.MARKETPLACE_CREDENTIAL",
+        )
+    return _signer(
+        settings.SELLER.get("marketplace_scheme", "eip191"),
+        settings.SELLER.PRIVATE_KEY,
+        "SELLER.PRIVATE_KEY",
+    )
+
+
+def _publisher_trust():
+    """The storefront's publishing principal, pinned for response verification."""
+    return TrustedIdentitySet(identities=(_seller_signer().identity,))
+
+
+def _registry_trust():
+    return _trust(
+        _require_setting(settings.REGISTRY.get("identifier", ""), "REGISTRY.IDENTIFIER"),
+        scheme=str(settings.REGISTRY.get("authority_scheme", "eip191") or "eip191"),
+    )
 
 
 def _provisioning_admin_signer():
@@ -281,7 +311,7 @@ def site_capacity_admin_client():
     url = _require_setting(settings.PROVISIONING.API_URL, "PROVISIONING.API_URL")
     return SiteCapacityAdminClient(
         url,
-        _signer("eip191", settings.SELLER.PRIVATE_KEY, "SELLER.PRIVATE_KEY"),
+        _seller_signer(),
         _provisioning_authority_trust(),
     )
 
@@ -301,6 +331,67 @@ def one_site(report: dict) -> dict:
     return sites[0]
 
 
+def step_listing_reconciliation(storefront_admin_client) -> tuple[int, int]:
+    """Step the held capacity-event loop once a deal has reserved capacity, and
+    return how many events were pending and how many the steps applied.
+
+    The settle path reserves capacity and leaves the derived-listing
+    reconciliation to the capacity-delta subscriber, which a module holding the
+    storefront's loops holds too, so a listing closes only once a stage steps it.
+
+    Dry run first, while the listing is still open: that is the cause, named,
+    and separable from the effect a later stage asserts. Projections are
+    refreshed before the deltas are applied, because the close path decides
+    from the storefront's own projection cache, and applying the deltas against
+    a pre-deal projection closes nothing however many of them there are.
+    """
+    preview = compute_deal.dry_run_storefront(storefront_admin_client, "capacity-events")
+    pending = one_site(preview)
+    assert pending["error"] is None, (
+        f"capacity-event dry run failed for site {pending['site']!r}: "
+        f"{pending['error']}"
+    )
+    assert not pending["would_position"], (
+        "the dry run would position at the feed head rather than apply "
+        "this deal's events, so the poller's cursor was lost"
+    )
+    assert pending["pending_count"] >= 1, (
+        "the deal reserved capacity, so its authority has events waiting; "
+        f"the feed reports none (cursor={pending['cursor']!r} "
+        f"head={pending['feed_head']!r})"
+    )
+
+    projections = compute_deal.advance_storefront(storefront_admin_client, "site-projections")
+    assert projections.get("sites"), (
+        "the site-projections advance reported no site state, so the "
+        "projection the close path reads was not refreshed and the "
+        "capacity cycle below would decide from stale availability"
+    )
+
+    applied_total = 0
+    for step in range(5):
+        cycle = one_site(
+            compute_deal.advance_storefront(storefront_admin_client, "capacity-events")
+        )
+        assert cycle["error"] is None, (
+            f"capacity-event cycle {step} failed for site "
+            f"{cycle['site']!r}: {cycle['error']}"
+        )
+        applied_total += int(cycle["applied_count"])
+        if not cycle["truncated"]:
+            break
+    else:
+        raise AssertionError(
+            "capacity-event feed still reports a truncated page after "
+            f"five cycles (applied {applied_total} events)"
+        )
+    assert applied_total >= pending["pending_count"], (
+        f"the advance applied {applied_total} event(s) where the dry run "
+        f"named {pending['pending_count']} pending"
+    )
+    return pending["pending_count"], applied_total
+
+
 # ---------------------------------------------------------------------------
 # Module-scoped fixtures
 # ---------------------------------------------------------------------------
@@ -318,7 +409,7 @@ def storefront_client():
     url = _require_setting(settings.SELLER.API_URL, "SELLER.API_URL")
     client = SyncStorefrontClient(
         url,
-        _signer("eip191", settings.BUYER.MARKETPLACE_CREDENTIAL, "BUYER.MARKETPLACE_CREDENTIAL"),
+        _buyer_signer(),
         caller_role="buyer",
         expected_publishers=_publisher_trust(),
     )
@@ -338,7 +429,7 @@ def storefront_seller_client():
     url = _require_setting(settings.SELLER.API_URL, "SELLER.API_URL")
     client = SyncStorefrontClient(
         url,
-        _signer("eip191", settings.SELLER.PRIVATE_KEY, "SELLER.PRIVATE_KEY"),
+        _seller_signer(),
         caller_role="seller",
         expected_publishers=_publisher_trust(),
     )
@@ -373,19 +464,18 @@ def storefront_admin_client():
 
 @pytest.fixture(scope="module")
 def storefront_service_client():
-    """Service-role storefront client: the provisioning peer's callbacks.
+    """Service-role storefront client: the provisioning peer's callback.
 
-    Fulfillment events -- usage started, capacity released, fulfillment failed
-    -- are delivered by the provisioning service, not by an operator. The
-    storefront authenticates them against its one configured service peer, so
-    this signs as the provisioning service's own principal rather than as the
-    administrator.
+    The capacity-released callback is delivered by the provisioning service,
+    not by an operator. The storefront authenticates it against its one
+    configured service peer, so this signs as the provisioning service's own
+    principal rather than as the administrator.
 
-    A scenario that needs to drive one of those events stands in for the peer,
-    and does it through the public typed methods. Reaching into the client's
-    private `_post` and `_admin_headers` instead — which is what these
-    scenarios used to do — bypasses the signed-request construction the client
-    exists to own, so the call keeps working while the real path is broken.
+    A scenario that needs to drive the callback stands in for the peer, and
+    does it through the public typed method. Reaching into the client's
+    private `_post` and `_admin_headers` instead bypasses the signed-request
+    construction the client exists to own, so the call keeps working while the
+    real path is broken.
     """
     from storefront_client import SyncStorefrontClient
 
@@ -417,11 +507,9 @@ def registry_client():
     url = _require_setting(settings.REGISTRY.API_URL, "REGISTRY.API_URL")
     client = SyncRegistryClient(
         url,
-        signer=_signer("eip191", settings.BUYER.MARKETPLACE_CREDENTIAL, "BUYER.MARKETPLACE_CREDENTIAL"),
+        signer=_buyer_signer(),
         caller_role="buyer",
-        expected_registries=_trust(_require_setting(
-            settings.REGISTRY.get("identifier", ""), "REGISTRY.IDENTIFIER"
-        )),
+        expected_registries=_registry_trust(),
         registry_authority=_require_setting(
             settings.REGISTRY.get("authority_id", ""), "REGISTRY.AUTHORITY_ID"
         ),
@@ -438,11 +526,9 @@ def registry_seller_client():
     url = _require_setting(settings.REGISTRY.API_URL, "REGISTRY.API_URL")
     client = SyncRegistryClient(
         url,
-        signer=_signer("eip191", settings.SELLER.PRIVATE_KEY, "SELLER.PRIVATE_KEY"),
+        signer=_seller_signer(),
         caller_role="seller",
-        expected_registries=_trust(_require_setting(
-            settings.REGISTRY.get("identifier", ""), "REGISTRY.IDENTIFIER"
-        )),
+        expected_registries=_registry_trust(),
         registry_authority=_require_setting(
             settings.REGISTRY.get("authority_id", ""), "REGISTRY.AUTHORITY_ID"
         ),
@@ -479,7 +565,7 @@ def provisioning_client():
 
 @pytest.fixture(scope="module")
 def vm_operator_client(provisioning_client) -> SyncVmOperatorClient:
-    """VM's operations, relays, and lease routes over the family client's transport."""
+    """VM's operations and host capacity routes over the family client's transport."""
     return SyncVmOperatorClient(provisioning_client)
 
 
@@ -520,12 +606,12 @@ def _ensure_provisioning_host_registered(provisioning_client):
     """Idempotently register the e2e ``kvm1`` host in the provisioning service.
 
     The scenario's seeded resource row declares ``attribute.vm_host=kvm1``,
-    so phase 08c's ``/test/evaluate-job`` lookup requires a matching row
+    so phase 08c's job evaluation (``vm_rules.evaluate_job``) requires a matching row
     in the provisioning ``hosts`` table. Compose-launched provisioning
-    starts with an empty inventory (no ``inventory_ini``/``inventory_path``
-    configured); production deployments seed the table via Helm secret
-    or a bind-mounted IaC inventory. Inserting the row here keeps the
-    e2e scenario hermetic and idempotent across re-runs.
+    starts with no host definitions document configured, so it registers no
+    host; a deployment declares its hosts in one, mounted through Compose or
+    the provisioning chart's ``definitions.hosts``. Registering the host here
+    keeps the e2e scenario hermetic and idempotent across re-runs.
 
     The credentials are stub values (path-type, fake path) - mock
     provisioning never SSHes into the host, so they never get used.
@@ -547,9 +633,9 @@ def _ensure_provisioning_host_registered(provisioning_client):
         host_id=host_name,
         connection=ConnectionSubmission(
             kind="ssh",
+            version=2,
             public={"ssh_host": "127.0.0.1", "ssh_user": "stub", "key_path": "/tmp/stub-e2e-key"},
         ),
-        gpu_count=1,
         enabled=True,
     )
     try:
@@ -561,7 +647,7 @@ def _ensure_provisioning_host_registered(provisioning_client):
 
 @pytest.fixture(scope="module")
 def buyer_config() -> dict[str, str]:
-    """Buyer wallet credentials for signing negotiate/settle requests."""
+    """EVM wallet inputs for the selected on-chain settlement, separate from identity."""
     private_key = str(settings.BUYER.PRIVATE_KEY or "")
     wallet_address = str(settings.BUYER.WALLET_ADDRESS or "")
     if not private_key or not wallet_address:
@@ -597,9 +683,7 @@ def seller_wallet() -> str:
 @pytest.fixture(scope="module")
 def buyer_principal():
     """The buyer's marketplace principal, as the buyer clients sign it."""
-    return _signer(
-        "eip191", settings.BUYER.MARKETPLACE_CREDENTIAL, "BUYER.MARKETPLACE_CREDENTIAL"
-    ).identity
+    return _buyer_signer().identity
 
 
 @pytest.fixture(scope="module")
@@ -628,10 +712,18 @@ def deal_driver(
 
 
 # ---------------------------------------------------------------------------
-# Teardown — ensure global pause is cleared after each test module run
+# Module cleanup — `ensure_storefront_resumed`, `reap_buyer_settle_subprocess`,
+# and `release_reserved_resources`
 # ---------------------------------------------------------------------------
+#
+# Every module takes all three with `pytest.mark.usefixtures`, after its holds.
+# pytest finalises module fixtures in the reverse of their setup, so the cleanup
+# runs while the holds still stand and the holds are released last; an autouse
+# fixture would be set up first and finalised after the holds, with the
+# storefront's timers running again. `tests/unit/test_scenario_cleanup_order.py`
+# checks the order pytest actually resolves.
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="module")
 def ensure_storefront_resumed(storefront_admin_client):
     """Yield to let the module run; then unconditionally clear global pause if set.
 
@@ -649,18 +741,95 @@ def ensure_storefront_resumed(storefront_admin_client):
         log.warning("[teardown] Could not verify/clear global pause: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Alice's storefront
+# ---------------------------------------------------------------------------
+
+
+def _alice_url() -> str:
+    return _require_setting(
+        getattr(settings, "ALICE", None) and settings.ALICE.API_URL, "ALICE.API_URL"
+    )
+
+
+def _alice_publisher_trust():
+    identity = create_signer(
+        "eip191",
+        _require_setting(settings.ALICE.PRIVATE_KEY, "ALICE.PRIVATE_KEY"),
+    ).identity
+    return TrustedIdentitySet(
+        identities=(
+            Identity(scheme="eip191", identifier=identity.identifier),
+        )
+    )
+
+
 @pytest.fixture(scope="module")
-def convergence_advanced_explicitly(provisioning_client):
-    """This module drives fulfillment convergence; the timer does not.
+def alice_admin_client():
+    """Admin-role client for Alice's storefront: system controls only.
 
-    Opt-in, via ``pytest.mark.usefixtures`` on the modules that actually drive
-    convergence; see `convergence_paused` for why it is not autouse and why the
-    timer is resumed in the finaliser.
+    Alice's administrator is a distinct principal from Alice's seller, exactly
+    as Bob's is, and is pinned as ``Identity.administrators.operator`` in
+    ``storefront.alice.toml``.
     """
-    yield from convergence_paused(provisioning_client)
+
+    client = SyncStorefrontClient(
+        _alice_url(),
+        create_signer(
+            str(settings.ALICE.get("admin_scheme", "eip191") or "eip191"),
+            _require_setting(
+                settings.ALICE.get("admin_credential", ""), "ALICE.ADMIN_CREDENTIAL"
+            ),
+        ),
+        caller_role="admin",
+        expected_publishers=_alice_publisher_trust(),
+    )
+    yield client
+    client.close()
 
 
-@pytest.fixture(scope="module", autouse=True)
+# ---------------------------------------------------------------------------
+# Module holds of the lane's shared services
+# ---------------------------------------------------------------------------
+#
+# Each is a module-scoped fixture over one of `helpers/compute_deal.py`'s hold
+# helpers, which state the module-hold rule. A module takes the holds it needs
+# with `pytest.mark.usefixtures`, listed first; none is autouse, since a
+# scenario that relies on a timer -- one reaching `active` without asking for a
+# cycle -- would be stalled rather than made deterministic by it.
+
+
+@pytest.fixture(scope="module")
+def storefront_loops_held(storefront_admin_client):
+    """Bob's lifecycle loops, held for the module."""
+    with compute_deal.storefront_loops_held(storefront_admin_client) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
+def alice_loops_held(alice_admin_client):
+    """Alice's lifecycle loops, held for the module."""
+    with compute_deal.storefront_loops_held(alice_admin_client) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
+def fulfillment_convergence_held(provisioning_client):
+    """Bob's provisioning service's fulfillment convergence, held for a module
+    that advances it itself."""
+    with compute_deal.fulfillment_convergence_held(provisioning_client) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
+def lease_watchdog_held(provisioning_client):
+    """Bob's provisioning service's lease watchdog, held for a module that steps
+    lease expiry itself; stages read the hold back through system status."""
+    with compute_deal.lease_watchdog_held(provisioning_client) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
 def reap_buyer_settle_subprocess(deal_state: DealState):
     """Stop the buyer-CLI ``market settle`` subprocess if it outlived the test.
 
@@ -679,7 +848,7 @@ def reap_buyer_settle_subprocess(deal_state: DealState):
         log.warning("[teardown] could not terminate settle subprocess: %s", exc)
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="module")
 def release_reserved_resources(storefront_admin_client):
     """Release every hold the module leaves behind once it has run.
 

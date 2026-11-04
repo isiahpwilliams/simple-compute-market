@@ -45,12 +45,7 @@ ESCROW = {
     "literal_fields": {"token": "0x" + "01" * 20},
     "rates": [{"field": "amount", "per": "credit", "value": "1"}],
 }
-ANVIL = ChainConfig(
-    name="anvil",
-    rpc_url="http://anvil.test",
-    chain_id=31337,
-    alkahest_address_config_path=str(anvil_address_book_path()),
-)
+ANVIL = ChainConfig(name="anvil", rpc_url="http://anvil.test", chain_id=31337)
 
 
 @contextmanager
@@ -74,7 +69,10 @@ def settlement(*priority: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "priority": list(priority or ("alkahest.v1",)),
-        "alkahest": {"enabled": True},
+        "alkahest": {
+            "enabled": True,
+            "address_books": {"anvil": str(anvil_address_book_path())},
+        },
     }
 
 

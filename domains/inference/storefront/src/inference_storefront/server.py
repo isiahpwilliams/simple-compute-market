@@ -69,6 +69,7 @@ from inference_storefront.settlement_composition import (
 from inference_storefront.utils.config import (
     BASE_URL_OVERRIDE,
     CHAINS,
+    chain_address_books,
     capacity_sites,
     resolve_admin_identities,
     resolve_evm_wallet,
@@ -177,6 +178,7 @@ def build_system_service(sqlite_client: Any) -> SystemService:
         settings=system_settings,
         mechanism_checks=lambda: mechanism_health(_container.SELLER_STAGES),
         signer=lambda: _container.resolved_marketplace_signer,
+        settlement_composition=lambda: _container.resolved_settlement_composition,
     )
 
 
@@ -194,10 +196,6 @@ def listing_seed() -> ListingSeed:
         # The inference authority seeds its quota pool as `default`.
         pool_id="default",
     )
-
-
-async def _seed_demo_listing() -> None:
-    await listing_seed().run(seed_settings())
 
 
 async def _startup_tasks(
@@ -219,14 +217,16 @@ async def _startup_tasks(
         loops,
         sqlite_client=_container.resolved_sqlite_client,
         storefront_url=BASE_URL_OVERRIDE or f"http://localhost:{settings.port}",
-        preflight=preflight_credits_service,
-        seed=_seed_demo_listing,
-        startup_steps=mechanism_startup_steps(_container.SELLER_STAGES),
+        startup_steps=(
+            *mechanism_startup_steps(_container.SELLER_STAGES),
+            preflight_credits_service,
+        ),
         capacity_runtime=capacity_runtime,
     )
 
 
 def _build_alkahest_clients(private_key: str) -> dict[str, Any]:
+    books = chain_address_books()
     return build_alkahest_clients(
         AlkahestClientPolicy(
             private_key=private_key,
@@ -234,7 +234,7 @@ def _build_alkahest_clients(private_key: str) -> dict[str, Any]:
                 AlkahestChain(
                     name=name,
                     rpc_url=chain.rpc_url,
-                    address_config_path=chain.alkahest_address_config_path,
+                    address_book=books[name],
                 )
                 for name, chain in CHAINS.items()
             ),
@@ -358,6 +358,9 @@ async def _start_inference_services(
     _container.resolved_seller_wallet = services.seller_wallet
     _container.resolved_failure_policy = services.failure_policy
     _container.resolved_listing_service = services.listing_service
+    # The seed is created by its loop step, never here: the authority it
+    # registers with may not answer yet.
+    _container.resolved_listing_seed = listing_seed().progress(seed_settings())
     _container.resolved_negotiation_runtime = services.negotiation_runtime
     _container.resolved_negotiation_service = services.negotiation_service
     _container.resolved_system_service = services.system_service

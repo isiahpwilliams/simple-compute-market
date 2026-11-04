@@ -14,7 +14,15 @@ from typing import Any, Literal
 from arkhai_compute import COMPUTE_CAPABILITY_SCHEMA
 from market_capability_shape import FieldKind, shape_digest, unflatten_shape
 from market_resource_pools_contracts.backing import CapacityBackingLabel
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from market_resource_pools_contracts.backing import capacity_backing as backing_of
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from .provision_terms import BareMetalProvisionTerms
 
@@ -35,6 +43,15 @@ BARE_METAL_ACCESS_ACTIONS = (
 )
 EXCLUSIVE_ALLOCATION_MODE = "exclusive"
 PHYSICAL_HOST_ID_REF_KEY = "physical_host_id"
+#: A listing's delivery terms: the fields committing the marketplace to deliver
+#: a particular machine and access to it. Its pool's backing decides whether it
+#: carries them -- a backed listing must, an unbacked one must not -- so none
+#: has a default. See openspec/specs/resource-pool-management/spec.md,
+#: "Capacity backing is interpreted by one delegate".
+BARE_METAL_LISTING_DELIVERY_TERMS = ("host_id", "physical_host_id", "access_methods")
+#: A publication view's delivery terms: the listing's, and whether the whole
+#: machine is available, which bounds only supply an admission authority holds.
+BARE_METAL_VIEW_DELIVERY_TERMS = (*BARE_METAL_LISTING_DELIVERY_TERMS, "available")
 
 
 def bare_metal_executor_ref(
@@ -71,9 +88,14 @@ class BareMetalListing(BaseModel):
     declared shape, published under the compute family's flat names so the
     compute registry schema's dimension filters read it; the hardware fields
     below are exactly that schema's flat names, and no other hardware field may
-    be added beside them. ``asking_rate`` is a term of sale, not hardware.
+    be added beside them. ``asking_rate`` is a term of sale, not hardware. A
+    machine without GPUs states neither GPU field and publishes no GPU key.
     See openspec/specs/storefront-publication/spec.md, "A bare-metal listing's
     shape is derived from its declaration".
+
+    Its delivery terms (:data:`BARE_METAL_LISTING_DELIVERY_TERMS`) are carried
+    only when its backing stands behind them, which its validator asks of the
+    backing's delegate.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -86,15 +108,26 @@ class BareMetalListing(BaseModel):
     capacity_backing: CapacityBackingLabel = Field(
         description="Whether an admission authority stands behind the listing.",
     )
-    host_id: str = Field(
-        description="Bare-metal executor-local machine identity.",
+    host_id: str | None = Field(
+        default=None,
+        description=(
+            "Bare-metal executor-local machine identity; absent when nothing "
+            "stands behind delivering the machine."
+        ),
     )
-    physical_host_id: str = Field(
-        description="Stable physical host identity for cross-mode accounting.",
+    physical_host_id: str | None = Field(
+        default=None,
+        description=(
+            "Stable physical host identity for cross-mode accounting; absent "
+            "when nothing stands behind delivering the machine."
+        ),
     )
-    access_methods: list[str] = Field(
-        default_factory=lambda: [SSH_ACCESS_METHOD],
-        description="Buyer-visible access methods supported by this listing.",
+    access_methods: list[str] | None = Field(
+        default=None,
+        description=(
+            "Buyer-visible access methods supported by this listing; absent "
+            "when nothing stands behind delivering access."
+        ),
     )
     min_duration_seconds: int | None = Field(
         default=None,
@@ -110,25 +143,52 @@ class BareMetalListing(BaseModel):
         min_length=1,
         description="The region the machine's pool declares.",
     )
-    gpu_count: int = Field(ge=1, description="GPUs the machine contains.")
+    gpu_count: int | None = Field(
+        default=None, ge=1, description="GPUs the machine contains; absent when it has none."
+    )
     asking_rate: BareMetalAskingRate | None = Field(
         default=None,
         description="The seller's asking price for this machine; absent when unpriced.",
     )
-    gpu_model: str = Field(min_length=1, description="The machine's GPU model.")
+    gpu_model: str | None = Field(
+        default=None,
+        min_length=1,
+        description="The machine's GPU model; absent when it has no GPUs.",
+    )
     vcpu_count: int | None = Field(default=None, ge=1, description="vCPUs the machine contains.")
     ram_gb: int | None = Field(default=None, ge=1, description="Memory, in GiB.")
     disk_gb: int | None = Field(default=None, ge=1, description="Storage, in GiB.")
 
+    @model_serializer(mode="wrap")
+    def _omit_absent_gpu_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # A machine without GPUs publishes no GPU key rather than a null one:
+        # the registry's listing schema types a present ``gpu_model`` as a
+        # string, and a null would state a value the shape does not.
+        data = handler(self)
+        for name in ("gpu_count", "gpu_model"):
+            if data.get(name) is None:
+                data.pop(name, None)
+        return data
+
     @model_validator(mode="after")
     def _validate_listing(self) -> "BareMetalListing":
-        for field_name in ("host_id", "physical_host_id", "region", "gpu_model"):
-            if not str(getattr(self, field_name)).strip():
-                raise ValueError(f"{field_name} must be non-empty")
-        if not self.access_methods:
-            raise ValueError("access_methods must contain at least one method")
-        if any(not str(method).strip() for method in self.access_methods):
+        if not self.region.strip():
+            raise ValueError("region must be non-empty")
+        # The shape is read through the compute schema, so a GPU count without
+        # a model, a model without a count, or no hardware at all is refused
+        # by the shape kit rather than by a rule restated here.
+        _ = self.shape
+        for field_name in ("host_id", "physical_host_id"):
+            value = getattr(self, field_name)
+            if value is not None and not value.strip():
+                raise ValueError(f"{field_name} must be non-empty when stated")
+        if self.access_methods is not None and any(
+            not str(method).strip() for method in self.access_methods
+        ):
             raise ValueError("access_methods must not contain blank values")
+        backing_of(self.capacity_backing).delivery_term_constraints(
+            {name: getattr(self, name) for name in BARE_METAL_LISTING_DELIVERY_TERMS}
+        )
         if (
             self.min_duration_seconds is not None
             and self.max_duration_seconds is not None
@@ -145,11 +205,7 @@ class BareMetalListing(BaseModel):
             for name in COMPUTE_CAPABILITY_SCHEMA.flat_names(FieldKind.QUANTITY)
             if getattr(self, name) is not None
         }
-        attributes = {
-            name: getattr(self, name)
-            for name in COMPUTE_CAPABILITY_SCHEMA.flat_names(FieldKind.ATTRIBUTE)
-        }
-        return unflatten_shape(quantities, attributes, COMPUTE_CAPABILITY_SCHEMA)
+        return unflatten_shape(quantities, self.claimed_attributes, COMPUTE_CAPABILITY_SCHEMA)
 
     @property
     def shape_digest(self) -> str:
@@ -161,11 +217,14 @@ class BareMetalListing(BaseModel):
 
         The listing's quantities describe the one whole unit its claim reserves
         and are not requested; its attributes are, so admission refuses a
-        declaration that no longer states what the listing published.
+        declaration that no longer states what the listing published. Only the
+        attributes the listing states are claimed: a machine without GPUs
+        claims none.
         """
         return {
             name: getattr(self, name)
             for name in COMPUTE_CAPABILITY_SCHEMA.flat_names(FieldKind.ATTRIBUTE)
+            if getattr(self, name) is not None
         }
 
 

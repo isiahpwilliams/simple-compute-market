@@ -1,11 +1,11 @@
 """Integration tests for the durable fulfillment-acceptance HTTP surface.
 
 Exercises ``POST /api/v1/fulfillment/{validate,begin}`` end to end: a real
-FastAPI app, a real SQLite-backed ``FulfillmentUnitOfWork``, a real
-``AnsibleFulfillmentProvider``, and a real ``AsyncJobQueue``-backed
+FastAPI app, a real SQLite-backed ``FulfillmentUnitOfWork``, VM's real
+``JobFulfillmentProvider``, and a real ``AsyncJobQueue``-backed
 job authority (only the Ansible runner itself is mocked, per this
 suite's usual boundary). Unlike the unit suites (``kit/fulfillment``'s
-orchestration tests, and this service's ``AnsibleFulfillmentProvider`` unit
+orchestration tests, and ``JobFulfillmentProvider``'s unit
 tests), nothing here is a fake or a mock of the persistence/dispatch path
 itself: assertions read the actual persisted ``prepared_create_operation``
 and ``provider_metadata`` columns back out of the database after a real
@@ -27,21 +27,23 @@ Coverage:
 Teardown dispatch through the durable orchestrator has its own HTTP
 endpoint, ``POST /fulfillment/{fulfillment_id}/begin-teardown``, covered by
 ``test_compute_contract_api.py``. The teardown test below instead drives
-``AnsibleFulfillmentProvider`` directly against this fixture's real
+the ``JobFulfillmentProvider`` directly against this fixture's real
 job engine and session, proving the provider-level contract the endpoint
 calls into.
 """
 
 from __future__ import annotations
 from compute_provisioning_ansible import ssh_connection
+from compute_provisioning_ansible.runner import AnsibleResult
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from compute_provisioning.jobs.db import JobRecord
 from compute_provisioning_service import container as _container_module
@@ -49,21 +51,42 @@ from compute_provisioning_client import (
     ComputeProvisioningClient,
     ComputeProvisioningError,
 )
-from compute_provisioning_contracts import FulfillmentRequestBody
+from compute_provisioning_contracts import (
+    FulfillmentRequestBody,
+    FulfillmentScheduleRequest,
+    FulfillmentScheduleResponse,
+    FulfillmentStatusResponse,
+    LeaseState,
+    LeaseTermination,
+)
 from compute_provisioning_service.main import app
-from .conftest import SERVICE_AUTHORITIES, STOREFRONT_SIGNER
+from . import bare_metal_deal
+from .conftest import SERVICE_AUTHORITIES, STOREFRONT_SIGNER, fake_create_stdout
 from market_fulfillment import (
+    CREATE_COMPENSATION,
+    FulfillmentOrchestrator,
     PhysicalSettlementRequest,
+    ProviderRegistry,
     SettlementRecord,
     SettlementRecordState,
     SettlementRepository,
+    SettlementResource,
     SettlementResult,
 )
+from market_fulfillment.fulfillment_persistence import (
+    SqlAlchemyFulfillmentTransaction,
+    SqlAlchemyFulfillmentUnitOfWork,
+)
 from market_core import VersionedEnvelope
-from vm_provisioning_adapter.db import RelayPortLease
+from compute_provisioning.relays import (
+    Relay,
+    RelayPortAllocator,
+    RelayPortLease,
+    RelayService,
+)
 from vm_provisioning_adapter.guest_names import fulfillment_guest_name
-from vm_provisioning_adapter.services.relay_service import RelayService
-from vm_provisioning_adapter.services.relay_port_allocator import RelayPortAllocator
+from vm_provisioning_adapter.codec import VM_RESULT_FACTS
+from vm_provisioning_adapter.services.mock_output import shipped_output
 from market_resource_pools_contracts import PoolCreate, PoolUpdate
 from market_site.router import make_capacity_router
 from compute_provisioning_contracts import HostCreate
@@ -86,14 +109,13 @@ class FulfillmentApi:
     server accepts *those* bodies, and could then drift from the shipped client
     indefinitely while staying green — the failure `TESTING.md` names.
 
-    What remains here is argument shape and unwrapping, so the call sites in
-    this file read as they did. The methods that still take the raw transport
-    say why at their definitions.
+    What remains here is argument shape and unwrapping. A refused request
+    raises ``ComputeProvisioningError`` carrying the HTTP status, so rejection
+    cases assert through the client too.
     """
 
-    def __init__(self, client: ComputeProvisioningClient, http: AsyncClient) -> None:
+    def __init__(self, client: ComputeProvisioningClient) -> None:
         self._client = client
-        self._http = http
 
     @staticmethod
     def _body(capacity_reservation_id: str, market: str, fulfillment_request: dict):
@@ -119,24 +141,6 @@ class FulfillmentApi:
         )
         return response.model_dump(mode="json")
 
-    async def begin_raw(
-        self, capacity_reservation_id: str, market: str, fulfillment_request: dict
-    ) -> httpx.Response:
-        """Raw, because the caller asserts on a rejection status code.
-
-        A typed client raises on those rather than returning them, so the
-        status code itself is unobservable through it. This is the
-        error-path exception `TESTING.md` allows, not a convenience.
-        """
-        return await self._http.post(
-            "/api/v1/fulfillment/begin",
-            json={
-                "capacity_reservation_id": capacity_reservation_id,
-                "market": market,
-                "fulfillment_request": fulfillment_request,
-            },
-        )
-
     @staticmethod
     def dispatched_job(job_id: str) -> dict:
         """The correlation identity of a job the provider dispatched.
@@ -155,46 +159,32 @@ class FulfillmentApi:
                 "idempotency_key": job.idempotency_key,
             }
 
-    async def status(self, fulfillment_id: str) -> httpx.Response:
-        """Raw for the same reason as `begin_raw`: callers assert 404."""
-        return await self._http.get(f"/api/v1/fulfillment/{fulfillment_id}/status")
+    async def status(self, fulfillment_id: str) -> FulfillmentStatusResponse:
+        return await self._client.get_fulfillment_status(fulfillment_id)
 
-    async def result(self, fulfillment_id: str) -> httpx.Response:
-        """Raw for the same reason as `begin_raw`."""
-        return await self._http.get(f"/api/v1/fulfillment/{fulfillment_id}/result")
+    async def result(self, fulfillment_id: str) -> VersionedEnvelope[dict[str, Any]]:
+        return await self._client.get_fulfillment_result(fulfillment_id)
 
     async def schedule(
-        self,
-        capacity_reservation_id: str,
-        market: str,
-        *,
-        requirements: dict[str, Any] | None = None,
-        resource_id: str | None = None,
-    ) -> httpx.Response:
-        """Raw: callers assert both success and rejection status codes."""
-        return await self._http.post(
-            "/api/v1/fulfillment/schedule",
-            json={
-                "capacity_reservation_id": capacity_reservation_id,
-                "market": market,
-                "requirements": requirements or {},
-                "resource_id": resource_id,
-            },
+        self, capacity_reservation_id: str, market: str
+    ) -> FulfillmentScheduleResponse:
+        return await self._client.schedule_resource(
+            FulfillmentScheduleRequest(
+                capacity_reservation_id=capacity_reservation_id, market=market
+            )
         )
 
 
 @pytest.fixture
 async def fulfillment(client_and_queue) -> FulfillmentApi:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as http:
-        async with ComputeProvisioningClient(
-            "http://test",
-            signer=STOREFRONT_SIGNER,
-            caller_role="seller",
-            expected_authorities=SERVICE_AUTHORITIES,
-            transport=transport,
-        ) as client:
-            yield FulfillmentApi(client, http)
+    async with ComputeProvisioningClient(
+        "http://test",
+        signer=STOREFRONT_SIGNER,
+        caller_role="seller",
+        expected_authorities=SERVICE_AUTHORITIES,
+        transport=ASGITransport(app=app),
+    ) as client:
+        yield FulfillmentApi(client)
 
 
 def _fulfillment_request(**overrides: Any) -> dict:
@@ -209,7 +199,13 @@ def _fulfillment_request(**overrides: Any) -> dict:
     return {"kind": "vm.fulfillment.request", "schema_version": 1, "payload": payload}
 
 
-async def _reserved_capacity(pool_id: str, *, claim: dict[str, Any] | None = None) -> str:
+async def _reserved_capacity(
+    pool_id: str,
+    *,
+    claim: dict[str, Any] | None = None,
+    provider_config: dict[str, Any] = _PROVIDER_CONFIG,
+    lease_duration_seconds: int | None = None,
+) -> str:
     """Register a pool + VM resource and reserve capacity against it.
 
     The reserve-only half of ``_scheduled_reservation`` below, factored out
@@ -225,7 +221,7 @@ async def _reserved_capacity(pool_id: str, *, claim: dict[str, Any] | None = Non
             label=pool_id,
             provider="vm.ansible",
             policy_tags={"advertisable_modes": ["vm"], "capacity_backing": "backed", "deliverable_modes": ["vm"]},
-            provider_config=_PROVIDER_CONFIG,
+            provider_config=provider_config,
         )
     )
     # The host the declaration is delivered through; every job is submitted
@@ -249,13 +245,18 @@ async def _reserved_capacity(pool_id: str, *, claim: dict[str, Any] | None = Non
     reserved = capacity_ledger_service.reserve(
         claim=reservation_claim,
         deal_ref={"agreement_id": f"agreement-{pool_id}", "market": "vms"},
+        lease_duration_seconds=lease_duration_seconds,
     )
     assert reserved is not None
     return reserved["capacity_reservation_id"]
 
 
 async def _scheduled_reservation(
-    pool_id: str = "pool-fulfillment-a", *, claim: dict[str, Any] | None = None,
+    pool_id: str = "pool-fulfillment-a",
+    *,
+    claim: dict[str, Any] | None = None,
+    provider_config: dict[str, Any] = _PROVIDER_CONFIG,
+    lease_duration_seconds: int | None = None,
 ) -> str:
     """Register a pool + VM resource, reserve capacity, and schedule it.
 
@@ -270,7 +271,12 @@ async def _scheduled_reservation(
     physical_settlement_scheduler = (
         _container_module.resolved_physical_settlement_scheduler
     )
-    capacity_reservation_id = await _reserved_capacity(pool_id, claim=claim)
+    capacity_reservation_id = await _reserved_capacity(
+        pool_id,
+        claim=claim,
+        provider_config=provider_config,
+        lease_duration_seconds=lease_duration_seconds,
+    )
 
     physical_settlement_scheduler.schedule_resource(
         PhysicalSettlementRequest(
@@ -464,11 +470,52 @@ class TestValidateIsSideEffectFree:
         assert result["valid"] is False
         assert "vm_target" in str(result["issues"])
 
+    async def test_a_request_naming_a_relay_is_invalid(self, fulfillment: FulfillmentApi):
+        """The relay a host dials is its pool's; a request cannot name one."""
+        capacity_reservation_id = await _scheduled_reservation()
+
+        # A documentation-range address, never a real relay.
+        result = await fulfillment.validate(
+            capacity_reservation_id,
+            "vms",
+            _fulfillment_request(connectivity={"relay_addr": "198.51.100.1"}),
+        )
+        assert result["valid"] is False
+        assert "connectivity" in str(result["issues"])
+
+
+class TestARequestNamingARelayIsRefused:
+    async def test_begin_refuses_it_and_stores_nothing(self, fulfillment: FulfillmentApi):
+        """Preparation refuses the request inside the acceptance transaction, so
+        the caller's relay token never reaches the settlement record."""
+        capacity_reservation_id = await _scheduled_reservation()
+
+        # A documentation-range address and a placeholder token, never real.
+        with pytest.raises(ComputeProvisioningError) as refused:
+            await fulfillment.begin(
+                capacity_reservation_id,
+                "vms",
+                _fulfillment_request(
+                    connectivity={"relay_addr": "198.51.100.1", "relay_token": "caller-token"}
+                ),
+            )
+        assert refused.value.status_code == 422
+
+        with _container_module.resolved_session_factory() as db:
+            record = SettlementRepository().get(db, capacity_reservation_id)
+            assert record.fulfillment_id is None
+            assert record.fulfillment_request is None
+            assert record.state == "assigned"
+            assert db.query(JobRecord).filter(
+                JobRecord.capacity_reservation_id == capacity_reservation_id
+            ).count() == 0
+
 
 class TestTeardownPreparation:
-    """AnsibleFulfillmentProvider.prepare_teardown/dispatch_teardown, driven
-    directly against this fixture's real job engine and session -- see module
-    docstring for why there is no HTTP path to exercise yet.
+    """JobFulfillmentProvider.prepare_teardown/dispatch_teardown, driven
+    directly against this fixture's real job engine and session -- the
+    provider-level contract the teardown endpoint calls into (see the module
+    docstring).
     """
 
     async def test_prepared_teardown_derives_exact_identity_from_create_metadata(
@@ -490,8 +537,6 @@ class TestTeardownPreparation:
         with session_factory() as db:
             pool = resource_pool_service.get_pool_in_session(db, pool_id)
             pool_config = dict(pool.provider_config)
-
-        from market_fulfillment import SettlementResource
 
         provider = app.container.vm_runtime().fulfillment_provider()
         settlement_result = SettlementResult(
@@ -593,6 +638,26 @@ class TestPoolConfigFrozenAtAcceptance:
             assert unchanged_params["playbook_path"] == _PLAYBOOK_PATH
             assert unchanged_params["provider_extra_vars"] == {"region": "eu"}
 
+    async def test_a_pool_stating_no_playbook_freezes_the_services_into_the_job(
+        self, fulfillment: FulfillmentApi
+    ):
+        capacity_reservation_id = await _scheduled_reservation(
+            "pool-fulfillment-service-playbook", provider_config={}
+        )
+
+        await fulfillment.begin(capacity_reservation_id, "vms", _fulfillment_request())
+
+        # The harness configures the service's VM playbook as this path.
+        service_playbook = "/fake/playbook.yml"
+        session_factory = _container_module.resolved_session_factory
+        with session_factory() as db:
+            record = SettlementRepository().get(db, capacity_reservation_id)
+            frozen = record.prepared_create_operation["payload"]["parameters"]
+            job_id = record.provider_metadata["create_job_id"]
+        assert frozen["playbook_path"] == service_playbook
+        job = _container_module.resolved_job_engine.get_job(job_id)
+        assert job.params["playbook_path"] == service_playbook
+
 
 class TestAcknowledgementFailureRecovery:
     """Proves that if the provider accepts a job but the acknowledgement
@@ -607,12 +672,6 @@ class TestAcknowledgementFailureRecovery:
     async def test_retry_after_failed_acknowledgement_reuses_the_same_job(
         self, fulfillment: FulfillmentApi
     ):
-        from market_fulfillment import FulfillmentOrchestrator, ProviderRegistry
-        from market_fulfillment.fulfillment_persistence import (
-            SqlAlchemyFulfillmentTransaction,
-            SqlAlchemyFulfillmentUnitOfWork,
-        )
-
         capacity_reservation_id = await _scheduled_reservation(
             "pool-fulfillment-ack-failure"
         )
@@ -678,7 +737,7 @@ class TestStatusAndResultQueries:
     """Integration coverage for the pull-based `GET /fulfillment/{id}/status`
     and `GET /fulfillment/{id}/result` endpoints, against the real HTTP
     surface, a real SQLite-backed repository, and -- for the active-state
-    case -- a real `AnsibleFulfillmentProvider.fetch_credentials` read of a
+    case -- a real `JobFulfillmentProvider.fetch_credentials` read of a
     `Credential` row inserted the same way the job-completion path would
     have written one.
     """
@@ -693,18 +752,17 @@ class TestStatusAndResultQueries:
             capacity_reservation_id, "vms", _fulfillment_request()
         )
 
-        resp = await fulfillment.status(begun["fulfillment_id"])
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["fulfillment_id"] == begun["fulfillment_id"]
-        assert body["capacity_reservation_id"] == capacity_reservation_id
-        assert body["state"] == "dispatching"
-        assert body["failure_reason"] is None
+        status = await fulfillment.status(begun["fulfillment_id"])
+        assert status.fulfillment_id == begun["fulfillment_id"]
+        assert status.capacity_reservation_id == capacity_reservation_id
+        assert status.state == "dispatching"
+        assert status.failure_reason is None
 
     async def test_status_unknown_id_is_404(self, fulfillment: FulfillmentApi):
-        resp = await fulfillment.status("no-such-fulfillment")
-        assert resp.status_code == 404
-        assert resp.json()["detail"]["code"] == "fulfillment_not_found"
+        with pytest.raises(ComputeProvisioningError) as refused:
+            await fulfillment.status("no-such-fulfillment")
+        assert refused.value.status_code == 404
+        assert "fulfillment_not_found" in str(refused.value)
 
     async def test_result_on_a_non_active_fulfillment_has_no_outputs_or_credentials(
         self, fulfillment: FulfillmentApi
@@ -717,21 +775,20 @@ class TestStatusAndResultQueries:
         )
         assert begun["state"] == "dispatching"
 
-        resp = await fulfillment.result(begun["fulfillment_id"])
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["kind"] == "fulfillment.result.v1"
-        assert body["payload"]["state"] == "dispatching"
-        assert body["payload"]["provisioned_resources"] == []
-        assert body["payload"]["domain_result"] is None
+        result = await fulfillment.result(begun["fulfillment_id"])
+        assert result.kind == "fulfillment.result.v1"
+        assert result.payload["state"] == "dispatching"
+        assert result.payload["provisioned_resources"] == []
+        assert result.payload["domain_result"] is None
 
     async def test_result_unknown_id_is_404(self, fulfillment: FulfillmentApi):
-        resp = await fulfillment.result("no-such-fulfillment")
-        assert resp.status_code == 404
-        assert resp.json()["detail"]["code"] == "fulfillment_not_found"
+        with pytest.raises(ComputeProvisioningError) as refused:
+            await fulfillment.result("no-such-fulfillment")
+        assert refused.value.status_code == 404
+        assert "fulfillment_not_found" in str(refused.value)
 
     async def test_result_on_an_active_fulfillment_includes_live_credentials(
-        self, fulfillment: FulfillmentApi, client_and_queue
+        self, fulfillment: FulfillmentApi, client_and_queue, fake_ansible
     ):
         # The create job runs to completion here, and it runs only against a
         # registered host record.
@@ -741,6 +798,13 @@ class TestStatusAndResultQueries:
         ))
         capacity_reservation_id = await _scheduled_reservation(
             pool_id="pool-fulfillment-result-active"
+        )
+        # The run reports the guest provisioning names for this reservation, as
+        # the role does, so its result carries delivery evidence.
+        fake_ansible.wait_for_playbook.return_value = AnsibleResult(
+            stdout=fake_create_stdout(fulfillment_guest_name(capacity_reservation_id)),
+            stderr="",
+            process_id=99999,
         )
         begun = await fulfillment.begin(
             capacity_reservation_id, "vms", _fulfillment_request()
@@ -761,9 +825,7 @@ class TestStatusAndResultQueries:
             SettlementRepository().transition(db, capacity_reservation_id, "active")
             db.commit()
 
-        resp = await fulfillment.result(fulfillment_id)
-        assert resp.status_code == 200, resp.text
-        payload = resp.json()["payload"]
+        payload = (await fulfillment.result(fulfillment_id)).payload
         assert payload["state"] == "active"
         assert [r["provisioned_resource_id"] for r in payload["provisioned_resources"]] == [
             "provisioned-vm-result-2"
@@ -799,12 +861,10 @@ class TestScheduleEndpoint:
     ):
         capacity_reservation_id = await _reserved_capacity("pool-schedule-basic")
 
-        resp = await fulfillment.schedule(capacity_reservation_id, "vms")
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["settlement_resource_id"] == "pool-schedule-basic-r1"
-        assert body["pool_id"] == "pool-schedule-basic"
-        assert body["provider"] == "vm.ansible"
+        scheduled = await fulfillment.schedule(capacity_reservation_id, "vms")
+        assert scheduled.settlement_resource_id == "pool-schedule-basic-r1"
+        assert scheduled.pool_id == "pool-schedule-basic"
+        assert scheduled.provider == "vm.ansible"
 
     async def test_schedule_is_idempotent_for_an_equivalent_retry(
         self, fulfillment: FulfillmentApi
@@ -813,24 +873,63 @@ class TestScheduleEndpoint:
 
         first = await fulfillment.schedule(capacity_reservation_id, "vms")
         second = await fulfillment.schedule(capacity_reservation_id, "vms")
-        assert first.status_code == 200, first.text
-        assert second.status_code == 200, second.text
-        assert first.json() == second.json()
+        assert first == second
+        assert second.host_id == "kvm-fulfillment-1"
+
+    async def test_a_whole_host_is_scheduled_with_its_host_and_machine(
+        self, client_and_queue
+    ):
+        """The schedule response names the declaration's host, and the machine
+        is the resource's top-level ``physical_host_id``."""
+        clients, _ = client_and_queue
+        await bare_metal_deal.bare_metal_capacity(clients)
+        capacity_reservation_id = bare_metal_deal.committed_reservation("0xwhole-host")
+
+        scheduled = await clients.family.schedule_resource(
+            FulfillmentScheduleRequest(
+                capacity_reservation_id=capacity_reservation_id,
+                market="bare_metal",
+                requirements={"resource_kind": "compute.bare-metal"},
+            )
+        )
+
+        assert scheduled.host_id == bare_metal_deal.HOST_ID
+        assert scheduled.attributes["physical_host_id"] == bare_metal_deal.PHYSICAL_HOST_ID
+
+    async def test_a_request_of_another_contract_major_is_refused_and_nothing_scheduled(
+        self, client_and_queue
+    ):
+        """Rejection path: the typed client sends only major 3, so a major-2
+        request is built by hand and signed for its route. Status only."""
+        capacity_reservation_id = await _reserved_capacity("pool-schedule-major-2")
+        body = {
+            "contract_version": "2.0",
+            "capacity_reservation_id": capacity_reservation_id,
+            "market": "vms",
+        }
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as raw:
+            refused = await raw.post("/api/v1/fulfillment/schedule", json=body)
+
+        assert refused.status_code == 422
+        with _container_module.resolved_session_factory() as db:
+            assert db.get(SettlementRecord, capacity_reservation_id) is None
 
     async def test_schedule_unknown_reservation_is_404(
         self, fulfillment: FulfillmentApi
     ):
-        resp = await fulfillment.schedule("no-such-reservation", "vms")
-        assert resp.status_code == 404
-        assert resp.json()["detail"]["code"] == "fulfillment_not_found"
+        with pytest.raises(ComputeProvisioningError) as refused:
+            await fulfillment.schedule("no-such-reservation", "vms")
+        assert refused.value.status_code == 404
+        assert "fulfillment_not_found" in str(refused.value)
 
     async def test_schedule_then_begin_uses_the_scheduled_resource(
         self, fulfillment: FulfillmentApi
     ):
         capacity_reservation_id = await _reserved_capacity("pool-schedule-then-begin")
 
-        scheduled = await fulfillment.schedule(capacity_reservation_id, "vms")
-        assert scheduled.status_code == 200, scheduled.text
+        await fulfillment.schedule(capacity_reservation_id, "vms")
 
         begun = await fulfillment.begin(
             capacity_reservation_id, "vms", _fulfillment_request()
@@ -843,12 +942,19 @@ class TestScheduleEndpoint:
     ):
         capacity_reservation_id = await _reserved_capacity("pool-begin-unscheduled")
 
-        resp = await fulfillment.begin_raw(
-            capacity_reservation_id, "vms", _fulfillment_request()
-        )
-        assert resp.status_code == 404
-        assert resp.json()["detail"]["code"] == "fulfillment_not_found"
+        with pytest.raises(ComputeProvisioningError) as refused:
+            await fulfillment.begin(
+                capacity_reservation_id, "vms", _fulfillment_request()
+            )
+        assert refused.value.status_code == 404
+        assert "fulfillment_not_found" in str(refused.value)
 
+
+
+#: How every grant begins: the base64url of its canonical header's first
+#: bytes, ``{"alg":"EdDSA","kid":"``, up to the last character those bytes
+#: alone decide.
+_GRANT_PREFIX = "eyJhbGciOiJFZERTQSIsImtpZCI6I"
 
 
 class TestRelayPortLifecycleOverTheApi:
@@ -872,8 +978,6 @@ class TestRelayPortLifecycleOverTheApi:
         the relay afterwards rather than creating it first — two creations of
         one pool is a conflict, not a race.
         """
-        from compute_provisioning_service import container as _container_module
-
         relays: RelayService = _container_module.resolved_relay_service
         # The container outlives a single test in this module, and relays live
         # in a table the pool fixture does not reset.
@@ -887,7 +991,10 @@ class TestRelayPortLifecycleOverTheApi:
                 token="admission-token",
             )
 
-        capacity_reservation_id = await _scheduled_reservation(pool_id=pool_id)
+        # A lease end, from which the port's lease fixes its grants' expiry.
+        capacity_reservation_id = await _scheduled_reservation(
+            pool_id=pool_id, lease_duration_seconds=3600
+        )
 
         pools = _container_module.resolved_resource_pool_service
         pools.update_pool(
@@ -923,6 +1030,48 @@ class TestRelayPortLifecycleOverTheApi:
 
         assert self._held_ports() == []
 
+    async def test_a_relay_with_no_active_grant_key_is_refused_before_dispatch(
+        self, fulfillment: FulfillmentApi
+    ):
+        """A proxy without a grant would be refused by a relay enforcing
+        admission, so preparation refuses the relay, naming it and the key."""
+        relays: RelayService = _container_module.resolved_relay_service
+        if not any(r.id == "site-keyless" for r in relays.list_relays()):
+            relays.create_relay(
+                relay_id="site-keyless",
+                relay_addr="203.0.113.77",
+                relay_port=7000,
+                vm_port_range_start=6300,
+                vm_port_range_count=10,
+                token="admission-token",
+            )
+        # Service-internal state setup: no route removes a relay's active key,
+        # and a relay stored before relays held keys has none.
+        with _container_module.resolved_session_factory() as db, db.begin():
+            row = db.get(Relay, "site-keyless")
+            row.grant_key_encrypted = row.grant_key_id = row.grant_key_public = None
+        pool_id = f"relay-pool-{uuid.uuid4().hex[:8]}"
+        capacity_reservation_id = await _scheduled_reservation(
+            pool_id=pool_id, lease_duration_seconds=3600
+        )
+        _container_module.resolved_resource_pool_service.update_pool(
+            pool_id,
+            PoolUpdate(provider_config={**_PROVIDER_CONFIG, "relay_id": "site-keyless"}),
+        )
+
+        result = await fulfillment.validate(
+            capacity_reservation_id, "vms", _fulfillment_request()
+        )
+        assert result["valid"] is False
+        (issue,) = result["issues"]
+        assert "'site-keyless'" in issue["message"]
+        assert "no active grant key" in issue["message"]
+        with pytest.raises(ComputeProvisioningError):
+            await fulfillment.begin(capacity_reservation_id, "vms", _fulfillment_request())
+        assert RelayPortAllocator(
+            _container_module.resolved_session_factory
+        ).held_ports("site-keyless") == []
+
     async def test_acceptance_takes_exactly_one_port(
         self, fulfillment: FulfillmentApi
     ):
@@ -955,8 +1104,9 @@ class TestRelayPortLifecycleOverTheApi:
         assert first["fulfillment_id"] == second["fulfillment_id"]
         assert len(self._held_ports()) == 1
 
+    @pytest.mark.parametrize("key", ["vm_target", "relay_proxy_action", "relay_proxy_name", "relay_client_config", "relay_proxy_remote_port"])
     async def test_rejected_preparation_rolls_back_its_port_and_acceptance(
-        self, fulfillment: FulfillmentApi
+        self, fulfillment: FulfillmentApi, key
     ):
         pool_id = f"relay-pool-{uuid.uuid4().hex[:8]}"
         capacity_reservation_id = await self._relay_backed_reservation(pool_id)
@@ -966,16 +1116,17 @@ class TestRelayPortLifecycleOverTheApi:
             PoolUpdate(provider_config={
                 **_PROVIDER_CONFIG,
                 "relay_id": "site-a",
-                "extra_vars": {"vm_target": "override"},
+                "extra_vars": {key: "override"},
             }),
         )
 
         # Extra-variable collisions are checked after port acquisition, so this
         # rejection must roll back the lease along with durable acceptance.
-        response = await fulfillment.begin_raw(
-            capacity_reservation_id, "vms", _fulfillment_request()
-        )
-        assert response.status_code == 422
+        with pytest.raises(ComputeProvisioningError) as refused:
+            await fulfillment.begin(
+                capacity_reservation_id, "vms", _fulfillment_request()
+            )
+        assert refused.value.status_code == 422
         assert self._held_ports() == []
         with _container_module.resolved_session_factory() as db:
             record = db.get(SettlementRecord, capacity_reservation_id)
@@ -991,6 +1142,151 @@ class TestRelayPortLifecycleOverTheApi:
         )
         await fulfillment.begin(capacity_reservation_id, "vms", _fulfillment_request())
         assert len(self._held_ports()) == 1
+
+    async def test_a_failed_create_is_compensated_and_its_port_returns_with_the_capacity(
+        self, fulfillment: FulfillmentApi, client_and_queue, fake_ansible
+    ):
+        """A create on a relay-backed pool fails after dispatch: its run, stated
+        here, prints a guest other than this reservation's, so it carries no
+        delivery evidence. Terminating the lease begins the VM's removal as a
+        compensating teardown; the relay port stays leased through it and
+        returns with the capacity, once the aggregate is ``torn_down``."""
+        clients, job_queue = client_and_queue
+        capacity_reservation_id = await self._relay_backed_reservation(
+            f"relay-pool-{uuid.uuid4().hex[:8]}"
+        )
+        guest = fulfillment_guest_name(capacity_reservation_id)
+        removed_stdout = shipped_output(
+            "kvm-fulfillment-1",
+            VM_RESULT_FACTS["vm_remove"],
+            {
+                "action": "vm_remove",
+                "vm_name": guest,
+                "timestamp": "2030-01-01T00:00:00Z",
+                "host": "kvm-fulfillment-1",
+                "status": "success",
+                "destroy_output": "",
+                "cleanup_output": [],
+                "error": "",
+            },
+        )
+        fake_ansible.wait_for_playbook.side_effect = [
+            AnsibleResult(stdout=fake_create_stdout("another-guest"), stderr="", process_id=1),
+            AnsibleResult(stdout=removed_stdout, stderr="", process_id=2),
+        ]
+        ledger = _container_module.resolved_capacity_ledger_service
+        ledger.commit(
+            capacity_reservation_id=capacity_reservation_id,
+            lease_end_utc="2099-01-01T00:00:00Z",
+        )
+
+        async def converge() -> None:
+            await clients.family.pause_fulfillment_convergence()
+            try:
+                await clients.family.advance_fulfillment_convergence_cycle()
+            finally:
+                await clients.family.resume_fulfillment_convergence()
+
+        def aggregate() -> SettlementRecord:
+            with _container_module.resolved_session_factory() as db:
+                record = db.get(SettlementRecord, capacity_reservation_id)
+                db.expunge(record)
+                return record
+
+        await fulfillment.begin(capacity_reservation_id, "vms", _fulfillment_request())
+        await job_queue.wait_until_idle()
+        await converge()
+        record = aggregate()
+        assert (record.state, record.failure_reason) == (
+            SettlementRecordState.failed.value,
+            "provider_reported_failure",
+        )
+        assert len(self._held_ports()) == 1
+        # The create ran past writing its variables, so its grant was signed:
+        # the lease records the grant's expiry, fixed from the lease end when
+        # the port was leased, and the key that signed it.
+        relay = await clients.family.get_relay("site-a")
+        (signed,) = [
+            lease
+            for lease in (await clients.family.list_relay_leases("site-a")).leases
+            if lease.owner_id == capacity_reservation_id
+        ]
+        assert signed.grant_expires_at == datetime(2099, 1, 1, 1, 0)
+        assert signed.grant_key_id == relay.grant_keys.active.kid
+        # No read of the failed job carries the grant or the relay token.
+        for job in (await clients.family.list_jobs()).jobs:
+            read = (await clients.family.get_job(job.job_id)).model_dump_json()
+            read += (await clients.family.get_job_logs(job.job_id)).model_dump_json()
+            assert _GRANT_PREFIX not in read
+            assert "admission-token" not in read
+
+        lease = await clients.family.terminate_lease(capacity_reservation_id, LeaseTermination())
+        assert lease.status == LeaseState.RELEASING
+        assert aggregate().failure_reason == CREATE_COMPENSATION
+
+        await converge()
+        await job_queue.wait_until_idle()
+        await converge()
+        record = aggregate()
+        assert (record.state, record.failure_reason) == (
+            SettlementRecordState.torn_down.value,
+            CREATE_COMPENSATION,
+        )
+        # Torn down, but the lease has not yet returned its capacity.
+        assert len(self._held_ports()) == 1
+
+        await clients.family.check_leases()
+
+        assert (await clients.family.get_lease(capacity_reservation_id)).status == (
+            LeaseState.RELEASED
+        )
+        assert self._held_ports() == []
+        # The holdings read shows the torn-down delivery's lease released, and
+        # no other lease on its port.
+        holdings = (await clients.family.list_relay_leases("site-a")).leases
+        (ours,) = [lease for lease in holdings if lease.owner_id == capacity_reservation_id]
+        assert ours.released_at is not None
+        assert [lease for lease in holdings if lease.remote_port == ours.remote_port] == [ours]
+
+    async def test_a_relayed_create_signs_its_grant_and_no_read_carries_it(
+        self, fulfillment: FulfillmentApi, client_and_queue, fake_ansible
+    ):
+        """A relayed create that succeeds had its grant signed, for its own
+        reservation's lease, as it ran; its job read and logs carry neither
+        the grant nor the relay token."""
+        clients, job_queue = client_and_queue
+        capacity_reservation_id = await self._relay_backed_reservation(
+            f"relay-pool-{uuid.uuid4().hex[:8]}"
+        )
+        fake_ansible.wait_for_playbook.side_effect = [
+            AnsibleResult(
+                stdout=fake_create_stdout(fulfillment_guest_name(capacity_reservation_id)),
+                stderr="",
+                process_id=1,
+            ),
+        ]
+
+        await fulfillment.begin(capacity_reservation_id, "vms", _fulfillment_request())
+        await job_queue.wait_until_idle()
+
+        relay = await clients.family.get_relay("site-a")
+        (lease,) = [
+            lease
+            for lease in (await clients.family.list_relay_leases("site-a")).leases
+            if lease.owner_id == capacity_reservation_id and lease.released_at is None
+        ]
+        assert lease.grant_key_id == relay.grant_keys.active.kid
+        jobs = [
+            job
+            for job in (await clients.family.list_jobs()).jobs
+            if capacity_reservation_id in job.model_dump_json()
+        ]
+        assert jobs and all(job.status == "succeeded" for job in jobs)
+        for job in jobs:
+            read = (await clients.family.get_job(job.job_id)).model_dump_json()
+            read += (await clients.family.get_job_logs(job.job_id)).model_dump_json()
+            assert _GRANT_PREFIX not in read
+            assert "admission-token" not in read
 
     async def test_a_direct_nat_pool_takes_no_port(self, fulfillment: FulfillmentApi):
         """A deployment with no relay is a supported state, not a degraded one."""

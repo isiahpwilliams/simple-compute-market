@@ -30,11 +30,18 @@ from arkhai_bare_metal import (
 from arkhai_bare_metal.fixtures.listing import LISTING_HARDWARE
 
 
+#: The delivery terms a backed listing must carry and an unbacked one must not.
+DELIVERY_TERMS = {
+    "host_id": "bm-node-1",
+    "physical_host_id": "host-physical-1",
+    "access_methods": [SSH_ACCESS_METHOD],
+}
+
+
 def test_bare_metal_listing_is_domain_payload_not_registry_row():
     listing = BareMetalListing(
         capacity_backing="backed",
-        host_id="bm-node-1",
-        physical_host_id="host-physical-1",
+        **DELIVERY_TERMS,
         min_duration_seconds=3600,
         max_duration_seconds=7200,
         **LISTING_HARDWARE,
@@ -53,18 +60,78 @@ def test_bare_metal_listing_keeps_machine_and_physical_ids_separate():
         capacity_backing="backed",
         host_id="executor-local-node",
         physical_host_id="site-physical-host",
+        access_methods=[SSH_ACCESS_METHOD],
         **LISTING_HARDWARE,
     )
 
     assert listing.host_id != listing.physical_host_id
 
 
-def test_bare_metal_listing_rejects_invalid_duration_bounds():
-    with pytest.raises(ValidationError):
+def test_an_unbacked_listing_carries_no_delivery_terms():
+    listing = BareMetalListing(capacity_backing="unbacked", **LISTING_HARDWARE)
+
+    published = listing.model_dump(mode="json", exclude_none=True)
+    assert {"host_id", "physical_host_id", "access_methods"}.isdisjoint(published)
+    assert published["capacity_backing"] == "unbacked"
+
+
+@pytest.mark.parametrize("term", sorted(DELIVERY_TERMS))
+def test_an_unbacked_listing_carrying_a_delivery_term_is_refused(term):
+    with pytest.raises(ValidationError, match=term):
+        BareMetalListing(
+            capacity_backing="unbacked",
+            **{term: DELIVERY_TERMS[term]},
+            **LISTING_HARDWARE,
+        )
+
+
+@pytest.mark.parametrize("term", sorted(DELIVERY_TERMS))
+def test_a_backed_listing_missing_a_delivery_term_is_refused(term):
+    terms = {name: value for name, value in DELIVERY_TERMS.items() if name != term}
+    with pytest.raises(ValidationError, match=term):
+        BareMetalListing(capacity_backing="backed", **terms, **LISTING_HARDWARE)
+
+
+def test_access_methods_have_no_default():
+    """A default would publish access nothing stands behind; a backed listing
+    states its methods, and listing none is no method at all."""
+    with pytest.raises(ValidationError, match="access_methods"):
         BareMetalListing(
             capacity_backing="backed",
             host_id="bm-node-1",
             physical_host_id="host-physical-1",
+            **LISTING_HARDWARE,
+        )
+    with pytest.raises(ValidationError, match="access_methods"):
+        BareMetalListing(
+            capacity_backing="backed",
+            **{**DELIVERY_TERMS, "access_methods": []},
+            **LISTING_HARDWARE,
+        )
+
+
+@pytest.mark.parametrize(
+    "terms",
+    [
+        {"host_id": " "},
+        {"physical_host_id": ""},
+        {"access_methods": ["ssh", " "]},
+    ],
+)
+def test_a_stated_delivery_term_must_be_well_formed(terms):
+    with pytest.raises(ValidationError):
+        BareMetalListing(
+            capacity_backing="backed",
+            **{**DELIVERY_TERMS, **terms},
+            **LISTING_HARDWARE,
+        )
+
+
+def test_bare_metal_listing_rejects_invalid_duration_bounds():
+    with pytest.raises(ValidationError):
+        BareMetalListing(
+            capacity_backing="backed",
+            **DELIVERY_TERMS,
             min_duration_seconds=7200,
             max_duration_seconds=3600,
             **LISTING_HARDWARE,
@@ -87,30 +154,59 @@ def test_bare_metal_listing_refuses_a_field_beside_its_shape():
     with pytest.raises(ValidationError, match="capabilities"):
         BareMetalListing(
             capacity_backing="backed",
-            host_id="bm-node-1",
-            physical_host_id="host-physical-1",
+            **DELIVERY_TERMS,
             capabilities={"gpu_model": "H200"},
             **LISTING_HARDWARE,
         )
 
 
-@pytest.mark.parametrize("missing", ["region", "gpu_count", "gpu_model"])
-def test_bare_metal_listing_requires_region_and_gpu(missing):
+@pytest.mark.parametrize(
+    ("missing", "named"),
+    [
+        ("region", "region"),
+        # One GPU field without the other is refused by the compute schema,
+        # which names the field the GPU family lacks.
+        ("gpu_count", "gpu.count"),
+        ("gpu_model", "gpu.model"),
+    ],
+)
+def test_a_listing_missing_its_region_or_one_gpu_field_is_refused(missing, named):
     fields = {key: value for key, value in LISTING_HARDWARE.items() if key != missing}
-    with pytest.raises(ValidationError, match=missing):
+    with pytest.raises(ValidationError, match=named):
         BareMetalListing(
             capacity_backing="backed",
-            host_id="bm-node-1",
-            physical_host_id="host-physical-1",
+            **DELIVERY_TERMS,
             **fields,
         )
+
+
+def test_a_listing_stating_no_hardware_is_refused():
+    with pytest.raises(ValidationError, match="at least one family"):
+        BareMetalListing(capacity_backing="backed", **DELIVERY_TERMS, region="us-east")
+
+
+def test_a_machine_without_gpus_is_listed_with_no_gpu_key():
+    listing = BareMetalListing(
+        capacity_backing="backed",
+        **DELIVERY_TERMS,
+        region="us-east",
+        vcpu_count=64,
+        ram_gb=512,
+    )
+
+    assert listing.shape == {"cpu": {"count": 64}, "memory": {"gib": 512}}
+    assert listing.claimed_attributes == {}
+    for dumped in (listing.model_dump(mode="json"), listing.model_dump()):
+        assert "gpu_count" not in dumped
+        assert "gpu_model" not in dumped
+        assert dumped["vcpu_count"] == 64
+    assert BareMetalListing.model_validate(listing.model_dump(mode="json")) == listing
 
 
 def test_a_listing_digests_as_the_shape_stated_by_hand():
     listing = BareMetalListing(
         capacity_backing="backed",
-        host_id="bm-node-1",
-        physical_host_id="host-physical-1",
+        **DELIVERY_TERMS,
         **LISTING_HARDWARE,
     )
 

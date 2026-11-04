@@ -1,4 +1,7 @@
-"""The development seed publishes the bundle's mapping of its table, once per quota resource."""
+"""The development seed publishes the bundle's mapping of its table, once per quota resource.
+
+Each case drives one cycle of the seed's progress, as the ``listing-seed`` step does.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,9 @@ import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from arkhai_api_selling.lifecycle import ListingSeed
+import pytest
+
+from arkhai_api_selling.lifecycle import DONE, GIVEN_UP, ListingSeed, ListingSeedGivenUp
 from tests.bundles import EXAMPLE
 
 
@@ -57,7 +62,7 @@ def _seed(rows: list[dict], listings: _Listings, registered: list[dict]) -> List
 async def test_a_seed_registers_its_quota_and_publishes_the_mapping_of_its_listing_keys():
     listings, registered = _Listings(), []
 
-    await _seed([], listings, registered).run(
+    report = await _seed([], listings, registered).progress(
         {
             "resource_id": "quota-a",
             "total_units": 7,
@@ -66,13 +71,15 @@ async def test_a_seed_registers_its_quota_and_publishes_the_mapping_of_its_listi
             "paused": True,
             "product": "Example",
         }
-    )
+    ).step()
 
+    assert (report["state"], report["listing_id"]) == (DONE, "L-seeded")
     assert registered == [{"resource_id": "quota-a", "total_units": 7}]
     assert listings.calls == [
         {
             "resource_id": "quota-a",
             "accepted_escrows": [{"chain_name": "anvil"}],
+            "wait_for_every_mechanism": True,
             "product": "Example",
         }
     ]
@@ -82,17 +89,24 @@ async def test_a_seed_whose_quota_already_has_an_open_listing_publishes_nothing(
     listings, registered = _Listings(), []
     stored = {"listing_id": "L-1", "created_at": "2026-01-01T00:00:00Z", "status": "open", "listing_resource": json.dumps({"product": "Example", "quota": "quota-a"})}
 
-    await _seed([stored], listings, registered).run({"resource_id": "quota-a", "product": "Example"})
+    report = await _seed([stored], listings, registered).progress(
+        {"resource_id": "quota-a", "product": "Example"}
+    ).step()
 
+    assert (report["state"], report["listing_id"]) == (DONE, "L-1")
     assert (registered, listings.calls) == ([], [])
 
 
-async def test_no_table_seeds_nothing_and_a_failing_seed_does_not_raise():
+async def test_no_table_seeds_nothing_and_a_failing_seed_gives_up_once():
     listings, registered = _Listings(), []
 
-    await _seed([], listings, registered).run(None)
-    await _seed([], listings, registered).run({"resource_id": "quota-a"})
+    assert _seed([], listings, registered).progress(None) is None
+    progress = _seed([], listings, registered).progress({"resource_id": "quota-a"})
+    with pytest.raises(ListingSeedGivenUp):
+        await progress.step()
+    again = await progress.step()
 
+    assert (again["state"], again["attempts"]) == (GIVEN_UP, 1)
     assert registered == [{"resource_id": "quota-a", "total_units": 100}]
     assert listings.calls == []
 
@@ -150,6 +164,8 @@ async def test_a_seeded_listing_past_the_first_page_is_found():
         "listing_resource": {"product": "Example", "quota": "quota-a"},
     }
 
-    await _seed([*others, seeded], listings, registered).run({"resource_id": "quota-a", "product": "Example"})
+    await _seed([*others, seeded], listings, registered).progress(
+        {"resource_id": "quota-a", "product": "Example"}
+    ).step()
 
     assert (registered, listings.calls) == ([], [])

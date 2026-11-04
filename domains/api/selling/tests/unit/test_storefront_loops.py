@@ -107,11 +107,9 @@ async def test_startup_runs_only_the_composed_startup_steps():
         Loops(),
         sqlite_client=None,
         storefront_url="https://seller.example",
-        preflight=lambda: step("preflight"),
-        seed=lambda: step("seed"),
         open_thread_store=lambda **_store: None,
     )
-    assert ran == ["preflight", "seed", "loops"]
+    assert ran == ["loops"]
 
     ran.clear()
     await start_background_tasks(
@@ -119,9 +117,7 @@ async def test_startup_runs_only_the_composed_startup_steps():
         Loops(),
         sqlite_client=None,
         storefront_url="https://seller.example",
-        preflight=lambda: step("preflight"),
-        seed=lambda: step("seed"),
         startup_steps=(backfill,),
         open_thread_store=lambda **_store: None,
     )
-    assert ran == ["backfill", "preflight", "seed", "loops"]
+    assert ran == ["backfill", "loops"]

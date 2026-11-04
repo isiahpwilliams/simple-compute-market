@@ -59,11 +59,13 @@ class SystemService:
         settings: Callable[[], SystemSettings],
         mechanism_checks: Callable[[], Mapping[str, str]],
         signer: Callable[[], Any | None],
+        settlement_composition: Callable[[], Any | None] = lambda: None,
     ) -> None:
         self._db = sqlite_client
         self._settings = settings
         self._mechanism_checks = mechanism_checks
         self._signer = signer
+        self._settlement_composition = settlement_composition
 
     async def get_health(self, *, include_registry: bool = False) -> dict[str, Any]:
         """Each check's state; a mechanism's check is healthy unless it reports an error."""
@@ -99,6 +101,13 @@ class SystemService:
         if include_registry:
             signer = self._signer()
             result["principal"] = signer.identity.model_dump(mode="json") if signer else None
+            # Readiness reads the chain probe's last results and calls no chain.
+            composition = self._settlement_composition()
+            result["settlement"] = (
+                [status.safe_projection() for status in await composition.readiness()]
+                if composition is not None
+                else None
+            )
         return result
 
     async def status(

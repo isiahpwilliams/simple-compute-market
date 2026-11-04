@@ -60,16 +60,6 @@ def checked_credit_total(unit_rate: Any, quantity: Any, *, noun: str) -> int:
     return total
 
 
-def _accepted_escrows(order: dict[str, Any]) -> list[dict[str, Any]]:
-    raw = order.get("accepted_escrows")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (ValueError, TypeError):
-            return []
-    return [entry for entry in (raw or []) if isinstance(entry, dict)]
-
-
 def _escrow_rate(escrow: Mapping[str, Any], *, noun: str) -> int | None:
     """An escrow's one per-credit amount rate, or None when it states no amount rate."""
     rates = escrow.get("rates")
@@ -122,8 +112,10 @@ def extract_unit_price_from_order(
     """The seller's per-credit floor for the option a buyer's proposal selects.
 
     The selected option's or escrow's amount rate, else the configured floor where it
-    states none; with neither the negotiation is refused. ``floor_key`` is the
-    floor setting as the composing storefront spells it, which a refusal names.
+    states none; with neither the negotiation is refused. No other entry ever
+    stands in for the one selected, and a proposal selecting nothing the listing
+    offers is refused. ``floor_key`` is the floor setting as the composing
+    storefront spells it, which a refusal names.
     See openspec/specs/negotiation-protocol/spec.md, "The seller's reference
     amount is the selected option's rate".
     """
@@ -136,14 +128,10 @@ def extract_unit_price_from_order(
     elif selected is not None:
         advertised = _escrow_rate(selected, noun=noun)
     else:
-        accepted = _accepted_escrows(order)
-        advertised = _escrow_rate(accepted[0], noun=noun) if accepted else None
-        if advertised is None:
-            options = _settlement_options(order)
-            if options:
-                amount_rates = [r for r in options[0].rates if r.field == "amount"]
-                if len(amount_rates) == 1:
-                    advertised = checked_credit_total(amount_rates[0].value, 1, noun=noun)
+        raise ValueError(
+            f"Listing {order.get('listing_id')}: the proposal selects no settlement "
+            "option the listing offers, so nothing prices it."
+        )
     if advertised is not None:
         return advertised
 

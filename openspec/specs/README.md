@@ -20,7 +20,9 @@ An architecture companion does not replace a normative requirement. When explana
 | CLI query language | [Spec](cli-query-language/spec.md) | [Architecture](cli-query-language/architecture.md) |
 | Compute provisioning contract | [Spec](compute-provisioning-contract/spec.md) | — |
 | Deployment and state | [Spec](deployment-state/spec.md) | [Architecture](deployment-state/architecture.md) |
+| frp grant admission | [Spec](frp-grant-admission/spec.md) | [Architecture](frp-grant-admission/architecture.md) |
 | Fulfillment | [Spec](fulfillment/spec.md) | [Architecture](fulfillment/architecture.md) |
+| Introduction delivery | [Spec](introduction-delivery/spec.md) | [Architecture](introduction-delivery/architecture.md) |
 | Market composition | [Spec](market-composition/spec.md) | [Architecture](market-composition/architecture.md) |
 | Marketplace identity | [Spec](marketplace-identity/spec.md) | [Architecture](marketplace-identity/architecture.md) |
 | Negotiation protocol | [Spec](negotiation-protocol/spec.md) | [Architecture](negotiation-protocol/architecture.md) |
@@ -34,6 +36,7 @@ An architecture companion does not replace a normative requirement. When explana
 | Site capacity | [Spec](site-capacity/spec.md) | [Architecture](site-capacity/architecture.md) |
 | Storefront publication | [Spec](storefront-publication/spec.md) | [Architecture](storefront-publication/architecture.md) |
 | Testing and compatibility | [Spec](test-compatibility/spec.md) | [Architecture](test-compatibility/architecture.md) |
+| VM storefront fulfillment | [Spec](vm-storefront-fulfillment/spec.md) | [Architecture](vm-storefront-fulfillment/architecture.md) |
 
 
 ## Settlement documentation ownership

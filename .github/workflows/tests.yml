@@ -68,17 +68,17 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: "0.12.19"
-      # The API-credits suite includes the TypeScript and Rust middleware.
-      - if: matrix.target == 'test-apicredits'
+      # The api family's suite includes the gate's TypeScript and Rust ports.
+      - if: matrix.target == 'test-api'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - if: matrix.target == 'test-apicredits'
+      - if: matrix.target == 'test-api'
         uses: dtolnay/rust-toolchain@stable
-      - if: matrix.target == 'test-apicredits'
+      - if: matrix.target == 'test-api'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: domains/apicredits/middleware/rust
+          workspaces: kit/api/gate-ports/rust
       - if: matrix.target == 'test-deployment-packaging'
         uses: azure/setup-helm@v4
         with:

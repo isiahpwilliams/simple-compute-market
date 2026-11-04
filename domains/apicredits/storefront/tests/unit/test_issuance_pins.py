@@ -15,7 +15,10 @@ from market_identity import Identity
 from apicredits_storefront.container import SELLING_CONTRIBUTIONS
 from tests.integration.credit_negotiation import SELLER_PRINCIPAL, payment_option
 
-PINS = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "pins" / "issuance_pins.json"
+PINS = (
+    Path(__file__).resolve().parents[5]
+    / "kit" / "api" / "tests" / "fixtures" / "pins" / "issuance_pins.json"
+)
 
 
 def _cases():

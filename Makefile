@@ -144,48 +144,48 @@ dist-bare-metal-storefront: dist-core dist-arkhai-core-storefront dist-kits ## B
 # invoked directly on a clean tree resolves instead of failing in
 # `uv build` on a missing `.dist` entry.
 dist-api: dist-identity ## Build arkhai-api, the api-family vocabulary, into .dist/
-	cd domains && $(MAKE) dist-api DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api DIST_DIR=$(DIST_DIR)
 
 dist-api-contracts: dist-identity dist-core ## Build arkhai-api-contracts wheel into .dist/ (domains/Makefile builds arkhai-api first)
-	cd domains && $(MAKE) dist-api-contracts DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-contracts DIST_DIR=$(DIST_DIR)
 
 dist-api-client: dist-identity ## Build arkhai-api-client wheel into .dist/ (domains/Makefile builds the vocabulary and contracts first)
-	cd domains && $(MAKE) dist-api-client DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-client DIST_DIR=$(DIST_DIR)
 
 dist-api-authority: dist-identity dist-ci-kits ## Build arkhai-api-authority wheel into .dist/ (domains/Makefile builds the vocabulary and contracts first)
-	cd domains && $(MAKE) dist-api-authority DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-authority DIST_DIR=$(DIST_DIR)
 
 dist-api-selling: dist-identity dist-core dist-registry-client dist-arkhai-core-storefront dist-ci-kits dist-policy dist-alkahest dist-config ## Build arkhai-api-selling wheel into .dist/ (domains/Makefile builds the vocabulary, contracts, and client first)
-	cd domains && $(MAKE) dist-api-selling DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-selling DIST_DIR=$(DIST_DIR)
 
 dist-api-selling-alkahest: dist-api-selling ## Build arkhai-api-selling-alkahest wheel into .dist/
-	cd domains && $(MAKE) dist-api-selling-alkahest DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-selling-alkahest DIST_DIR=$(DIST_DIR)
 
 dist-api-selling-arkhai-payments: dist-api-selling ## Build arkhai-api-selling-arkhai-payments wheel into .dist/
-	cd domains && $(MAKE) dist-api-selling-arkhai-payments DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-selling-arkhai-payments DIST_DIR=$(DIST_DIR)
 
 dist-api-buying: dist-identity dist-core dist-arkhai-core-buyer dist-ci-kits dist-policy dist-config ## Build arkhai-api-buying wheel into .dist/ (domains/Makefile builds the vocabulary first)
-	cd domains && $(MAKE) dist-api-buying DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-buying DIST_DIR=$(DIST_DIR)
 
 dist-api-buying-alkahest: dist-api-buying dist-alkahest ## Build arkhai-api-buying-alkahest wheel into .dist/
-	cd domains && $(MAKE) dist-api-buying-alkahest DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-buying-alkahest DIST_DIR=$(DIST_DIR)
 
 dist-api-buying-arkhai-payments: dist-api-buying ## Build arkhai-api-buying-arkhai-payments wheel into .dist/
-	cd domains && $(MAKE) dist-api-buying-arkhai-payments DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-buying-arkhai-payments DIST_DIR=$(DIST_DIR)
 
 dist-api-gate: dist-identity ## Build arkhai-api-gate wheel into .dist/
-	cd domains && $(MAKE) dist-api-gate DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-gate DIST_DIR=$(DIST_DIR)
 
 dist-api-gateway: dist-api-gate ## Build arkhai-api-gateway wheel into .dist/
-	cd domains && $(MAKE) dist-api-gateway DIST_DIR=$(DIST_DIR)
+	cd kit && $(MAKE) dist-api-gateway DIST_DIR=$(DIST_DIR)
 
-dist-apicredits-domain: dist-core dist-identity dist-alkahest ## Build arkhai-apicredits-domain wheel into .dist/
+dist-apicredits-domain: dist-api-contracts dist-core dist-identity dist-alkahest ## Build arkhai-apicredits-domain wheel into .dist/
 	cd domains && $(MAKE) dist-apicredits-domain DIST_DIR=$(DIST_DIR)
 
-dist-apicredits-service: dist-identity dist-ci-kits dist-apicredits-domain dist-api-gate ## Build arkhai-apicredits-service wheel into .dist/
+dist-apicredits-service: dist-api-authority dist-identity dist-ci-kits dist-apicredits-domain dist-api-gate ## Build arkhai-apicredits-service wheel into .dist/
 	cd domains && $(MAKE) dist-apicredits-service DIST_DIR=$(DIST_DIR)
 
-dist-apicredits-storefront: dist-apicredits-domain dist-arkhai-core-storefront dist-registry-client dist-ci-kits dist-config ## Build arkhai-apicredits-storefront wheel into .dist/
+dist-apicredits-storefront: dist-api-selling dist-api-selling-alkahest dist-api-selling-arkhai-payments dist-apicredits-domain dist-arkhai-core-storefront dist-registry-client dist-ci-kits dist-config ## Build arkhai-apicredits-storefront wheel into .dist/
 	cd domains && $(MAKE) dist-apicredits-storefront DIST_DIR=$(DIST_DIR)
 
 dist-inference-domain: dist-api-contracts ## Build arkhai-inference-domain wheel into .dist/
@@ -194,7 +194,7 @@ dist-inference-domain: dist-api-contracts ## Build arkhai-inference-domain wheel
 dist-inference-service: dist-identity dist-ci-kits dist-inference-domain dist-api-authority dist-api-gate dist-api-client ## Build arkhai-inference-service wheel into .dist/
 	cd domains && $(MAKE) dist-inference-service DIST_DIR=$(DIST_DIR)
 
-dist-inference-storefront: dist-inference-domain dist-api-selling-alkahest dist-arkhai-core-storefront dist-registry-client dist-storefront-client dist-ci-kits dist-config ## Build arkhai-inference-storefront wheel into .dist/
+dist-inference-storefront: dist-api-selling dist-inference-domain dist-api-selling-alkahest dist-arkhai-core-storefront dist-registry-client dist-storefront-client dist-ci-kits dist-config ## Build arkhai-inference-storefront wheel into .dist/
 	cd domains && $(MAKE) dist-inference-storefront DIST_DIR=$(DIST_DIR)
 
 dist-inference-buyer: dist-inference-domain dist-api-buying-alkahest dist-registry-client ## Build arkhai-inference-buyer wheel into .dist/
@@ -299,45 +299,45 @@ test-compute:
 	$(MAKE) -C domains test-compute
 
 test-api:
-	$(MAKE) -C domains test-api
+	$(MAKE) -C kit test-api
 
 test-api-client:
-	$(MAKE) -C domains test-api-client
+	$(MAKE) -C kit test-api-client
 
 test-api-authority:
-	$(MAKE) -C domains test-api-authority
+	$(MAKE) -C kit test-api-authority
 
 test-api-selling: dist-api-selling ## Run the api-family selling tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/selling
-	$(MAKE) -C domains test-api-selling
+	python3 scripts/uv_project.py require-wheels --project kit/api/selling
+	$(MAKE) -C kit test-api-selling
 
 test-api-selling-alkahest: dist-api-selling-alkahest ## Run the api-family selling-side Alkahest tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/selling-alkahest
-	$(MAKE) -C domains test-api-selling-alkahest
+	python3 scripts/uv_project.py require-wheels --project kit/api/selling-alkahest
+	$(MAKE) -C kit test-api-selling-alkahest
 
 test-api-selling-arkhai-payments: dist-api-selling-arkhai-payments ## Run the api-family selling-side Arkhai payments tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/selling-arkhai-payments
-	$(MAKE) -C domains test-api-selling-arkhai-payments
+	python3 scripts/uv_project.py require-wheels --project kit/api/selling-arkhai-payments
+	$(MAKE) -C kit test-api-selling-arkhai-payments
 
 test-api-buying: dist-api-buying ## Run the api-family buying tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/buying
-	$(MAKE) -C domains test-api-buying
+	python3 scripts/uv_project.py require-wheels --project kit/api/buying
+	$(MAKE) -C kit test-api-buying
 
 test-api-buying-alkahest: dist-api-buying-alkahest ## Run the api-family buyer-side Alkahest tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/buying-alkahest
-	$(MAKE) -C domains test-api-buying-alkahest
+	python3 scripts/uv_project.py require-wheels --project kit/api/buying-alkahest
+	$(MAKE) -C kit test-api-buying-alkahest
 
 test-api-buying-arkhai-payments: dist-api-buying-arkhai-payments ## Run the api-family buyer-side Arkhai payments tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/buying-arkhai-payments
-	$(MAKE) -C domains test-api-buying-arkhai-payments
+	python3 scripts/uv_project.py require-wheels --project kit/api/buying-arkhai-payments
+	$(MAKE) -C kit test-api-buying-arkhai-payments
 
 test-api-gate: dist-api-gate dist-api-contracts ## Run the api-family gate tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/gate
-	$(MAKE) -C domains test-api-gate
+	python3 scripts/uv_project.py require-wheels --project kit/api/gate
+	$(MAKE) -C kit test-api-gate
 
 test-api-gateway: dist-api-gateway ## Run the api-family gateway tests, building every internal wheel they install first
-	python3 scripts/uv_project.py require-wheels --project domains/api/gateway
-	$(MAKE) -C domains test-api-gateway
+	python3 scripts/uv_project.py require-wheels --project kit/api/gateway
+	$(MAKE) -C kit test-api-gateway
 
 test-vms-domain:
 	$(MAKE) -C domains test-vms-domain

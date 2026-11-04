@@ -1236,7 +1236,7 @@ the field's absence MUST leave a response valid for a storefront that reports no
 ### Requirement: The api family shares one access vocabulary and kit
 
 API credits, and every API-selling domain that follows it, MUST form the `api`
-family, with one vocabulary package under `domains/api` and one family kit of
+family, with one vocabulary package under `kit/api` and one family kit of
 distributions beneath it, placed under the family directory the scope rule
 names. A domain of the family MUST NOT define the purchase shape, issuance
 digests, key authority, issuance composition, buyer flows, mechanism stages, or
@@ -1261,7 +1261,7 @@ the kit's scope until its ledger-free distribution exists.
   supplies its selling and buying bundles, its capacity profile, and its
   service root
 - **THEN** it composes the storefront, authority, gate, and buyer flows without
-  a change to any `domains/api` distribution
+  a change to any `kit/api` distribution
 
 ## Evidence
 

@@ -41,7 +41,7 @@ only request-priced rate cards are publishable until then.
   the kit's `authority` library: the family keeps each domain's root separate,
   since two domains never share a process (the `api-family` capability's
   `architecture.md`, "Service roots and the capacity profile").
-- **Gateway.** A family library, `arkhai-api-gateway` under `domains/api`: an
+- **Gateway.** A family library, `arkhai-api-gateway` under `kit/api`: an
   OpenAI-compatible reverse proxy in front of a model server that checks the
   requested model before charging, authorizes and charges through the kit's
   bearer gate inside the route, never forwards the buyer's credential, streams
@@ -120,21 +120,21 @@ only request-priced rate cards are publishable until then.
 
 ## Impact
 
-- New: `domains/api/gateway/`,
+- New: `kit/api/gateway/`,
   `domains/inference/{storefront,buyer,service,gateway-service}/`, the model
   stub under `e2e-tests/`,
   `domains/inference/compose.yml`, the per-domain Compose files, development
   identities, the `e2e-inference-dev-env` target, the e2e lane targets, the
   e2e scenario and marker.
-- Touched in the family: `domains/api/src/arkhai_api/{issuance,evidence}.py`
+- Touched in the family: `kit/api/src/arkhai_api/{issuance,evidence}.py`
   (the subject's optional accepted terms, digest, and charge, omitted when
-  unset), `domains/api/selling/src/arkhai_api_selling/{contributions,issuance}.py`
-  (the public-result extension's delivery context), `domains/api/contracts/src/arkhai_api_contracts/models.py` (verify
+  unset), `kit/api/selling/src/arkhai_api_selling/{contributions,issuance}.py`
+  (the public-result extension's delivery context), `kit/api/contracts/src/arkhai_api_contracts/models.py` (verify
   and consume scope fields; verify's pinned terms), the authority's
   `keys_service.py`, `models.py`, and `migrations.py` (`grant_terms`, key
-  scope, the scope refusal), `domains/api/gate/src/arkhai_api_gate/{gate,client}.py`
+  scope, the scope refusal), `kit/api/gate/src/arkhai_api_gate/{gate,client}.py`
   (the separable verify step, the scope and charge in `verify`), the gate's
-  conformance fixtures, and `domains/apicredits/tests/fixtures/pins/` (an
+  conformance fixtures, and `kit/api/tests/fixtures/pins/` (an
   inference case beside the unchanged API-credits pins).
 - Touched elsewhere: root `docker-compose.yml`, `domains/Makefile`, root
   `Makefile`, `e2e-tests/Makefile`, `.github/workflows/e2e.yml`,

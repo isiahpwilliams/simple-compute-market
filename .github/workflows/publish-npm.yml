@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'domains/apicredits/middleware/typescript/**'
+      - 'kit/api/gate-ports/typescript/**'
       - '.github/workflows/publish-npm.yml'
   workflow_dispatch:
 
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: domains/apicredits/middleware/typescript
+        working-directory: kit/api/gate-ports/typescript
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

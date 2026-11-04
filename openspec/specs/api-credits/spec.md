@@ -297,7 +297,7 @@ the gate library instead.
 
 - **WHEN** the API-credits packages are searched for an issuance client, a
   digest function, a key service, a settlement stage, or a gate of their own
-- **THEN** none is found; each is imported from a `domains/api` distribution
+- **THEN** none is found; each is imported from a `kit/api` distribution
 
 #### Scenario: A middleware consumer is sought
 
@@ -306,5 +306,5 @@ the gate library instead.
 - **THEN** no consumer remains; the sample app, the service's integration
   tests, the Python conformance runner, the READMEs, the cookbook, the
   workflows, and the Makefiles name the gate library, while the TypeScript and
-  Rust gates under `domains/apicredits/middleware/` keep their own package
+  Rust gates under `kit/api/gate-ports/` keep their own package
   names

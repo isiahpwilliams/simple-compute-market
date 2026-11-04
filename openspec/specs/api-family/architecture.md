@@ -12,7 +12,7 @@ topped-up bearer key that a gate admits requests against. Everything in that
 flow that does not depend on what the service is lives once, in the family; a
 domain contributes its listing schema, its label, and a handful of values.
 
-`domains/api` (`arkhai_api`) is the vocabulary: the purchase shape and key
+`kit/api` (`arkhai_api`) is the vocabulary: the purchase shape and key
 disposition, the issuance request and result, the fulfillment identity and
 request digest, the signed secret-free issuance evidence and portable
 fulfillment reference, and the issuance label those are spelled under. It
@@ -25,14 +25,14 @@ placement, in [Family kits](../../../docs/development/ARCHITECTURE.md#family-kit
 
 | Distribution | Installed by |
 |---|---|
-| `domains/api/contracts` | every side: the authority, the storefront, and the buyer through its domain's codecs |
-| `domains/api/client` | the storefront, to call the authority |
-| `domains/api/authority` | a domain's service root |
-| `domains/api/selling` | a domain's storefront |
-| `domains/api/selling-alkahest`, `selling-arkhai-payments` | a storefront whose seller table composes that mechanism |
-| `domains/api/buying` | a domain's buyer plugin |
-| `domains/api/buying-alkahest`, `buying-arkhai-payments` | a buyer plugin whose stage table composes that mechanism |
-| `domains/api/gate` | an application that admits requests with a bearer key |
+| `kit/api/contracts` | every side: the authority, the storefront, and the buyer through its domain's codecs |
+| `kit/api/client` | the storefront, to call the authority |
+| `kit/api/authority` | a domain's service root |
+| `kit/api/selling` | a domain's storefront |
+| `kit/api/selling-alkahest`, `selling-arkhai-payments` | a storefront whose seller table composes that mechanism |
+| `kit/api/buying` | a domain's buyer plugin |
+| `kit/api/buying-alkahest`, `buying-arkhai-payments` | a buyer plugin whose stage table composes that mechanism |
+| `kit/api/gate` | an application that admits requests with a bearer key |
 
 The negotiation and delivery carriers — message, terms, materialization,
 receipt, and result — extend core schemas, so they cannot be vocabulary, and a
@@ -191,11 +191,11 @@ log records only a non-secret reference to it.
 
 ## The gate
 
-`domains/api/gate` (`arkhai_api_gate`) is embedded in third-party applications,
+`kit/api/gate` (`arkhai_api_gate`) is embedded in third-party applications,
 so its runtime dependency is httpx alone, with the identity kit as an optional
 extra for signed requests. It therefore keeps a local spelling of the verify
 and consume routes it calls; a development-only parity test
-(`domains/api/gate/tests/test_contract_parity.py`) holds that spelling equal to
+(`kit/api/gate/tests/test_contract_parity.py`) holds that spelling equal to
 `contracts`' declarations, and the published gate gains no dependency from it.
 
 Its verify cache has three invariants:
@@ -208,7 +208,7 @@ Its verify cache has three invariants:
   never replaces a newer one.
 
 The Python, TypeScript, and Rust gates implement all three. The shared
-conformance trace under `domains/apicredits/middleware/conformance/` pins the
+conformance trace under `kit/api/gate-ports/conformance/` pins the
 first two for every gate, and each gate's own tests pin the ordering.
 
 ## Current limits

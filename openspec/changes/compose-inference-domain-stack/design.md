@@ -76,7 +76,7 @@ a mounted secret, forwards to the model server with `httpx` streaming
 pass-through (server-sent events when `stream` is set), serves `/v1/models`
 listing only the configured model, and leaves `/health` ungated. API credits'
 vLLM cookbook describes exactly this component and does not ship it. The
-library therefore lives in the family as `domains/api/gateway`
+library therefore lives in the family as `kit/api/gateway`
 (`arkhai-api-gateway`), depending on `arkhai-api-gate` and `httpx`, and
 inference adds `domains/inference/gateway-service` (`arkhai-inference-gateway-service`),
 a composition root the architecture check reads as an executable through the

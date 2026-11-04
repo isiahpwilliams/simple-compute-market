@@ -17,11 +17,11 @@ The `api` family's vocabulary — the purchase shape and key disposition, the
 issuance request and result, the fulfillment identity and request digest, the
 signed secret-free issuance evidence and portable fulfillment reference, and the
 issuance label type with its label-parameterized operations — MUST live once,
-in the family vocabulary package under `domains/api`, and every domain selling
+in the family vocabulary package under `kit/api`, and every domain selling
 prepaid bearer access MUST bind it rather than define or copy its own. The vocabulary MUST
 depend only on foundation kits, never on core, a domain, a role, or a
 family-kit distribution, and MUST NOT name a sibling domain's label value. Every
-distribution under `domains/api` MUST import no API-selling domain and no
+distribution under `kit/api` MUST import no API-selling domain and no
 role, except through an edge recorded as an exception row in
 `docs/development/ARCHITECTURE.toml`;
 [Current limits](architecture.md#current-limits) lists those edges.
@@ -36,7 +36,7 @@ role, except through an edge recorded as an exception row in
 #### Scenario: A family package imports a domain
 
 - **WHEN** the architecture check reads an import of `arkhai_apicredits`, or of
-  any later sibling domain's package, from any project under `domains/api`
+  any later sibling domain's package, from any project under `kit/api`
 - **THEN** the check fails naming the import, and no exception row excuses it
 
 #### Scenario: A label value is sought in the vocabulary

@@ -32,6 +32,11 @@ from tests.integration.signed_service import (
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "baseline"
+#: The surface the family's contracts declare, which its own tests also read.
+CONTRACT_FIXTURES = (
+    Path(__file__).resolve().parents[5] / "kit" / "api" / "contracts" / "tests" / "fixtures" / "baseline"
+)
+CONTRACT_RECORDS = frozenset({"routes", "openapi", "route_contracts", "refusals"})
 SOURCE = Path(__file__).resolve().parents[2] / "src" / "apicredits_service"
 DISTRIBUTION = "arkhai-apicredits-service"
 
@@ -401,8 +406,12 @@ async def capture_all(app) -> dict[str, Any]:
         }
 
 
+def fixture_path(name: str) -> Path:
+    return (CONTRACT_FIXTURES if name in CONTRACT_RECORDS else FIXTURES) / f"{name}.json"
+
+
 def load_record(name: str) -> Any:
-    path = FIXTURES / f"{name}.json"
+    path = fixture_path(name)
     if not path.exists():
         raise AssertionError(
             f"{path} is missing; the baseline is written once by "
@@ -447,9 +456,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if not args.write:
         parser.error("nothing to do without --write")
-    existing = [name for name in RECORDS if (FIXTURES / f"{name}.json").exists()]
+    existing = [name for name in RECORDS if fixture_path(name).exists()]
     if existing:
-        print(f"{FIXTURES} already holds {existing}; fixtures are never rewritten", file=sys.stderr)
+        print(f"the baseline already holds {existing}; fixtures are never rewritten", file=sys.stderr)
         return 1
     monkeypatch = MonkeyPatch()
     with TemporaryDirectory() as directory:
@@ -459,12 +468,11 @@ def main(argv: list[str]) -> int:
         finally:
             unload_service_modules()
             monkeypatch.undo()
-    FIXTURES.mkdir(parents=True, exist_ok=True)
     for name, value in records.items():
-        (FIXTURES / f"{name}.json").write_text(
-            json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        print(f"wrote {FIXTURES / f'{name}.json'}")
+        path = fixture_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"wrote {path}")
     return 0
 
 

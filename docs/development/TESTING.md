@@ -808,7 +808,7 @@ proving that no execution layer relies on another layer's earlier decision:
   client — status and stored state only, per the rejection-path rule — plus the
   upgrade migration, the startup refusal, and every projected pool carrying both
   declarations. The api family authority library's integration suite
-  (`domains/api/authority/tests/integration/test_pool_declarations_migration.py`)
+  (`kit/api/authority/tests/integration/test_pool_declarations_migration.py`)
   owns the API-credits service's migration and startup refusal.
 - Provider and backing immutability follow the same split. `kit/resource-pools`
   unit tests own the pure stored-versus-proposed comparison; no database is
@@ -1231,17 +1231,17 @@ languages" a checkable claim rather than an assumption.
 **Current example:** the api family's bearer gate — the Python
 `arkhai-api-gate` (reference implementation) and the API-credits
 TypeScript and Rust middlewares — all replay
-`domains/apicredits/middleware/conformance/session.json` — one recorded
+`kit/api/gate-ports/conformance/session.json` — one recorded
 session of requests against the gate, with each step asserting the
 allow/deny decision, the deny body's machine-readable error code,
 whether a `purchase` pointer is present, and call counts against the
 stateful collaborators the step is meant to exercise (cache-hit
 skipping, zero-calls-on-known-exhaustion). See
-`domains/apicredits/middleware/conformance/README.md` for what each step
+`kit/api/gate-ports/conformance/README.md` for what each step
 field asserts, and the runners at
-`domains/api/gate/tests/conformance_runner.py`,
-`domains/apicredits/middleware/typescript/test/conformanceRunner.ts`,
-and `domains/apicredits/middleware/rust/tests/conformance.rs`.
+`kit/api/gate/tests/conformance_runner.py`,
+`kit/api/gate-ports/typescript/test/conformanceRunner.ts`,
+and `kit/api/gate-ports/rust/tests/conformance.rs`.
 
 ## Private Service Dependencies
 

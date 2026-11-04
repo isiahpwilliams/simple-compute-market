@@ -152,7 +152,7 @@ them.
   `domains/inference/src/arkhai_inference/usage/{models,evidence}.py`,
   `domains/inference/registry/filter-spec.yaml`,
   `domains/inference/pyproject.toml`, and `domains/inference/tests/`.
-- **Touched code.** `domains/api/src/arkhai_api/purchase.py` (the purchase
+- **Touched code.** `kit/api/src/arkhai_api/purchase.py` (the purchase
   shape's validation), `domains/inference/src/arkhai_inference/schema.py` (the
   negotiation carriers bound from `arkhai-api-contracts`), two API-credits
   storefront tests that sent a string quantity,

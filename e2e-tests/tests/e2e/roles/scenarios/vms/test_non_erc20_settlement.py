@@ -52,9 +52,12 @@ pytestmark = [
     # while the holds stand.
     # The module steps the storefront's loops and fulfillment convergence (a
     # timer cycle could claim a row mid-provider-call, and the module's own
-    # explicit cycle would then reach nothing) itself.
+    # explicit cycle would then reach nothing) itself. Alice's loops and the
+    # lease watchdog are held as in every VM-lane module, so no cycle a stage
+    # did not ask for runs while it observes the stack.
     pytest.mark.usefixtures(
-        "storefront_loops_held", "fulfillment_convergence_held",
+        "storefront_loops_held", "alice_loops_held",
+        "fulfillment_convergence_held", "lease_watchdog_held",
         "ensure_storefront_resumed", "reap_buyer_settle_subprocess", "release_reserved_resources",
     ),
     pytest.mark.e2e_non_erc20_settlement,
@@ -383,14 +386,14 @@ def test_scalar_non_erc20_settlement_reaches_ready(
     (alkahest_option,) = [
         dict(option)
         for option in registry_client.get_listing(listing_id).settlement_options
-        if dict(option)["mechanism"] == "alkahest.v1"
+        if dict(option)["settlement"]["schema"] == "alkahest.v1"
     ]
     negotiate_resp = storefront_client.negotiate_new(
         listing_id=listing_id,
         initial_amount=_BUYER_INITIAL_AMOUNT,
         settlement_selection={
-            "mechanism": "alkahest.v1",
             "option_id": alkahest_option["option_id"],
+            "settlement": {"schema": "alkahest.v1"},
             "expiration_unix": expiration_unix,
         },
         escrow_expiration_unix=expiration_unix,

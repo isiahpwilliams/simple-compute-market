@@ -10,7 +10,7 @@ from typing import Any
 
 from core_storefront.stage_log import stage_event
 from market_core import MarketDomainContract
-from market_settlement_runtime import MechanismReadiness
+from market_core.schemas import settlement_option_schema
 from market_identity import Identity
 from market_settlement_runtime import MechanismReadiness
 
@@ -140,7 +140,7 @@ def admissible_settlement_terms(
 
     kept_options, dropped = backing.admissible_settlement(
         settlement_options,
-        mechanism=lambda option: str(option.get("mechanism")),
+        mechanism=lambda option: str(settlement_option_schema(option)),
         fulfils_through_capacity=fulfils_through_capacity,
     )
     if accepted_escrows:

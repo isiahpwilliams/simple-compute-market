@@ -227,6 +227,9 @@ class StorefrontSQLiteClient(CoreSQLiteClient):
     async def load_settlement_evidence(self, *, negotiation_id: str) -> SettlementEvidence | None:
         return await asyncio.to_thread(self._settlement().get, negotiation_id)
 
+    async def load_settlement_evidence_by_ref(self, *, settlement_ref: str) -> SettlementEvidence | None:
+        return await asyncio.to_thread(self._settlement().get_by_reference, settlement_ref)
+
     async def load_issuance_progress(self, *, reference: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._settlement().progress, reference)
 

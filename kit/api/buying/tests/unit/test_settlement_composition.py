@@ -40,6 +40,7 @@ class Stage:
         self.mechanism_id = mechanism_id
         self.escrow_codec = codec
         self.options = options
+        self.term_context = None
         self.accepted: list[Any] = []
 
     def chain_config_paths(self) -> dict[str, str | None]:
@@ -57,11 +58,11 @@ class Stage:
 
 def _agreement(mechanism: str) -> dict[str, Any]:
     option = SettlementOption(
-        mechanism=mechanism,
-        asset="USD",
-        rates=[],
-        params={},
-        option_id=derive_settlement_option_id(mechanism=mechanism, asset="USD", rates=[], params={}),
+        price={"asset": "USD", "rates": []},
+        settlement={"schema": mechanism},
+        option_id=derive_settlement_option_id(
+            price={"asset": "USD", "rates": []}, settlement={"schema": mechanism},
+        ),
     )
     return Agreement(
         negotiation_id="neg-1", listing_id="listing-1", listing_hash="0" * 64,
@@ -206,10 +207,10 @@ def test_the_listing_record_is_the_selected_or_escrow_stages():
         }),
     )
     selection = SettlementSelection(
-        mechanism="rated.v1", option_id="a" * 64, expiration_unix=1_800_000_000,
+        settlement={"schema": "rated.v1"}, option_id="a" * 64, expiration_unix=1_800_000_000,
     )
     unknown = SettlementSelection(
-        mechanism="other.v1", option_id="a" * 64, expiration_unix=1_800_000_000,
+        settlement={"schema": "other.v1"}, option_id="a" * 64, expiration_unix=1_800_000_000,
     )
 
     assert composition.accepted_listing_record({}, selection) == {"recorded_by": "rated.v1"}

@@ -28,25 +28,31 @@ sections — the workflow log, and the denials report, through which alone you r
 a transcript. Never read code, reviews, or
 change documents to form or state a view of a finding or a design question, and
 add nothing to a step's message but a routing note ("validation and review are
-starting") and the `make change-watch` line.
+starting") and the `make change-watch` line. While a step runs you stay free for
+the owner, who may interrupt it or revisit a finished triage through you
+("Interrupting and revisiting").
 
 ## Recover from the files
 
-On every start and after compaction, read `AGENTS.md` and its required documents,
-this skill, and the result contract in `scripts/change_next_step.py`. Run:
+On every start and after compaction, read the documents `scripts/change-workflow
+config load common` prints — the repository's guidance every session reads — this
+skill, and the result contract in `scripts/change_workflow/next_step.py`. Run:
 
 ```text
-python3 scripts/change_next_step.py <change>
-python3 scripts/run_change_step.py log <change> --last 10
+scripts/change-workflow next <change>
+scripts/change-workflow log <change> --last 10
 ```
 
 The owner starts you in their workspace, and you run these there first. A change
 worked in its own clone, `<workspace>.changes/<change>/`, is computed there: the
 workspace's computation names it (`in-clone`, with its directory), and from then
 on you run the computation, the log, and every command this skill names for the
-change in the clone — `python3 <clone>/scripts/change_next_step.py <change>`,
-`python3 <clone>/scripts/run_change_step.py …`, `make -C <clone> …` — since the
-change's records, log, transcripts, and step sessions are the clone's. Only
+change in the clone — `cd <clone> && scripts/change-workflow next <change>`, `cd
+<clone> && scripts/change-workflow …`, `make -C <clone> …` — since the change's
+records, log, transcripts, and step sessions are the clone's. The command acts on
+the repository containing its working directory, so it runs with the clone as that
+directory: `<clone>/scripts/change-workflow` run from the workspace would act on
+the workspace. Only
 `make change-clone` and the round view run in the workspace. A change worked in
 the workspace itself, with no clone, is computed and run there throughout.
 
@@ -78,7 +84,7 @@ steps, never while one runs, on the owner's word, run it to show what it would
 write:
 
 ```text
-python3 scripts/run_change_step.py convert <change>
+scripts/change-workflow convert <change>
 ```
 
 It writes nothing yet. Relay what it shows as it shows it: the direction it
@@ -101,10 +107,10 @@ the change's log holds the owner's decision naming it. When the owner says a cha
 runs on the checked-out branch, record that once, before its next step:
 
 ```text
-python3 scripts/run_change_step.py note <change> orchestrator --by owner --branch <branch> --change <change> --decision "runs on <branch>" --reason <the owner's reason>
+scripts/change-workflow note <change> orchestrator --by owner --branch <branch> --change <change> --decision "runs on <branch>" --reason <the owner's reason>
 ```
 
-`python3 scripts/run_change_step.py log <change> --branch <branch>` lists such
+`scripts/change-workflow log <change> --branch <branch>` lists such
 lines; a step checks for one rather than stopping to ask.
 
 ## Where the change is worked
@@ -114,11 +120,13 @@ The computation names where the change is worked before any step:
 - **`clone`** — the change's branch is checked out neither in the workspace nor in
   a clone of its own, or its clone was left unfinished. Run, in the workspace,
   `make change-clone` with the result's `arguments` (`CHANGE=<change>
-  BRANCH=<branch> FROM=<ref>`, or the change alone to finish a clone), with any
-  `BRANCH` or `FROM` the owner names instead — a change whose branch starts from
-  another change's branch rather than `dev`. It clones
-  the workspace, checks out the branch — creating it from `FROM` when it does not
-  exist — and starts the clone's bootstrap, `make init`, in the background. It
+  BRANCH=<branch>`, or the change alone to finish a clone), with any `BRANCH` or
+  `FROM` the owner names instead — a change that lands on another branch than the
+  one the workspace has checked out. It clones the workspace, records `FROM`, or
+  else the workspace's checked-out branch, as the branch the change lands on,
+  checks out the branch — creating it from that branch when it does not exist —
+  and starts the clone's bootstrap, the configuration's `post-clone`, in the
+  background. It
   refuses, deleting nothing, a directory that is not a clone of the workspace, has
   another branch checked out, or has uncommitted changes: bring its message to the
   owner. Recompute.
@@ -189,7 +197,7 @@ plan — with its `by`: `plan` for the plan's next round, `triage` or `owner` fo
 sections a triage's exit or the owner's direction names out of the plan's order:
 
 ```text
-python3 scripts/run_change_step.py note <change> round --sections '1,2;3' --by plan
+scripts/change-workflow note <change> round --sections '1,2;3' --by plan
 ```
 
 That is one session for sections 1 and 2 and another for 3, reviewed as one
@@ -247,8 +255,13 @@ report is often the earlier one. Design and triage stay conversations with the
 owner. A triage names its exit in its outcome — the change advances, another review
 round runs, or the triage returns the change to an earlier phase — with the records
 it triaged, and the computation routes on that; its file's `## Next` is prose that
-nothing routes on. There is no gate to bring to the owner, and a triage with
-nothing to dispose of advances without them.
+nothing routes on. There is no gate to bring to the owner: a triage recommending
+advancing takes that exit without asking, and one with nothing to discuss that
+recommends advancing asks nothing. Its table of findings accepted by default, and an advancing exit it took,
+reach the owner in its messages: relay them as any message, the table with the
+question it rides on or the final report that carries it, and add no prompt of
+your own to confirm them. The owner may revisit either ("Interrupting and
+revisiting", below).
 
 An `owner` result carrying `merging` is a merge in progress in the checkout; it
 concludes as "Maintain the workflow" says, and nothing else runs until it has.
@@ -257,7 +270,7 @@ including `message` and `awaiting`; read its denials first, as below. Put a
 `question` to the owner and wait. Resume the same session with the reply:
 
 ```text
-python3 scripts/run_change_step.py resume <change> --seq <waiting-seq> --answer <owner-answer>
+scripts/change-workflow resume <change> --seq <waiting-seq> --answer <owner-answer>
 ```
 
 Use the waiting `seq` the computation names, never the last run in the log: a
@@ -267,15 +280,16 @@ with proper shell quoting or structured command arguments.
 
 ### The owner's directions
 
-Every direction is the owner's: a confirmed return, a repeat review, a waiver, and
-an intervention sending the change to any node of the graph. Record one only on
+Every direction is the owner's: a confirmed return, a repeat review, a waiver of a
+step, and an intervention sending the change to any node of the graph; a waiver of
+parts of validation is a decision with no target (below). Record one only on
 their word, `--by owner`, its target as `--next <step>`, with `--kind <kind>` for
 a review or a triage (the kind of review it triages), `--sections '1,2;3'` for
 sections out of the plan's order, and `--target <step>` — itself qualified by
 `--kind` and `--sections` — for a validation, naming what it is for:
 
 ```text
-python3 scripts/run_change_step.py note <change> orchestrator --by owner --next validate --target closeout --decision "validate HEAD before closeout" --reason <the owner's words>
+scripts/change-workflow note <change> orchestrator --by owner --next validate --target closeout --decision "validate HEAD before closeout" --reason <the owner's words>
 ```
 
 You direct nothing of your own accord, and never record a step's exit on its
@@ -301,11 +315,14 @@ direction with no `resolves`, since no run waits on it: `--by owner --next revie
 
 After a confirmed return to design, once the design step has finished, the
 computation names a design review of what it settled. The owner may waive that
-review. Only on the owner's word, record it as their direction to planning, naming
-no run:
+review; the design step's message recommends it when a criterion of the guide's
+"Waivers" holds. A recommendation the owner declines is a ledger line too, in the
+form below with their reason, appended uncommitted for the design review's triage
+to commit with its own (`change-triage`, step 6). Only on the owner's word, record a waiver as their
+direction to planning, naming no run:
 
 ```text
-python3 scripts/run_change_step.py note <change> orchestrator --by owner --next plan --decision "waives another design review" --reason <the owner's reason>
+scripts/change-workflow note <change> orchestrator --by owner --next plan --decision "waives another design review" --reason <the owner's reason>
 ```
 
 Append the waiver's line to the change's
@@ -313,17 +330,29 @@ Append the waiver's line to the change's
 planning to commit with its plan:
 `{"review": "plan", "finding": "<the decision the design step settled>",
 "section": null, "lens": "readiness", "basis": "judgement", "severity": null,
-"agent_position": "the next-step computation named another design review",
+"agent_position": "<the design step's recommended waiver and its criterion, as its message gave them, or, when it recommended none, that the next-step computation named another design review>",
 "owner_disposition": "<the owner's waiver and reason>", "summary": "<one line>"}`.
 Recompute: the computation names planning, and planning's entry check, which asks
 the computation, accepts it.
 
 When the computation names validation, or the owner, before archive cleanup —
-`HEAD` changes a path outside `openspec/` and `docs/` since the closeout review —
+`HEAD` changes a path outside the repository's inert paths since the closeout review —
 the owner may waive that validation, judging the paths its reason names. Only on
 the owner's word, record `--by owner --next archive-cleanup` with no `resolves`,
 the paths in its reason; archive cleanup finds the direction in the log and writes
 the waiver to the ledger.
+
+When the owner waives parts of validation for later validations — "skip Helm and
+the pipeline for the rest of this change" — record their decision with no `--next`,
+naming the parts and the condition they are waived on, so validation finds it in the
+log ("Waivers" in the guide, "Waiving parts of validation"):
+
+```text
+scripts/change-workflow note <change> orchestrator --by owner --decision "waive the helm and pipeline parts of validation for the rest of this change, while <the condition>" --reason <the owner's words>
+```
+
+Never pass a waiver in a validation's `ARGUMENTS`: validation reads waivers only
+from the log, where every later validation, by hand or orchestrated, finds them.
 
 After the pre-closeout triage, the merge step brings the branch the change lands on
 into the change's branch and proposes what follows it. `make merge` merges the
@@ -338,11 +367,65 @@ record the waiver as the owner's direction past the guard, resolving the merge's
 run, with the owner's words:
 
 ```text
-python3 scripts/run_change_step.py note <change> orchestrator --by owner --resolves <merge-seq> --next closeout --decision "closeout without validating the merged HEAD" --reason <the owner's words>
+scripts/change-workflow note <change> orchestrator --by owner --resolves <merge-seq> --next closeout --decision "closeout without validating the merged HEAD" --reason <the owner's words>
 ```
 
 A failed validation of the merged `HEAD` names the merge again, which repairs it;
 an inconclusive one names the owner, as any validation's does.
+
+### Interrupting and revisiting
+
+You stay free while a step runs, so the owner can reach you mid-step
+(`docs/agents/change-workflow.md`, "Interrupting a running step"). On their word
+only, stop the run, naming the step when validation and a review run side by side:
+
+```text
+scripts/change-workflow stop <change> [--step <step>]
+```
+
+It reads the change's clone itself when the change has one. A refusal — nothing in
+progress, two runs and no step named, a stale record, a run that ended between its
+checks — signalled nothing: relay it. Then record the interrupt as the owner's
+decision, resolving no run:
+
+```text
+scripts/change-workflow note <change> orchestrator --by owner --decision "interrupt <step>" --reason <the owner's words>
+```
+
+The run's background command then exits with its line: `stopped`, with its
+session, or, when the stop reached it after its agent or reviewer had exited, the
+outcome it reached, routed as any. Recover a stop as the owner says, as any stop
+("Read every denial before advancing"): resume a stopped step's `seq` with their
+words, rerun it fresh, or resolve it with `--resolves` and direct the change
+elsewhere. A stop commits nothing, and an interrupted review published nothing and
+is rerun, never resumed.
+
+The owner may revisit a finding a triage accepted by default, or the advancing exit
+it took (`docs/agents/change-workflow.md`, "Revisiting a default acceptance").
+Before its fixes, the revisit is their reply to the triage's question: relay it as
+any. After the triage finished, on their word, in this order:
+
+1. stop each step started after the triage that is still running, as above —
+   validation and a review side by side are two stops, each naming its step; the
+   direction below records the owner's decision;
+2. record their direction naming the triage's run, relaying a refusal — a later
+   triage of the same reviews, or a run that is not a finished triage:
+
+   ```text
+   scripts/change-workflow note <change> orchestrator --by owner --resumes <triage-seq> --decision "revisits <label>" --reason <the owner's words>
+   ```
+
+3. resume that triage with their words, `scripts/change-workflow resume <change>
+   --seq <triage-seq> --answer <the owner's words>`, as its own background command,
+   and relay its messages as any triage's; its outcome names its exit again and
+   governs;
+4. once the resumed run has logged its line, resolve each stopped step rather than
+   resuming it, since its tree moved under it: `--by owner --resolves
+   <stopped-seq>`, one line per run, the owner's revisit as its reason. Resolved before the resume,
+   the computation would name the first triage's exit again.
+
+Recompute after each. Once archive cleanup has reached `done`, nothing is left to
+resume: tell the owner a revisit belongs on the pull request.
 
 **An interactive run left unrecorded.** A step the owner runs interactively records
 its own outcome with `record`. When the owner tells you they ran a step themselves
@@ -353,7 +436,7 @@ closed session, since run from any other session `record` would read that other
 session's id:
 
 ```text
-python3 scripts/run_change_step.py record <change> <step> --session <the closed session's id> --outcome '<the outcome, as JSON>'
+scripts/change-workflow record <change> <step> --session <the closed session's id> --outcome '<the outcome, as JSON>'
 ```
 
 Never run it yourself: a step's exit is the step's, or the owner's, to record.
@@ -364,7 +447,7 @@ worktree branched from dev. The owner commits and merges it to dev, then merges
 dev here before this change records its dependency. After the prerequisite is
 archived and merged here, propose releasing the dependency. Only on the owner's
 word remove it from this change's row, keep `in design`, run
-`make check-change-index`, record the decision, and recompute. An absent
+`scripts/change-workflow check index`, record the decision, and recompute. An absent
 prerequisite or another external blocker goes to the owner.
 
 Between turns the owner can take over a step's session, from the checkout it ran
@@ -375,7 +458,7 @@ files and log and recompute rather than presuming the direct conversation's
 result. For `done`, open the change's pull request, report the archived change,
 and stop; the owner reviews and merges it. For a change worked in its clone, archive cleanup has copied its
 history into the workspace, where sessions working other changes find it
-(`python3 scripts/find_change.py --records <change>`), but its own log line is
+(`scripts/change-workflow find --records <change>`), but its own log line is
 written after that copy: at `done`, before reporting, run `make -C <clone>
 change-history CHANGE=<change>`, so the workspace holds archive cleanup's outcome
 too, and relay what it reports. Lines and records written in the clone later
@@ -399,7 +482,7 @@ Read `denials` from the run's workflow-log line, never its message. Every outcom
 can carry them, even one that finished and moved the phase on. Run:
 
 ```text
-python3 scripts/run_change_step.py denials <change> <seq>
+scripts/change-workflow denials <change> <seq>
 ```
 
 Inspect each denial and the later calls it reports. After a deny-rule denial, a
@@ -466,7 +549,7 @@ prose, showing the open sections the computation lists, and record the answer as
 that round starts:
 
 ```text
-python3 scripts/run_change_step.py note <change> round --sections '1,2;3' --by owner
+scripts/change-workflow note <change> round --sections '1,2;3' --by owner
 ```
 
 For a round recorded after the fact add `--after <highest-record-before-round>`;
@@ -552,8 +635,8 @@ that round's triage, a commit also moves the `HEAD` the round's validation and
 review describe, so a permission a run needs then is granted for that one run,
 fresh or resumed, and the table edit committed once the round is triaged, unless
 the owner says otherwise. Commit on a clean worktree only, since the guarded push
-refuses any other: while the waiver's ledger line waits for planning, the commit
-waits too. Never write the change's feature work of your own accord; never read a
+refuses any other: while a design review's waiver line waits for planning, or a
+declined one for that review's triage, the commit waits too. Never write the change's feature work of your own accord; never read a
 finding's code to decide what to change.
 
 The merge before closeout is a step of the graph (`merge`), not maintenance: run it
@@ -583,7 +666,7 @@ resolve the workflow's files first, `git -C <clone> add` them, and record the
 owner's decision naming the code files left,
 
 ```text
-python3 <clone>/scripts/run_change_step.py note <change> orchestrator --by owner --decision "an implementation run resolves the merge conflicts in <files>" --reason <the owner's words>
+cd <clone> && scripts/change-workflow note <change> orchestrator --by owner --decision "an implementation run resolves the merge conflicts in <files>" --reason <the owner's words>
 ```
 
 then run `make -C <clone> implement CHANGE=<change> UNATTENDED=1 ARGUMENTS='resolve
@@ -591,8 +674,8 @@ the merge conflicts in <files>'`, with no sections. It resolves them, runs the
 suites of the sections owning them, concludes the merge, and pushes. While the
 merge is in progress the computation names no waiting run, so a question or stop
 from that run is resumed by the `seq` on the line its target printed when it
-ended — the one run you started — after `python3 <clone>/scripts/run_change_step.py
-log <change> --last 3` confirms it is still the latest. Recompute once the merge is
+ended — the one run you started — after `cd <clone> && scripts/change-workflow log
+<change> --last 3` confirms it is still the latest. Recompute once the merge is
 concluded and pushed. A merge is the owner's intervention, so the run names an
 exit implementation does not declare and its message says where the change stood:
 the computation names the owner with that choice. Relay it, and record where the
@@ -600,26 +683,28 @@ owner directs the change, usually where it stood before the merge.
 
 ## Record decisions through the log's writer
 
-`reviews/workflow.jsonl` is written only through `scripts/run_change_step.py`: the
+`reviews/workflow.jsonl` is written only through `scripts/change-workflow`: the
 wrapper's line for each unattended run, a review's among them, `record`'s for an
 interactive one, the `round` and decision lines `note` writes, and `convert`'s. Every line it writes carries the log's format
 marker. Use:
 
 ```text
-python3 scripts/run_change_step.py note <change> orchestrator --by <owner-or-orchestrator> --decision <decision> --reason <reason>
+scripts/change-workflow note <change> orchestrator --by <owner-or-orchestrator> --decision <decision> --reason <reason>
 ```
 
 Add `--reads <seq>` for the run whose denials were read, `--resolves <seq>` only
 for the run settled, and, for the owner's direction alone, `--next <step>` with
 the `--kind`, `--sections`, and `--target` that qualify it ("The owner's
-directions"). A confirmed return resolves its run; a repeat review, and the
-owner's waiver of a design review or of archive cleanup's validation, name no run.
+directions"), or `--resumes <seq>` for a revisit of a finished triage
+("Interrupting and revisiting"). A confirmed return resolves its run; a repeat
+review, the owner's waiver of a design review or of archive cleanup's validation,
+an interrupt, and a revisit's direction resolve no run.
 Record every routing or recovery decision, the owner's included, with its reason.
 Never append log lines by hand or clear one run with a decision about another.
 Leaf skills record their exits, design decisions, and the intervention ledger:
 relay the owner's answer to the waiting leaf rather than substituting your own
-record. The ledger line of the owner's waiver of a design review is the one you
-write.
+record. The ledger line of the owner's answer to another design review — a waiver,
+or a recommended waiver declined — is the one you write.
 
 ## Report what only you see
 

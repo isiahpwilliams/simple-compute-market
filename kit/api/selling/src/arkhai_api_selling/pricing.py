@@ -84,7 +84,7 @@ def _escrow_rate(escrow: Mapping[str, Any], *, noun: str) -> int | None:
 def _option_rate(option: Mapping[str, Any], *, noun: str) -> int | None:
     """A settlement option's one per-credit amount rate, or None when it states no amount rate."""
     parsed = SettlementOption.model_validate(option)
-    amount_rates = [rate for rate in parsed.rates if rate.field == "amount"]
+    amount_rates = [rate for rate in parsed.price_rates if rate.field == "amount"]
     if not amount_rates:
         return None
     if len(amount_rates) != 1:

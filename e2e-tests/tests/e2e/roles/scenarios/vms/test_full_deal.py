@@ -4,7 +4,8 @@ VM's run of the compute family's canonical deal, through the provisioning mock
 profile. The stages VM shares with bare metal, and the mock-lane stages that hold
 and release its jobs at the mock rules' gates, are defined once in
 ``helpers/compute_deal_stages.py`` and declared here, in order, by subclassing;
-VM's own stages (02b, 03a, 03b, 09a2, 09bb) are inserted in place, and
+VM's own stages (02b, 03a, 03b, 09a2, 09bb, and the later deals' 12a–12c and
+13a–13d) are inserted in place, and
 ``VmComputeDealDriver`` supplies VM's part of them.
 
 Stage map
@@ -62,6 +63,7 @@ Phase 8 — Settlement pipeline
   08a  Evaluate settle dry-run → would_submit=True, host chosen
   08c  Evaluate provisioning job dry-run → the create rule would match and pause
   08b  Settlement submitted + fulfillment dispatched:
+         wait until the Agreement start is a few seconds behind (late settlement)
          POST /api/v1/settle/{uid} → status=provisioning
          wait_for_stage_event(provision, job_submitted)
          GET /settle/{uid}/status → fulfillment_id present, state=dispatching
@@ -77,7 +79,9 @@ Phase 9 — Provisioning completion
          GET .../negotiations/{neg_id} → primary escrow status=ready,
                                           fulfillment_uid populated
   09c  Lease recorded:
-         GET provisioning /api/v1/leases/by-escrow/{uid} -> active/pending lease
+         GET provisioning /api/v1/leases/by-escrow/{uid} -> active/pending lease,
+         its window the Agreement's although settlement came later, and its
+         activation recorded after settlement
 
 Phase 10 — Lease expiry and durable teardown
   09c2 Arm the provider teardown gate.
@@ -93,6 +97,23 @@ Phase 11 — Fulfillment convergence and resource release
   11a2 Release the teardown gate and drain provider teardown.
   11b  Converge to torn_down, run one lease cycle → released; observe
        storefront release, capacity reuse, and cleanup.
+
+Phase 12 — Buyer surrender on a second deal
+  12a  Republish the freed capacity and deliver another deal.
+  12b  Surrender twice through the canonical lifecycle client; verify one
+       signed site report while provider teardown remains gated.
+  12c  Complete provider teardown, then observe the capacity-return callback;
+       the original end and report remain unchanged and capacity releases once.
+
+Phase 13 — Delivery timing on the freed capacity (delivery_timing_deal.py)
+  13a  A deal whose Agreement starts later: committed at settlement under its
+       window, nothing dispatched, nor after a resume-pass step before the start.
+  13b  Once the start is reached, a resume-pass step dispatches it; after
+       convergence another activates the lease, and the deal is ready.
+  13c  The buyer ends it; teardown completes and the capacity returns.
+  13d  A deal whose acceptance hold is released and whose resource is taken:
+       settlement finds no capacity, the seller's failure is recorded, nothing
+       is dispatched and no reservation is placed.
 """
 
 from __future__ import annotations
@@ -135,6 +156,7 @@ from tests.e2e.roles.helpers.compute_deal_stages import (
     Stage08c_EvaluateProvisioningJob,
     Stage09a_FulfillmentConvergesToActive,
     Stage09b_SettlementReadyAndCredentials,
+    Stage09c1_LateSettlementKeepsTheWindow,
     Stage09c2_ArmTeardownGate,
     Stage09c_LeaseRecorded,
     Stage10a_LeaseExpirySetup,
@@ -151,6 +173,25 @@ from tests.e2e.roles.scenarios.vms.conftest import (
     step_listing_reconciliation,
 )
 
+from tests.e2e.roles.scenarios.vms.lifecycle_deal import (
+    TypedLifecycleBuyer, Stage12a_SecondDealActive, Stage12b_BuyerSurrendersTwice,
+    Stage12c_CapacityReleasedOnce,
+)
+from tests.e2e.roles.scenarios.vms.delivery_timing_deal import (
+    Stage13a_ForwardDealCommittedAndWaiting,
+    Stage13b_ForwardDealDeliveredAtItsStart,
+    Stage13c_ForwardDealEndedAndReleased,
+    Stage13d_SettlementFindsNoCapacity,
+)
+
+
+@pytest.fixture(scope="module")
+def vm_lifecycle_buyer(storefront_client, storefront_admin_client, registry_client,
+                       deal_driver, buyer_config, seller_wallet, site_capacity):
+    return TypedLifecycleBuyer(storefront_client, storefront_admin_client, registry_client,
+                               deal_driver, buyer_config, seller_wallet, site_capacity)
+
+
 log = logging.getLogger(__name__)
 
 pytestmark = [
@@ -159,9 +200,12 @@ pytestmark = [
     # while the holds stand.
     # The module steps the storefront's loops, fulfillment convergence (a timer
     # cycle could claim a row mid-provider-call, and the module's own explicit
-    # cycle would then reach nothing), and lease expiry itself.
+    # cycle would then reach nothing), and lease expiry itself. Alice's loops
+    # are held as in every VM-lane module: her publication cycle writes to the
+    # registries the lane's modules read.
     pytest.mark.usefixtures(
-        "storefront_loops_held", "fulfillment_convergence_held", "lease_watchdog_held",
+        "storefront_loops_held", "alice_loops_held",
+        "fulfillment_convergence_held", "lease_watchdog_held",
         "ensure_storefront_resumed", "reap_buyer_settle_subprocess", "release_reserved_resources",
     ),
     pytest.mark.e2e_deal,
@@ -534,6 +578,10 @@ class TestStage09c_LeaseRecorded(Stage09c_LeaseRecorded):
     pass
 
 
+class TestStage09c1_LateSettlementKeepsTheWindow(Stage09c1_LateSettlementKeepsTheWindow):
+    pass
+
+
 # ===========================================================================
 # Phases 10 and 11 — lease expiry, teardown, and release
 # ===========================================================================
@@ -559,4 +607,34 @@ class TestStage11a2_ReleaseTeardownGateAndDrain(Stage11a2_ReleaseTeardownGateAnd
 
 
 class TestStage11b_TeardownCompletion(Stage11b_TeardownCompletion):
+    pass
+
+
+# A second deal keeps receipt-time buyer surrender separate from lease expiry.
+class TestStage12a_SecondDealActive(Stage12a_SecondDealActive):
+    pass
+
+
+class TestStage12b_BuyerSurrendersTwice(Stage12b_BuyerSurrendersTwice):
+    pass
+
+
+class TestStage12c_CapacityReleasedOnce(Stage12c_CapacityReleasedOnce):
+    pass
+
+
+# Deals that exercise delivery's timing on the freed capacity.
+class TestStage13a_ForwardDealCommittedAndWaiting(Stage13a_ForwardDealCommittedAndWaiting):
+    pass
+
+
+class TestStage13b_ForwardDealDeliveredAtItsStart(Stage13b_ForwardDealDeliveredAtItsStart):
+    pass
+
+
+class TestStage13c_ForwardDealEndedAndReleased(Stage13c_ForwardDealEndedAndReleased):
+    pass
+
+
+class TestStage13d_SettlementFindsNoCapacity(Stage13d_SettlementFindsNoCapacity):
     pass

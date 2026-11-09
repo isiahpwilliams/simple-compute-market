@@ -6,6 +6,9 @@ import json
 import logging
 from typing import Any
 
+from compute_delivery import AccessRefused
+from compute_provisioning_client import ComputeProvisioningError
+from market_core.schemas import settlement_option_schema
 from core_storefront.models.settle_models import (
     EvaluateSettleRequest,
     EvaluateSettleResponse,
@@ -23,11 +26,13 @@ from market_identity import Identity
 from market_settlement_runtime import (
     SettlementAdminRouteError,
     SettlementAdminRouteService,
+    SettlementLookup,
 )
 from market_storefront_kit import LifecycleRouteError, refuse_introduction_settle
 from storefront_client.settlement_routes import SETTLE_STATUS
 
 import market_storefront.container as _container
+from market_storefront import delivery_ports
 from market_storefront.middleware import buyer_auth
 from market_storefront.middleware.admin_auth import require_admin_key
 from market_storefront.models.settle_models import (
@@ -45,6 +50,40 @@ SETTLED_BY_INTRODUCTION = "a contact exchange completes by introduction, not set
 
 router = APIRouter(prefix="/api/v1/settle", tags=["settle"])
 settlements_router = APIRouter(prefix="/api/v1", tags=["settlements"])
+
+
+async def _with_credentials(
+    payload: dict[str, Any], negotiation_id: str | None, *, refuse_after_end: bool = False,
+) -> dict[str, Any]:
+    """``payload`` with its access part read live: the deal's tenant credentials.
+
+    The credentials are read through the delivery path's access check, never
+    from storage, so they appear only while the deal is available and started
+    and no end is admitted. With ``refuse_after_end`` — an exact retry of the
+    status read, whose earlier answer an end has made ungivable — a refusal
+    because delivery ended refuses the request; otherwise the answer goes out
+    without credentials. A fulfillment result provisioning cannot serve now
+    leaves the answer without credentials for the buyer's next read.
+    """
+    answer = {key: value for key, value in payload.items() if key != "tenant_credentials"}
+    if not negotiation_id:
+        return answer
+    try:
+        credentials = await delivery_ports.read_vm_credentials(
+            _container.resolved_sqlite_client, negotiation_id,
+        )
+    except AccessRefused as exc:
+        if refuse_after_end and exc.reason == "ended":
+            raise HTTPException(
+                status_code=410, detail="delivery has ended; no credential is disclosed",
+            ) from exc
+        return answer
+    except ComputeProvisioningError as exc:
+        logger.warning("[SETTLE] credentials for %s are unavailable now: %s", negotiation_id, exc)
+        return answer
+    if credentials:
+        answer["tenant_credentials"] = credentials
+    return answer
 
 
 @cbv(router)
@@ -87,7 +126,7 @@ class SettleController:
         if composition is None:
             raise HTTPException(status_code=503, detail="settlement runtime is unavailable")
         try:
-            stage = composition.seller_stages[selected.get("mechanism")]
+            stage = composition.seller_stages[settlement_option_schema(selected)]
         except KeyError as exc:
             raise HTTPException(status_code=400, detail="accepted settlement mechanism is unsupported") from exc
         try:
@@ -102,7 +141,16 @@ class SettleController:
             composition=composition, db=self._db, configured_chains=_container,
         )
         if isinstance(started, JSONResponse):
-            return started
+            # The stage answered whole, an exact retry's recorded outcome
+            # included. A settle resumes its operation on an exact retry, so
+            # only an acknowledgement's access part is rebuilt by a live read;
+            # a refusal has none.
+            if started.status_code >= 400:
+                return started
+            return JSONResponse(
+                content=await _with_credentials(json.loads(started.body), body.negotiation_id),
+                status_code=started.status_code,
+            )
         result, persisted_buyer = started
         serialized = (
             serialize_settlement_job(result)
@@ -118,7 +166,10 @@ class SettleController:
             mode="json"
         )
         status_code = 200 if result.get("status") in ("ready", "failed") else 202
-        return JSONResponse(content=serialized, status_code=status_code)
+        return JSONResponse(
+            content=await _with_credentials(serialized, body.negotiation_id),
+            status_code=status_code,
+        )
 
     @router.get(
         "/{escrow_uid}/status",
@@ -146,18 +197,16 @@ class SettleController:
             escrow_uid,
             buyer_principal,
         )
-        if auth.exact_retry and auth.recorded_outcome is not None:
-            status_code, payload = auth.recorded_outcome
-            if status_code >= 400:
-                raise HTTPException(status_code=status_code, detail=payload)
-            return SettleStatusResponse.model_validate(payload)
-
+        # A credential read: an exact retry reads again rather than replaying
+        # the earlier answer, so after an end it is refused.
         serialized = serialize_settlement_job(job)
         serialized["buyer_principal"] = buyer_principal.model_dump(mode="json")
         serialized["seller_principal"] = (
             _container.resolved_marketplace_signer.identity.model_dump(mode="json")
         )
-        return SettleStatusResponse(**serialized)
+        return SettleStatusResponse(**await _with_credentials(
+            serialized, job.get("negotiation_id"), refuse_after_end=auth.exact_retry,
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -197,14 +246,24 @@ class AdminSettleController:
             except ValueError as exc:
                 raise LookupError(str(exc)) from exc
 
-        async def settle_status(escrow_uid: str):
-            return await db.load_vm_settlement_job(reference=escrow_uid)
+        async def by_reference(settlement_ref: str):
+            return await db.load_vm_settlement_evidence_by_ref(
+                settlement_ref=settlement_ref
+            )
+
+        async def by_negotiation(negotiation_id: str):
+            return await db.load_vm_settlement_evidence(negotiation_id=negotiation_id)
+
+        async def delivery_status(evidence):
+            return await db.load_vm_delivery_status(evidence=evidence)
 
         self._routes = SettlementAdminRouteService(
             verify=verify,
             preview_fulfillment=preview,
-            settle_status=settle_status,
-            is_terminal=lambda status: status.get("status") in {"ready", "failed"},
+            settlements=SettlementLookup(
+                by_reference=by_reference, by_negotiation=by_negotiation
+            ),
+            delivery_status=delivery_status,
         )
 
     async def _routed(self, call):
@@ -252,9 +311,10 @@ class AdminSettleController:
         response_model=SettleWaitResponse,
         summary="Long-poll until settlement reaches a terminal state (admin)",
         description=(
-            "Blocks server-side until the settlement job for *escrow_uid* reaches "
-            "``ready`` or ``failed``, or until *timeout* seconds elapse. "
-            "Returns immediately if the job is already terminal."
+            "Blocks server-side until the delivery of the settlement *escrow_uid* "
+            "names — by its settlement reference, else by its negotiation — reaches "
+            "``ready``, ``failed`` or ``ended``, or until *timeout* seconds elapse. "
+            "Returns immediately if the delivery is already terminal."
         ),
     )
     async def wait_for_settlement(
@@ -299,7 +359,7 @@ async def refund_settlement(negotiation_id: str) -> Any:
     composition = _container.resolved_settlement_composition
     if composition is None:
         raise HTTPException(status_code=503, detail="settlement runtime is unavailable")
-    stage = composition.seller_stages.get((agreement.get("settlement") or {}).get("mechanism"))
+    stage = composition.seller_stages.get(settlement_option_schema(agreement.get("settlement") or {}))
     refund = getattr(stage, "refund", None)
     if refund is None:
         # A mechanism whose seller entry has no refund operation refunds

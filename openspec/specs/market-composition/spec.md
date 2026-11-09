@@ -474,12 +474,12 @@ Every publication candidate MUST carry one exact durable
 backing delegate its pool's declared label selects. Every domain MUST build it from
 the durable listing binding through the kit's one constructor, never from a
 published payload. The public offer's mode MUST equal the binding's mode.
-Reservation, commit, release, lease truncation, close, reopen, and restart recovery
-MUST reload and compare the same binding and MUST NOT infer a home site, default an
-offering mode, choose an authority from response data, or fan out after a binding
-is recorded. Every storefront capacity effect MUST go through the kit's capacity
-effects, whose guard is the binding's backing delegate, whether a domain composes the
-kit's capacity runtime or its own aggregate capacity client.
+Reservation, commit, lease activation, release, lease truncation, close, reopen, and
+restart recovery MUST reload and compare the same binding and MUST NOT infer a home
+site, default an offering mode, choose an authority from response data, or fan out
+after a binding is recorded. Every storefront capacity effect MUST go through the
+kit's capacity effects, whose guard is the binding's backing delegate, whether a
+domain composes the kit's capacity runtime or its own aggregate capacity client.
 
 #### Scenario: A domain publishes a capacity-backed candidate
 
@@ -516,6 +516,14 @@ kit's capacity runtime or its own aggregate capacity client.
 
 - **WHEN** commit, release, or fulfillment resumes after restart
 - **THEN** the effect is sent only to the site in the persisted binding, through
+  the kit's capacity effects, and a missing or unconfigured binding fails closed
+  without authority fan-out
+
+#### Scenario: A lease is activated
+
+- **WHEN** a storefront activates a lease, on its first attempt or on a retry after
+  restart
+- **THEN** the activation is sent only to the site in the persisted binding, through
   the kit's capacity effects, and a missing or unconfigured binding fails closed
   without authority fan-out
 
@@ -606,14 +614,23 @@ A domain composition that supports Arkhai payments MUST register `arkhai.payment
 - **WHEN** a domain installs Alkahest without the Arkhai payments kit
 - **THEN** it publishes no Arkhai payment option and acquires no Arkhai payment-service dependency
 
+### Requirement: Domains compose the stages they support
+
+Core MUST NOT prescribe the actors' order or require separate buyer-confirm and seller-verify steps. Domains MUST compose only supported stages; settlement and delivery MAY be fused.
+
+#### Scenario: A domain fuses settlement and delivery
+
+- **WHEN** a domain composes settlement and delivery as one stage
+- **THEN** core accepts the composition without a separate buyer-confirm or seller-verify step
+
 ### Requirement: Deals compose negotiate, settle, and provision stages
 
-Negotiation MUST pass its exact accepted Agreement to the domain's selected settlement stage. Protected delivery MUST consume that stage's verified SettlementEvidence rather than compare mechanism IDs or infer payment from an escrow's presence. Core MUST NOT prescribe the actors' order or require separate buyer-confirm and seller-verify steps. Domains MUST compose only supported stages; settlement and delivery MAY be fused.
+Negotiation MUST pass its exact accepted Agreement to the domain's selected settlement stage, the post-commitment handoff by which the seller learns of and verifies the mechanism's commitment; it is not a protocol step. Protected delivery MUST consume that stage's verified SettlementEvidence rather than compare mechanism IDs or infer payment from an escrow's presence.
 
 #### Scenario: Arkhai payment gates domain provisioning
 
-- **WHEN** the seller settles an accepted Agreement through `arkhai.payments.v1`
-- **THEN** VM, bare-metal or API-credit delivery remains blocked until its stage verifies a signed receipt matching the transaction ID and Agreement deal hash and produces verified evidence
+- **WHEN** a VM seller receives `commit` for an Agreement settled through `arkhai.payments.v1`
+- **THEN** delivery remains blocked until its stage verifies a signed receipt matching the transaction ID and Agreement deal hash and produces verified evidence
 
 ### Requirement: Domains compose only the stages they support
 
@@ -634,14 +651,33 @@ A domain MUST compose only mechanism stages it supports, and each stage MUST und
 - **WHEN** a supporting domain composes a stage whose first effect belongs to the seller
 - **THEN** core dispatches that role's entry without requiring a prior buyer deposit, confirmation or escrow proposal
 
+### Requirement: The payments service and dispute authority keep their authority
+
+The payments service MUST remain the authority for its ledger, account credentials, fees, hold release and hold extensions, and payment-provider operations. Cases and their outcomes MUST belong to the agreement's dispute authority, an independent party that acts at the payments service only through its own authorities and answers parties in its own protocol.
+
+#### Scenario: A hosted case's outcome is observed
+
+- **WHEN** a buyer's case on an `arkhai.payments.v1` deal is ruled
+- **THEN** the buyer half reads the outcome from the dispute authority's signed record, not from a payments-service response
+
 ### Requirement: Arkhai payments authority remains external
 
-`kit/arkhai-payments` MUST consume the payments service's published HTTP and JSON Schema contract, vendored with its conformance vectors and identified by content hash rather than by source location, and generate its Python wire models from it, rather than importing the service implementation or copying a TypeScript contract. The payments service MUST remain the authority for its ledger, account credentials, fees, hold release, dispute attachment, and payment-provider operations.
+`kit/arkhai-payments` MUST consume the payments service's published HTTP and JSON Schema contract, vendored with its conformance vectors and identified by content hash rather than by source location, and generate its Python wire models from it, rather than importing the service implementation or copying a TypeScript contract.
+
+#### Scenario: A payments contract revision is vendored
+
+- **WHEN** `kit/arkhai-payments` vendors a published payments contract revision
+- **THEN** the revision is identified by its content hash, not a source location, and the kit's Python wire models are generated from its JSON Schemas
 
 #### Scenario: Payments service owns the ledger
 
 - **WHEN** a marketplace domain composes `arkhai.payments.v1`
 - **THEN** it uses the external payments API and signed receipt as authority and keeps no local ledger, payment-provider integration, or settlement daemon
+
+#### Scenario: A case is filed on a hosted deal
+
+- **WHEN** a buyer files a case on an `arkhai.payments.v1` deal
+- **THEN** it files with the agreement's dispute authority and sends the payments service no case or effect of its own
 
 #### Scenario: Published payment snapshots contain an effective end or zero gross
 
@@ -665,12 +701,17 @@ A domain MUST compose only mechanism stages it supports, and each stage MUST und
 
 ### Requirement: Marketplace roles hold no payment ledger
 
-Marketplace roles MUST NOT own ledger state or implement cash movement, Stripe top-ups, payouts, or provider recovery. The kit MUST keep no settlement servicing state or daemon; headless callers supply owner-scoped credentials per request and verify service-signed receipts through the identity kit.
+Marketplace roles MUST NOT own ledger state or implement cash movement, Stripe top-ups, payouts, or provider recovery. Mechanism kits MUST keep no settlement servicing state or daemon; headless callers supply owner-scoped credentials per request and verify service-signed receipts through the identity kit. A storefront MAY keep lifecycle observation state (watch cursors, funding timers, the end-service journal, and evidence records), which records what an authority reported and never a balance.
 
 #### Scenario: A headless caller checks a payment
 
 - **WHEN** a buyer or seller process checks a payment
 - **THEN** it supplies its owner-scoped credential for that request and verifies the service-signed receipt through the identity kit, keeping no servicing state between calls
+
+#### Scenario: A storefront watches a deal
+
+- **WHEN** a storefront watches a hosted deal
+- **THEN** it stores the payment authority's event sequence and the dispute authority's record sequence as its cursors and stores no balance or settled amount of its own
 
 ### Requirement: Buyer dispatch preserves Agreement-only settlement
 
@@ -1262,6 +1303,30 @@ the kit's scope until its ledger-free distribution exists.
   service root
 - **THEN** it composes the storefront, authority, gate, and buyer flows without
   a change to any `kit/api` distribution
+
+### Requirement: The payments kit reads an account's own balance
+
+`PaymentsClient` MUST offer `get_balance(account)`, calling the payments service's `GET /balances/{account}` and returning the published `Balance` model, with the account validated as an account identifier. The kit's `PaymentsAuthority` engine MUST offer the same view, and `FakePaymentsClient` MUST serve it from that engine. Before projecting, the view MUST advance every transaction the account is a party to, to the engine's clock, as a transaction snapshot does. It MUST report `available` by asset, and one `held` entry per part and distinct maturity among that part's held lots where the account is the payee, timed by that maturity, with the part's lots that have no maturity yet in one entry held until stop or lift.
+
+#### Scenario: A payer reads its balance
+
+- **WHEN** a payer's client reads the payer's own balance
+- **THEN** it receives the published `Balance`, whose `available` already excludes the payer's outgoing escrow
+
+#### Scenario: A caller reads another account's balance
+
+- **WHEN** a client reads a balance for an account other than its own
+- **THEN** the service refuses it with 403 `caller_not_authorized`, and the client raises the refusal with that code
+
+#### Scenario: A payee has held money
+
+- **WHEN** the engine holds a once part's money for a payee until its hold matures
+- **THEN** the payee's balance lists that part once, with its held amount and its effective `releaseAt`
+
+#### Scenario: A payee's hold matures between reads
+
+- **WHEN** a payee reads its balance just before a once part's hold matures, and again just after, with no other operation on the transaction between
+- **THEN** the first read lists the part as held, and the second lists nothing held for it and includes the payee's earnings, net of fee, in `available`
 
 ## Evidence
 

@@ -143,8 +143,10 @@ def accepted_agreement(listing_id: str) -> tuple[Agreement, bytes]:
     """An Agreement for three credits on ``listing_id``, and its exact bytes."""
     now = datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
     option = SettlementOption(
-        option_id=derive_settlement_option_id(mechanism="opaque.future.v1", asset="USD/2", rates=[], params={}),
-        mechanism="opaque.future.v1", asset="USD/2", rates=[], params={},
+        option_id=derive_settlement_option_id(
+            price={"asset": "USD/2", "rates": []}, settlement={"schema": "opaque.future.v1"},
+        ),
+        price={"asset": "USD/2", "rates": []}, settlement={"schema": "opaque.future.v1"},
     )
     agreement = Agreement(
         negotiation_id="neg-accepted", listing_id=listing_id, listing_hash="0" * 64,

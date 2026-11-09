@@ -40,7 +40,7 @@ def _tree(root: Path) -> Path:
     _write(root, "openspec/changes/shape-bounds/" + TASK_LIST, "- [ ] 1.1 A task.\n")
     _write(root, "openspec/changes/archive/2026-10-01-split-pools/" + TASK_LIST, "x\n")
     _write(root, "openspec/changes/archive/.gitkeep", "")
-    _write(root, "scripts/change_next_step.py",
+    _write(root, "scripts/change_workflow/next_step.py",
            '"""Reads a task list."""\n' + TASK_LIST_CONSTANT + "\n")
     _write(root, "kit/clean.py", "# The pool is keyed by provider.\n")
     return root
@@ -77,12 +77,24 @@ def test_the_task_list_constant_is_exempt_but_no_other_mention_in_the_script(
     assert checker.change_history_matches(root) == []
 
     mention = "# the sections of " + TASK_LIST
-    _write(root, "scripts/change_next_step.py", TASK_LIST_CONSTANT + "\n" + mention + "\n")
+    _write(root, "scripts/change_workflow/next_step.py", TASK_LIST_CONSTANT + "\n" + mention + "\n")
     assert checker.change_history_matches(root) == [
-        f"./scripts/change_next_step.py:2:{mention}"]
+        f"./scripts/change_workflow/next_step.py:2:{mention}"]
 
     _write(root, "scripts/other.py", TASK_LIST_CONSTANT + "\n")
     assert f"./scripts/other.py:1:{TASK_LIST_CONSTANT}" in checker.change_history_matches(root)
+
+
+def test_the_design_and_proposal_constants_are_exempt_only_where_they_are_read(
+        tmp_path: Path) -> None:
+    root = _tree(tmp_path)
+    constants = 'DESIGN_FILE = "' + DESIGN + '"\nPROPOSAL_FILE = "' + PROPOSAL + '"\n'
+    _write(root, "scripts/check_decision_destinations.py", constants)
+
+    assert checker.change_history_matches(root) == []
+
+    _write(root, "scripts/other.py", constants)
+    assert len(checker.change_history_matches(root)) == 2
 
 
 def test_change_names_are_the_active_and_archived_directories_without_dates(

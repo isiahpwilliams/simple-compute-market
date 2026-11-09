@@ -146,7 +146,7 @@ class ArkhaiPaymentsSellerStage:
     # The stage table's entry.
 
     def validate_selection(self, selection: Any) -> None:
-        params = selection.params
+        params = selection.settlement_params
         if not isinstance(params, Mapping) or set(params) != {"payer_account"}:
             raise OfferUnfulfillableError("payments_payer_account_missing")
         try:

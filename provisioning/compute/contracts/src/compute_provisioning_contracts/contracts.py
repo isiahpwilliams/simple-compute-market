@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from market_core import VersionedEnvelope
+from .lease_ends import SignedLeaseEndedReport
 
 # Each major is accepted alone, and a model stating another is refused by its
 # version, naming the major supported, never coerced: the majors differ in what
@@ -88,7 +89,8 @@ class LeaseView(VersionedContractModel):
 
     No route writes a lease. Commit records its window, from the commit on;
     provisioning records its executor target when the fulfillment becomes
-    active; and the lease lifecycle records release. The create and release
+    active; the site's capacity API records its activation; and the lease
+    lifecycle records release. The create and release
     handles are lifecycle evidence, written only by fulfillment and the lease
     lifecycle.
     """
@@ -99,11 +101,18 @@ class LeaseView(VersionedContractModel):
     executor_target: str
     lease_start_utc: datetime | None = None
     lease_end_utc: datetime
+    #: When the site's activation recorded that the lease began running against
+    #: a provisioned resource: a fact of the lease's lifecycle, not evidence of
+    #: delivery. Null means only that no activation is recorded; on a lease
+    #: older than the site's activation it says nothing about whether the lease
+    #: was delivered. Optional, so a major-3 reader may ignore it.
+    activated_at_utc: datetime | None = None
     create_job_id: str | None = None
     status: LeaseState
     release_job_id: str | None = None
     failure_reason: str | None = None
     failure_message: str | None = None
+    end_reports: list[SignedLeaseEndedReport] = Field(default_factory=list, exclude_if=lambda reports: not reports)
 
 
 class LeaseListResponse(BaseModel):

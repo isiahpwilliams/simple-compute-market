@@ -28,7 +28,8 @@ from market_arkhai_payments import (
     PaymentSettlementData,
     servicing_stage,
 )
-from market_arkhai_payments.fixtures import FakePaymentsClient, build_signed_receipt
+from market_arkhai_payments.fixtures import FakePaymentsClient, build_signed_receipt, dispute_lifecycle
+from market_arkhai_mediation.fixtures.authority import MediationContractFake
 from market_core import ImmutableFulfillmentCapability
 from market_core.schemas import Agreement, SettlementOption, derive_settlement_option_id
 from market_identity import Ed25519Signer, TrustedIdentitySet
@@ -46,6 +47,9 @@ from market_storefront.failure_actions import (
 )
 from market_storefront.middleware.seller_auth import listing_lifecycle_middleware
 from market_storefront.payment_settlement import VmPaymentsCoordinator
+from market_storefront.deal_lifecycle import VmDealLifecycle
+from market_deal_servicing import create_lifecycle_router, PhysicalResult
+from market_storefront_kit.dispute_configuration import RegistryDisputePolicy
 from market_storefront.publication_binding import prepare_vm_listing_binding
 from market_storefront.utils.sqlite_client import SQLiteClient
 from tests._settings_overrides import settings_overrides
@@ -67,9 +71,14 @@ class Delivery:
     def __init__(self) -> None:
         self.starts: list[str] = []
         self.fail = False
+        # When set, the deal is available with its continuation pending.
+        self.available = False
         # When set, delivery pauses after starting until ``release`` is set.
         self.started: asyncio.Event | None = None
         self.release: asyncio.Event | None = None
+
+    async def apply_end(self, *_args, **_kwargs):
+        return PhysicalResult(progress="released" if not self.starts else "tearing_down", done=not self.starts)
 
     async def __call__(self, *, context):
         self.starts.append(context.negotiation_id)
@@ -97,7 +106,10 @@ class Delivery:
         return result | {
             "state": "fulfilled",
             "fulfillment_id": "vm-fulfillment-1",
-            "domain_result": {"connection_details": "controlled VM"},
+            "domain_result": {
+                "connection_details": "controlled VM",
+                "outcome": "available" if self.available else "converged",
+            },
         }
 
 
@@ -107,21 +119,36 @@ def _config(**overrides) -> ArkhaiPaymentsConfig:
         "service_url": "http://127.0.0.1:9",
         "service_identity": SERVICE.identity,
         "fee_bps": 250,
-        "dispute_authority": DISPUTE,
         "development_auth": True,
     }
     values.update(overrides)
     return ArkhaiPaymentsConfig(**values)
 
 
-def _option(*, deposit: bool) -> SettlementOption:
-    params = {"payee_account": PAYEE, "asset": "USD/2", "window": "P7D", "deposit_agreement": deposit}
-    body = {"mechanism": "arkhai.payments.v1", "asset": "USD/2", "rates": [], "params": params}
+def _option(*, deposit: bool, authority: dict | None = None) -> SettlementOption:
+    params = {"payee_account": PAYEE, "window": "P7D", "deposit_agreement": deposit}
+    body = {
+        "price": {"asset": "USD/2", "rates": []},
+        "settlement": {"schema": "arkhai.payments.v1", **(params or {})},
+        "lifecycle": dispute_lifecycle(DISPUTE),
+    }
+    body["lifecycle"]["adjudication"]["dispute"] = (
+        MediationContractFake().authority if authority is None else authority
+    )
     return SettlementOption(option_id=derive_settlement_option_id(**body), **body)
 
 
-async def _seed(db: SQLiteClient, stage: PaymentSellerStage, *, deposit: bool):
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+async def _seed(
+    db: SQLiteClient, stage: PaymentSellerStage, *, deposit: bool, authority: dict | None = None,
+    start: datetime | None = None,
+):
+    """``start`` is the Agreement start, by default the acceptance instant; an
+    earlier start is also when the deal was accepted, which settles late."""
+    accepted = datetime.now(timezone.utc)
+    if start is not None and start < accepted:
+        accepted = start
+    now = accepted.isoformat().replace("+00:00", "Z")
+    start_utc = start.isoformat().replace("+00:00", "Z") if start is not None else now
     provision = make_vm_provision_terms(
         duration_seconds=3600, ssh_public_key="ssh-ed25519 test"
     ).model_dump(mode="json")
@@ -131,12 +158,12 @@ async def _seed(db: SQLiteClient, stage: PaymentSellerStage, *, deposit: bool):
         listing_hash="0" * 64,
         buyer=BUYER.identity.model_dump(mode="json"),
         seller=SELLER.identity.model_dump(mode="json"),
-        settlement=_option(deposit=deposit),
+        settlement=_option(deposit=deposit, authority=authority),
         settlement_params={"payer_account": PAYER},
         amount=100,
         asset="USD/2",
         duration_seconds=3600,
-        start_utc=now,
+        start_utc=start_utc,
         accepted_at=now,
         provision_terms=provision,
     )
@@ -160,6 +187,8 @@ async def _seed(db: SQLiteClient, stage: PaymentSellerStage, *, deposit: bool):
         listing_resource={
             "gpu_model": "H200",
             "gpu_count": 1,
+            "sla": 99.0,
+            "region": "test-region",
             "offering_mode": "vm",
             "pool_id": "pool-test",
             "resource_id": "resource-test",
@@ -193,7 +222,7 @@ async def _seed(db: SQLiteClient, stage: PaymentSellerStage, *, deposit: bool):
         agreed_duration_seconds=3600,
         agreement_bytes=raw,
         accepted_at=now,
-        agreed_start_utc=now,
+        agreed_start_utc=start_utc,
         settlement_data=data.to_wire(),
     )
     await db.update_negotiation_thread_terminal(
@@ -229,7 +258,13 @@ class Harness(SimpleNamespace):
         self.payments.serve(build_signed_receipt(signer=signer, mandate=mandate))
 
 
-async def _harness(tmp_path, *, deposit=False, actions=("emit_event",)):
+async def _harness(
+    tmp_path, *, deposit=False, actions=("emit_event",), authority=None, disputes=None,
+    mediation_transport=None,
+):
+    """``authority`` replaces the Agreement's dispute authority, ``disputes`` is
+    the storefront's dispute configuration document, and ``mediation_transport``
+    the network under every mediation client."""
     delivery = Delivery()
     domain = replace(
         build_vm_storefront_domain(),
@@ -239,8 +274,14 @@ async def _harness(tmp_path, *, deposit=False, actions=("emit_event",)):
     db = SQLiteClient(str(tmp_path / "storefront.db"), registry=registry)
     payments = FakePaymentsClient()
     stage = PaymentSellerStage(_config(), client_for_owner=payments)
-    data = await _seed(db, stage, deposit=deposit)
+    data = await _seed(db, stage, deposit=deposit, authority=authority)
     coordinator = VmPaymentsCoordinator(domain=domain, db=db, stage=stage)
+    lifecycle = VmDealLifecycle(
+        db, SELLER, coordinator, RegistryDisputePolicy.from_document(disputes or {}),
+        mediation_transport=mediation_transport,
+    )
+    coordinator.lifecycle = lifecycle
+    lifecycle.end.physical = delivery
     _container.resolved_sqlite_client = db
     _container.resolved_domain_registry = registry
     _container.resolved_marketplace_signer = SELLER
@@ -249,10 +290,14 @@ async def _harness(tmp_path, *, deposit=False, actions=("emit_event",)):
         seller_stages=domain.settlement.seller_stages,
         local_principal=SELLER.identity,
         arkhai_payments_stage=stage,
+        lifecycle=lifecycle,
     )
     app = FastAPI()
     app.include_router(router)
     app.include_router(settlements_router)
+    app.include_router(create_lifecycle_router(lambda _: lifecycle.routes(
+        TrustedIdentitySet(identities=(SELLER.identity,))
+    )))
     app.middleware("http")(listing_lifecycle_middleware)
     transport = httpx.ASGITransport(app=app)
     return Harness(
@@ -261,10 +306,12 @@ async def _harness(tmp_path, *, deposit=False, actions=("emit_event",)):
         data=data,
         delivery=delivery,
         coordinator=coordinator,
+        lifecycle=lifecycle,
         actions=list(actions),
         transport=transport,
         buyer=_client(BUYER, "buyer", transport),
         seller=_client(SELLER, "seller", transport),
+        administrator=_client(SELLER, "admin", transport),
     )
 
 
@@ -285,6 +332,8 @@ async def make(tmp_path):
         await harness.coordinator.stop()
         await harness.buyer.close()
         await harness.seller.close()
+        await harness.administrator.close()
+        await harness.lifecycle.close()
         harness.overrides.__exit__(None, None, None)
     _container.resolved_sqlite_client = None
     _container.resolved_domain_registry = None
@@ -322,6 +371,11 @@ async def test_settlement_is_pending_until_a_verified_receipt_then_delivers_once
     repeated = await h.settle()
     assert repeated.status == "ready"
     assert h.delivery.starts == [NEGOTIATION]
+    page = await h.administrator.authenticated_request(
+        "GET", "/api/v1/admin/lifecycle", role="admin", operation="lifecycle_list", resource=""
+    )
+    assert [deal["negotiation_id"] for deal in page["deals"]] == [NEGOTIATION]
+    assert page["deals"][0]["commitment_ref"] == h.data.transaction_id
 
 
 @pytest.mark.asyncio
@@ -407,7 +461,7 @@ async def test_a_mechanism_whose_entry_has_no_refund_is_a_conflict(make):
     h.serve()
     thread = await h.db.load_negotiation_thread_row(negotiation_id=NEGOTIATION)
     agreement = json.loads(thread["agreement_bytes"])
-    agreement["settlement"]["mechanism"] = "alkahest.v1"
+    agreement["settlement"]["settlement"]["schema"] = "alkahest.v1"
     with sqlite3.connect(h.db.db_path) as conn:
         conn.execute(
             "UPDATE negotiation_threads SET agreement_bytes=? WHERE negotiation_id=?",
@@ -449,7 +503,20 @@ async def test_the_refund_failure_action_reverses_a_failed_payment_deal(make):
     evidence = await h.db.load_vm_settlement_evidence(negotiation_id=NEGOTIATION)
     assert evidence.status == "refunded"
     delivery = await h.db.load_vm_delivery(negotiation_id=NEGOTIATION)
-    assert delivery["status"] == "failed"
+    assert delivery["status"] == "ended"
+    assert h.lifecycle.seller.delivery_read(NEGOTIATION).delivery.recorded_end.cause == "settlement_refunded"
+
+
+@pytest.mark.asyncio
+async def test_an_available_deal_whose_continuation_is_pending_stays_open(make):
+    """Available with its continuation pending is fulfilled to the hook but not
+    finished: the delivery stays open for the resume pass to converge."""
+    h = await make()
+    h.delivery.available = True
+    h.serve()
+    await h.settle()
+    await h.delivered()
+    assert (await h.db.load_vm_delivery(negotiation_id=NEGOTIATION))["status"] == "provisioning"
 
 
 @pytest.mark.asyncio
@@ -477,7 +544,7 @@ def _replace_stage(h, config: ArkhaiPaymentsConfig) -> None:
 @pytest.mark.asyncio
 async def test_an_accepted_deal_settles_after_fee_and_dispute_policy_change(make):
     h = await make()
-    _replace_stage(h, _config(fee_bps=0, dispute_authority=PAYER))
+    _replace_stage(h, _config(fee_bps=0))
     h.serve()
     started = await h.settle()
     assert started.settlement_ref == h.data.transaction_id
@@ -535,8 +602,11 @@ async def test_a_refund_after_delivery_start_records_both(make):
     evidence = await h.db.load_vm_settlement_evidence(negotiation_id=NEGOTIATION)
     assert evidence.status == "refunded"
     delivery = await h.db.load_vm_delivery(negotiation_id=NEGOTIATION)
-    assert delivery["status"] == "ready"
-    assert delivery["fulfillment_uid"] == "vm-fulfillment-1"
+    assert delivery["status"] == "ended"
+    assert delivery["connection_details"] is None
+    view = h.lifecycle.seller.delivery_read(NEGOTIATION).delivery
+    assert view.recorded_end.cause == "settlement_refunded"
+    assert view.progress == "tearing_down"
 
 
 @pytest.mark.asyncio

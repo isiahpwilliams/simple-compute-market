@@ -34,6 +34,7 @@ from market_resource_pools_contracts import resolve_pool_declarations
 from market_site_client.fixtures.resource_pools import (
     validate_resource_pool_projection,
 )
+from compute_provisioning_client import ComputeProvisioningClient
 from compute_provisioning_contracts import HostCreate
 
 from .conftest import SERVICE_AUTHORITIES, STOREFRONT_SIGNER
@@ -75,12 +76,27 @@ class CapacityApi:
         self,
         admin: SiteCapacityAdminClient,
         site: SiteCapacityClient,
+        family: ComputeProvisioningClient,
     ) -> None:
         self.admin = admin
         self.site = site
+        self.family = family
 
     async def register(self, resource_id: str, **declaration: Any) -> dict:
         return await self.admin.register_resource(resource_id, **declaration)
+
+    async def register_hosts(self, *host_ids: str) -> None:
+        """Register the hosts declarations name, through the family client: a
+        declaration in a backed pool whose provider needs a host is admitted
+        and offered only while its host is registered and enabled. The address
+        is a documentation-range placeholder nothing connects to."""
+        for host_id in host_ids:
+            await self.family.register_host(HostCreate(
+                host_id=host_id,
+                connection=ssh_connection(
+                    ssh_host="192.0.2.1", ssh_user="ubuntu", key_path="/keys/id"
+                ),
+            ))
 
     async def snapshot(self) -> list[dict]:
         return await self.site.snapshot()
@@ -141,7 +157,8 @@ async def capacity(client_and_queue) -> CapacityApi:
         "http://test", STOREFRONT_SIGNER, SERVICE_AUTHORITIES, transport=transport,
     )
     site = _site_capacity_client("http://test", transport=transport)
-    return CapacityApi(admin, site)
+    provisioning_client, _ = client_and_queue
+    return CapacityApi(admin, site, provisioning_client.family)
 
 
 @pytest.mark.asyncio
@@ -151,6 +168,7 @@ async def test_the_claim_names_the_offering_mode_through_the_canonical_client(
     """The offering mode a storefront names crosses the site boundary through
     `SiteCapacityClient` and is persisted on the reservation as sent, not
     re-derived from the resource or reported under a second key."""
+    await capacity.register_hosts("kvm1")
     await capacity.register(
         "site-claim-1", pool_id="default",
         total_units=4,
@@ -206,6 +224,7 @@ async def test_a_claim_naming_the_mode_under_the_retired_key_is_refused(
 
 @pytest.mark.asyncio
 async def test_reserve_commit_release_lifecycle(capacity: CapacityApi):
+    await capacity.register_hosts("kvm1")
     await capacity.register(
         "compute-kvm1-001", pool_id="default",
         total_units=8,
@@ -266,6 +285,88 @@ async def test_reserve_commit_release_lifecycle(capacity: CapacityApi):
 
 
 @pytest.mark.asyncio
+async def test_a_placement_key_replays_through_the_canonical_client(
+    capacity: CapacityApi,
+):
+    """A reserve repeated under its placement key answers with the reservation
+    the first call recorded and admits nothing; one asking for another window
+    is refused as a conflict, with nothing written."""
+    await capacity.register_hosts("kvm1")
+    await capacity.register(
+        "site-placement-1", pool_id="default", total_units=4, host_id="kvm1",
+        attributes={},
+    )
+    request = {
+        "claim": {"offering_mode": "vm", "gpu_count": 1, "host_id": "kvm1"},
+        "deal_ref": {"placement_key": "neg-4c1e:settlement"},
+        "lease_start_utc": "2099-01-01T00:00:00Z",
+        "lease_duration_seconds": 3600,
+    }
+    first = await capacity.site.reserve(**request)
+    _, version = await capacity.events()
+
+    replay = await capacity.site.reserve(**request)
+
+    assert replay["capacity_reservation_id"] == first["capacity_reservation_id"]
+    assert replay["state"] == "reserved"
+    assert (await capacity.events())[1] == version
+
+    with pytest.raises(SiteCapacityClientError) as refused:
+        await capacity.site.reserve(
+            **{**request, "lease_start_utc": "2099-01-01T00:30:00Z"}
+        )
+
+    assert refused.value.status_code == 409
+    assert (await capacity.events())[1] == version
+    assert len(await capacity.site.list_reservations()) == 1
+    recorded = await capacity.site.get_reservation(first["capacity_reservation_id"])
+    assert recorded["lease_start_utc"] == "2099-01-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_a_reserve_naming_another_offering_mode_for_its_escrow_is_a_conflict(
+    capacity: CapacityApi,
+):
+    """A repeat reserve for an escrow whose held reservation was admitted for
+    another offering mode is refused as a conflict, not a server error."""
+    await capacity.register_hosts("kvm1")
+    await capacity.register(
+        "site-escrow-mode-1", pool_id="default", total_units=4, host_id="kvm1",
+        attributes={},
+    )
+    await capacity.reserve(
+        {"offering_mode": "vm", "gpu_count": 1, "host_id": "kvm1"},
+        {"escrow_uid": "escrow-mode-1"},
+    )
+
+    with pytest.raises(SiteCapacityClientError) as refused:
+        await capacity.reserve(
+            {"offering_mode": "bare_metal", "gpu_count": 1, "host_id": "kvm1"},
+            {"escrow_uid": "escrow-mode-1"},
+        )
+
+    assert refused.value.status_code == 409
+    assert len(await capacity.site.list_reservations()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_placement_key_that_is_not_a_string_is_refused_as_invalid(
+    capacity: CapacityApi,
+):
+    await capacity.register(
+        "site-placement-2", pool_id="default", total_units=4, host_id="kvm1",
+        attributes={},
+    )
+
+    with pytest.raises(SiteCapacityClientError) as refused:
+        await capacity.reserve(
+            {"offering_mode": "vm", "gpu_count": 1}, {"placement_key": 7}
+        )
+
+    assert refused.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_no_capacity_is_a_null_answer_not_an_error(capacity: CapacityApi):
     assert await capacity.reserve({"offering_mode": "vm", "gpu_count": 1}, {}) is None
     assert await capacity.release(capacity_reservation_id="missing") is None
@@ -273,6 +374,7 @@ async def test_no_capacity_is_a_null_answer_not_an_error(capacity: CapacityApi):
 
 @pytest.mark.asyncio
 async def test_vm_and_bare_metal_claims_use_domain_attributes(capacity: CapacityApi):
+    await capacity.register_hosts("bm-node-1")
     await capacity.register(
         "bare-metal-node-1", pool_id="default", host_id="bm-node-1",
         total_units=1,
@@ -301,6 +403,7 @@ async def test_vm_and_bare_metal_claims_use_domain_attributes(capacity: Capacity
 
 @pytest.mark.asyncio
 async def test_capacity_snapshot_blocks_cross_mode_siblings(capacity: CapacityApi):
+    await capacity.register_hosts("kvm1", "node-1")
     await capacity.register(
         "compute-host-1", pool_id="default",
         total_units=8,
@@ -357,6 +460,7 @@ async def test_a_repeat_commit_answers_with_the_recorded_window_and_records_the_
     """A lease's window is its first commit's: a repeat leaves it alone and the
     answer says so. A hold placed at negotiation learns the deal's escrow at
     commit, over the wire."""
+    await capacity.register_hosts("kvm1")
     await capacity.register(
         "compute-kvm1-001", pool_id="default", total_units=8, host_id="kvm1", attributes={}
     )
@@ -396,6 +500,64 @@ async def test_commit_unknown_reservation_404s(capacity: CapacityApi):
         )
 
     assert refused.value.status_code == 404
+
+
+async def _committed_lease(
+    capacity: CapacityApi, escrow: str, *, lease_end_utc: str | None = "2099-01-01 01:00"
+) -> str:
+    reserved = await capacity.reserve(
+        {"offering_mode": "vm", "gpu_count": 1, "host_id": "kvm1"},
+        {"escrow_uid": escrow},
+    )
+    await capacity.commit(
+        reserved["capacity_reservation_id"],
+        resource_id="compute-kvm1-001",
+        lease_start_utc="2099-01-01T00:00:00+00:00",
+        lease_end_utc=lease_end_utc,
+    )
+    return reserved["capacity_reservation_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_lease_is_activated_once_through_the_canonical_client(
+    capacity: CapacityApi,
+):
+    """Activation answers as commit does: the reservation with the site's
+    instant, the same instant on a retry, 404 for a reservation the site does
+    not hold, and 409 for one a release claimed or one with no lease tail."""
+    await capacity.register_hosts("kvm1")
+    await capacity.register(
+        "compute-kvm1-001", pool_id="default", total_units=8, host_id="kvm1", attributes={}
+    )
+    lease = await _committed_lease(capacity, "0xactivated")
+    assert (await capacity.site.get_reservation(lease))["activated_at_utc"] is None
+
+    activated = await capacity.site.activate_lease(capacity_reservation_id=lease)
+    again = await capacity.site.activate_lease(capacity_reservation_id=lease)
+
+    assert activated["state"] == "leased"
+    assert activated["activated_at_utc"] is not None
+    assert again["activated_at_utc"] == activated["activated_at_utc"]
+    read = await capacity.site.get_reservation(lease)
+    assert read["activated_at_utc"] == activated["activated_at_utc"]
+
+    with pytest.raises(SiteCapacityClientError) as unknown:
+        await capacity.site.activate_lease(capacity_reservation_id="missing")
+    assert unknown.value.status_code == 404
+
+    released = await _committed_lease(capacity, "0xreleased-first")
+    await capacity.release(capacity_reservation_id=released)
+    with pytest.raises(SiteCapacityClientError) as claimed:
+        await capacity.site.activate_lease(capacity_reservation_id=released)
+    assert claimed.value.status_code == 409
+    assert "released" in str(claimed.value)
+
+    open_ended = await _committed_lease(capacity, "0xopen-ended", lease_end_utc=None)
+    with pytest.raises(SiteCapacityClientError) as tailless:
+        await capacity.site.activate_lease(capacity_reservation_id=open_ended)
+    assert tailless.value.status_code == 409
+    assert "no lease tail" in str(tailless.value)
+    assert (await capacity.site.get_reservation(open_ended))["activated_at_utc"] is None
 
 
 @pytest.mark.asyncio
@@ -694,6 +856,7 @@ async def test_a_bare_metal_view_reaches_the_canonical_client_as_storefronts_rea
         },
         provider_config={},
     ))
+    await capacity.register_hosts("bm-1-host", "bm-2-host")
     for resource_id, enabled in (("bm-1", True), ("bm-2", False)):
         await capacity.register(
             resource_id,
@@ -910,6 +1073,7 @@ async def test_site_capacity_buckets_projection_through_the_real_client(
     from market_site_client import SiteCapacityClient
 
     await _create_pool(client_and_queue[0], "hetzner-eu")
+    await capacity.register_hosts("kvm1", "kvm1-b")
     await capacity.register(
         "compute-kvm1-001",
         pool_id="hetzner-eu",
@@ -1051,6 +1215,7 @@ async def test_a_held_resource_moves_pools_only_once_released(
     """Both halves in one test, so the refusal cannot be mistaken for a
     resource that could never move."""
     await _create_pool(client_and_queue[0], "pool-b")
+    await capacity.register_hosts("kvm-held")
     await capacity.register("held", pool_id="default", host_id="kvm-held", total_units=4)
     reserved = await capacity.reserve(
         {"offering_mode": "vm", "gpu_count": 1, "resource_id": "held"}, {}
@@ -1079,13 +1244,18 @@ async def test_a_declaration_naming_no_host_is_not_admitted_in_a_host_requiring_
     assert await capacity.probe({"offering_mode": "vm", "gpu_count": 1}) is None
     assert await capacity.reserve({"offering_mode": "vm", "gpu_count": 1}, {}) is None
 
+    await capacity.register_hosts("kvm1")
     await capacity.register("hosted", pool_id="default", host_id="kvm1", total_units=4)
     reserved = await capacity.reserve({"offering_mode": "vm", "gpu_count": 1}, {})
 
     assert reserved is not None
-    snapshot = {row["resource_id"]: row for row in await capacity.snapshot()}
-    assert snapshot["no-host"]["available_units"] == 4
-    assert snapshot["hosted"]["available_units"] == 3
+    # The snapshot offers only declarations with a usable host, so the
+    # untouched availability of the one naming none is read from the
+    # operator's listing.
+    declared = {row["resource_id"]: row for row in await capacity.admin.list_resources()}
+    assert declared["no-host"]["available_units"] == 4
+    assert declared["hosted"]["available_units"] == 3
+    assert {row["resource_id"] for row in await capacity.snapshot()} == {"hosted"}
 
 
 

@@ -158,7 +158,7 @@ def test_progress_is_read_by_negotiation_or_public_reference(db_path):
 
 def _accept(db_path, negotiation_id: str, mechanism: str, created_at: str) -> None:
     """An accepted thread under ``mechanism``, created at ``created_at``."""
-    agreement = json.dumps({"settlement": {"mechanism": mechanism}})
+    agreement = json.dumps({"settlement": {"settlement": {"schema": mechanism}}})
     client = StorefrontSQLiteClient(str(db_path), EXAMPLE)
     with sqlite3.connect(db_path) as conn:
         client.insert_negotiation_thread(

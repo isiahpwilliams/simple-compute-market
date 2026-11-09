@@ -20,7 +20,7 @@ The mock mechanism is a worked instance of the five-piece route pattern (`docs/d
 
 The service's database holds VM's tables, so its metadata (`db/database.py`) and its one migration history (`db/migrations.py`) name them: the history is the record of how those tables were created and evolved, including VM's pool-configuration table and VM's legacy lease conversion. `deployment-state`'s "Service-owned migration history" still gives the migration entrypoint only its database; nothing injects VM's schema. A single chain is adequate while one compute domain owns provisioning-side tables. When a second domain needs its own, each adapter would own its chain, run in an order the contributions declare, which amends that requirement.
 
-The resource-pool projection a site serves is neutral, and a domain that publishes more — a view of a whole machine it sells, or a pool's configured defaults — contributes an `InventoryViewProjection` from `compute_provisioning.inventory_views`, which owns the protocol and its composer. The service merges what each projection returns and never names a domain's view, attribute, or provider configuration. A resource view is built with its pool's context, an `InventoryPoolContext` of pool ID, provider, and the pool's resolved declarations, because what a view may carry depends on them: a bare-metal view carries its delivery terms only where the pool's backing delegate passes them through (see the [resource-pool management architecture](../resource-pool-management/architecture.md#advertisement-delivery-and-backing)). The provisioning service, as the composition root, reads the pool rows in its own resource pass, resolves each pool once through the shared resolver, and hands each declaration its pool's context, interpreting none of it; the pool pass reads raw tags and the provider from the same column, so the two passes cannot drift on a pool's provider. A stored pool whose declarations do not resolve, which startup refuses and no write path produces, gives its members no context, so they project with no views and no problems, and the service logs a warning. Building the context is compute-family work, so it sits at the contributed-view seam and nothing above the compute family learns of it: `kit/site` copies the per-resource result into its projection without reading it, and `kit/resource-pools` and core do not see it.
+The resource-pool projection a site serves is neutral, and a domain that publishes more — a view of a whole machine it sells, or a pool's configured defaults — contributes an `InventoryViewProjection` from `compute_provisioning.inventory_views`, which owns the protocol and its composer. The service merges what each projection returns and never names a domain's view, attribute, or provider configuration. A resource view is built with its pool's context, an `InventoryPoolContext` of pool ID, provider, and the pool's resolved declarations, because what a view may carry depends on them: a bare-metal view carries its delivery terms only where the pool's backing delegate passes them through (see the [resource-pool management architecture](../resource-pool-management/architecture.md#advertisement-delivery-and-backing)). The provisioning service, as the composition root, reads the pool rows in its own resource pass, resolves each pool once through the shared resolver, and hands each declaration its pool's context, interpreting none of it; the pool pass reads raw tags and the provider from the same column, so the two passes cannot drift on a pool's provider. A stored pool whose declarations do not resolve, which startup refuses and no write path produces, gives its members no context, so they project with no views and no problems, and the service logs a warning. The declarations the service hands the composer are the site ledger's offered read, whose `enabled` already says whether the site offers each one, so a view that reports availability, such as bare metal's, reports a declaration with no usable host as unavailable without the service or the view reading a host (see the [site-capacity architecture](../site-capacity/architecture.md#declared-capacity-and-connection-identity)). Building the context is compute-family work, so it sits at the contributed-view seam and nothing above the compute family learns of it: `kit/site` copies the per-resource result into its projection without reading it, and `kit/resource-pools` and core do not see it.
 
 A contributed projection never raises on a declaration's content. Declarations reach the site over its API from any client, and one a view builder could not handle would otherwise fail the site's whole resource-pool projection, every pool and every domain with it. `resource_views` returns a `ResourceViews` of the views it built and, per declared view it could not build, the reasons, which the projected resource carries as `publication_view_problems` keyed by view identifier. A backed bare-metal declaration naming no host or no access methods, a missing or invalid `allocation_mode` or `physical_host_id`, and a private-looking capacity or capability key are such cases. A storefront reads a resource with problems as an unreadable declaration and holds its listing (see the [storefront publication architecture](../storefront-publication/architecture.md#reconciliation)). Refusing a malformed attribute when the declaration is written was rejected: its backing-dependent rules need a site read of pool state that the site may not take while its edge into the pool authority stands, so a write-time check would be partial and the projection would still have to tolerate what it missed.
 
@@ -65,8 +65,41 @@ Common begin, recovery/status, access/result and teardown load verified evidence
 through the accepted entry. Payment rechecks the mandate and trusted signed
 receipt. Alkahest requires an active journal (pending reclaim/collection and
 ready mechanism status) and rechecks chain evidence against the persisted
-proposal, amount/duration, selected chain and exact obligation index. Local
-materialization is adoption history, not current chain authority.
+proposal, amount/duration, selected chain and exact obligation index, on every
+drive of a deal. Local materialization is adoption history, not current chain
+authority.
+
+Delivery enters through core's `fulfill_domain` hook, as VM's does: payment
+settle and the Alkahest ready step build a `StorefrontFulfillmentContext`, and the
+registered hook builds the compute delivery path from the clients in `ports` and
+the storefront's lifecycle in `domain_input`, refusing before any call when the
+lifecycle is absent. There is therefore one registered entry, and it always admits
+and commits the Agreement's window, and core's identity check runs on every
+bare-metal delivery. No core type changed for this: `ports` and the opaque
+`domain_input` already carry what the hook needs. The hook drives under the deal's
+lock, drives the physical end after releasing it, and returns the lifecycle row as
+`domain_result` with a public result naming the outcome, its fulfilled, deferred
+or failed disposition, and whether the deal is available.
+
+`bare_metal_fulfillment_lifecycle` is the path's progress port for bare metal
+([compute delivery](../compute-delivery/architecture.md)), its step read from the
+activation instant, the fulfillment, a recorded `dispatch` state, then a
+reservation; its row is created only while the settlement record is verified, in
+the admission's transaction, so a seller refund that won the start refuses it. The
+domain port reserves the whole-machine claim with `escrow_uid` beside the
+`:settlement` placement key, so recovery replays by key rather than scanning the
+site's reservations, and schedules and records the assigned resource before
+building the materialization over the Agreement window, since the request names
+that resource. The lifecycle cycle drives waiting and pending deals. A status read
+drives a deal whose fulfillment is active and not yet available before answering,
+so the administrator's settle wait and a buyer's status read reach availability;
+the access read does not drive, reaching no payment authority, and goes through the
+path's access check. `access` and `status` are declared credential-capable.
+Migration `bare-metal-storefront-0016-delivery-activation` adds the activation
+column, marks a row an earlier storefront left with a saved materialization and no
+fulfillment as dispatched, so it is adopted rather than released, and removes
+`host`, `port` and `username` from every recorded replay body whose `method` is
+`ssh`.
 
 The scheduler's recorded resource kind, provider, and executor selection remain authoritative for begin, status, result, and teardown. The storefront never substitutes a process-global provisioner, buyer-supplied URL, or guessed adapter. It pulls normalized status and the versioned result envelope through the same recorded site client after restart; provisioning remains the authority for jobs, provider metadata, execution credentials, and teardown convergence.
 
@@ -89,6 +122,36 @@ lifecycle shapes fail startup; there is no silent copy/adoption or sentinel
 fallback. Rebuild `.dist` and reinstall consumers before use. Controlled HTTP
 settlement/contact entries use fresh pytest-owned SQLite and clean it afterward;
 this is not live hardware access/revocation qualification.
+
+## Lease-end report delivery
+
+The site forms immutable `lease_ended` evidence when it intends to end a lease,
+before teardown. Explicit termination, expiry, direct release without dispatch,
+release failure and force release all have durable event identity. Payloads bind
+reservation/site, effective instant, cause/source state, caller/failure reason
+and applicable deadline phase. The ledger ending transition and separately
+acknowledged report outbox commit atomically; retries reuse the original event.
+
+The compute wire codec frames canonical payload bytes under
+`arkhai.site.lease-ended.v1`. The service persists the original signed wrapper,
+so retries and `LeaseView.end_reports` return the same bytes after signer changes.
+Push targets only the owning storefront peer. A 404/unsupported receiver parks
+that peer's push, transient failures retry, and a changed peer cannot redirect
+old events. Explicit resumption after receiver upgrade re-enables parked push.
+Authenticated lease reads recover reports independently of the push channel.
+
+VM/bare-metal ingress verifies the configured selected-site binding, retains the
+exact wrapper idempotently, and records source/actor/cause in end service. Buyer
+lifecycle reads expose that same evidence, not a storefront re-signing of it.
+The site knows no payment transaction, dispute policy or payee credential.
+Seller end classification/filing belongs above provisioning.
+
+Due delivery ends terminate immediately; future ends truncate rather than extend
+the accepted horizon at second precision. Pre-dispatch release stays behind the
+site's guard; create-in-flight is adopted before termination. The intended-end
+report has its own acknowledgement, distinct from the existing capacity-released
+outbox. A report, failed release or queued teardown proves no hardware stop and
+returns no capacity; normal release remains proof-driven below.
 
 ## Proof-driven release
 
@@ -347,8 +410,11 @@ operator types by hand.
 
 A host the document does not name is retained and reported, not disabled. Hosts
 registered through the API, as every end-to-end lane registers them, must
-coexist with the document, and disabling a host does not keep new deliveries off
-it today, so a removed line would become capacity that cannot be delivered.
+coexist with the document, and disabling every host a document does not name
+would take them out of service. Disabling a host keeps new deliveries off it
+(["Disabling a host keeps new deliveries off it"](spec.md#requirement-disabling-a-host-keeps-new-deliveries-off-it)),
+so a document that disabled the hosts it stopped naming would close their
+listings on an edit to an unrelated entry.
 
 A document that cannot be applied fails whole. The apply writes into the
 caller's session and continues past a pool-change hook's refusal so that every

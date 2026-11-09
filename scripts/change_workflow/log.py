@@ -9,21 +9,39 @@ orchestrating session's own lines: a `round` line recording the implementation
 round the owner agreed, and an `orchestrator` line recording a decision — the
 orchestrating session's own routing or recovery, or the owner's — naming the run
 whose denials it reads, the run it resolves, and, for the owner's alone, the node
-it directs the change to next, so the next-step computation routes on it. Reading
+it directs the change to next, so the next-step computation routes on it, or the
+finished triage it revisits, which the wrapper then resumes. Reading
 and resolving are distinct because a run can be denied a call and still end with a
 question or a proposed return: its denials are read first, and its outcome is
 answered or decided after. This module is the log's only writer.
+
+A run's line may carry `invoked`: each hook, part, and command the run invoked
+through `run` or the guarded push, with its owed workflow and phase where it has
+them, the command it resolved to, its exit status, when it started, and how long it
+took. The field is optional, so a line without it reads as before and the record
+set's format does not move.
 
 The log holds only what the change's files cannot: session ids, the owner's round
 agreements, and the last outcome. Where the log and the files disagree, the files
 win. It lives in the change's untracked `reviews/` directory and moves with the
 change when it is archived.
 
-Every line this module appends carries the log's format, `"format": 2`, so a line
-another writer appended without it is told apart (`unmarked`). A log may be replaced
-whole, a new file renamed over its name (`replace_log`), so every reader and
-appender checks, once it holds the lock, that the file it locked is still the one
-the name holds.
+Every line this module appends carries the record set's format (`common.FORMAT`),
+which the log is the only authority for. A line with no format, or a lower one, is
+older (`older`): its records are converted before anything routes on them. A line
+with a higher one is newer (`newer`), written by an engine this one predates, and
+nothing here routes on, converts, or appends to such a log (`NewerFormat`). `start`
+opens the log with a line of its own before any step it starts runs (`open_log`),
+so a change worked through the command has its format marked before any other
+record; nothing routes on that line.
+
+A line naming a step, a node, or a kind of review the graph does not declare is
+reported by name (`undeclared`): the graph's vocabulary is closed, and a reader
+does not guess what a newer one meant.
+
+A log may be replaced whole, a new file renamed over its name (`replace_log`), so
+every reader and appender checks, once it holds the lock, that the file it locked
+is still the one the name holds.
 """
 
 from __future__ import annotations
@@ -34,21 +52,28 @@ import os
 import tempfile
 from datetime import timezone
 from pathlib import Path
-from typing import IO, Any, Callable, Sequence
+from typing import IO, Any, Callable, Mapping, Sequence
 
-from change_workflow.common import KINDS, ORCHESTRATOR, STEPS, Clock, Entry, StepError, utc_now
-from change_workflow.graph import (NODES, ROUND, Node, Standing, TargetError, entry_refusal,
-                                   node_of, section_ids)
-from change_workflow.outcome import outcome_problems
-from change_workflow.records import NUMBERED, next_number, triage_outcome_problems
-from find_change import ARCHIVE, ChangeNotFound, change_directory, find_records
+from .common import FORMAT, ORCHESTRATOR, Clock, Entry, StepError, utc_now
+from .find import ARCHIVE, ChangeNotFound, change_directory, find_records
+from .graph import (NODES, ROUND, STEPS, Node, Standing, TargetError, entry_refusal, node_of,
+                    review_phase, section_ids)
+from .outcome import outcome_problems, triage_outcome_problems
+from .records import NUMBERED, has_records, next_number
 
 LOG = "workflow.jsonl"
-FORMAT = 2
+# The lines no step's run writes: the conversion's, and the one `start` opens a
+# step with. Neither names an exit, and nothing routes on either.
+CONVERSION = "convert"
+OPENING = "start"
 
 
 class LogError(StepError):
     """The workflow log cannot be read."""
+
+
+class NewerFormat(LogError):
+    """The log holds a line of a format this engine does not read."""
 
 
 def log_path(root: Path, change: str) -> Path:
@@ -144,10 +169,63 @@ def last_entries(path: Path, count: int) -> list[Entry]:
     return entries[-count:] if count > 0 else []
 
 
-def unmarked(entries: Sequence[Entry]) -> Entry | None:
-    """The first line without the log's format, which a writer of an older format
-    appended; None when every line carries it."""
-    return next((entry for entry in entries if entry.get("format") != FORMAT), None)
+def _readable(mark: Any) -> bool:
+    """Whether a line's `format` is one this engine reads, current or older: absent,
+    or a whole number no higher than its own."""
+    return mark is None or (isinstance(mark, int) and not isinstance(mark, bool)
+                            and mark <= FORMAT)
+
+
+def older(entries: Sequence[Entry]) -> Entry | None:
+    """The first line of an older format: with no `format`, or a lower one, as a
+    writer before this format appended it; None when there is none."""
+    return next((entry for entry in entries if _readable(entry.get("format"))
+                 and entry.get("format") != FORMAT), None)
+
+
+def newer(entries: Sequence[Entry]) -> Entry | None:
+    """The first line of a format this engine does not read: a higher one, which a
+    later engine appended, or a mark that is no format number; None when there is
+    none. Such a line is refused rather than read or converted backwards."""
+    return next((entry for entry in entries if not _readable(entry.get("format"))), None)
+
+
+def refuse_newer(where: Path | str, entries: Sequence[Entry]) -> None:
+    """Refuse the log `where` names, whose lines are `entries`, when one is newer,
+    naming its format."""
+    if (line := newer(entries)) is not None:
+        raise NewerFormat(f"{where} holds a line of format {line.get('format')!r} at seq "
+                          f"{line['seq']}, which this engine, reading format {FORMAT}, does "
+                          "not read: run the engine that wrote it")
+
+
+def undeclared(entry: Entry) -> str | None:
+    """Why `entry` names something the graph does not declare — a step no node runs,
+    a kind of review no node is, an exit or a direction naming no node — or None
+    when every name it carries is declared. Read at the graph's own declaration, so
+    a step, node, or kind added to it is known with nothing else edited."""
+    step = entry.get("step")
+    if step == ORCHESTRATOR:
+        target = entry.get("next") if entry.get("by") == "owner" else None
+        what = "the owner's direction"
+    elif step in (CONVERSION, OPENING):
+        return None
+    elif step not in STEPS:
+        return f"{step!r} is no step of the workflow graph"
+    else:
+        kind = entry.get("kind")
+        if step == "review" and not (isinstance(kind, str) and review_phase(kind)):
+            return f"{kind!r} is no kind of review the workflow graph declares"
+        target = entry.get("next") if entry.get("outcome") in ("finished", "returned") \
+            else None
+        what = f"the {step} run's exit"
+    if not isinstance(target, Mapping):
+        return None
+    try:
+        node_of(target)
+    except TargetError as exc:
+        return f"{what} names no node: {exc}"
+    return None
 
 
 def _refuse_reserved(entry: Entry) -> None:
@@ -182,13 +260,15 @@ def append_entry(path: Path, entry: Entry, clock: Clock = utc_now) -> Entry:
 
     Several processes may append to one change's log at once, so the log is
     locked from reading the last `seq` to writing the new line; without the lock
-    both could take the same number.
+    both could take the same number. A log holding a newer line is refused, since a
+    line of this format after it would mix two formats in one record set.
     """
     _refuse_reserved(entry)
     with _locked_for_writing(path) as stream:
         stream.seek(0)
         text = stream.read()
         entries = _parse(path, text)
+        refuse_newer(path, entries)
         line = numbered(entries, entry, clock)
         stream.seek(0, 2)
         # A last line saved without its newline would otherwise be joined to this one.
@@ -269,14 +349,18 @@ def record_outcome(path: Path, step: str, outcome: Entry, *, session: str | None
                         "twice")
     # The schema admits no field beyond the outcome's own, so nothing a step
     # answers can overwrite what is recorded about its run.
-    return append_entry(path, {**run, **(extra or {}), **outcome}, clock)
+    line = {**run, **(extra or {}), **outcome}
+    if why := undeclared(line):
+        raise StepError(f"the {step} run is refused: {why}")
+    return append_entry(path, line, clock)
 
 
 def record_interactive(path: Path, step: str, outcome: Entry, *, session: str,
-                       commit: str | None, clock: Clock = utc_now) -> Entry:
+                       commit: str | None, invoked: Sequence[Entry] = (),
+                       clock: Clock = utc_now) -> Entry:
     """Append the outcome of a step the owner ran interactively, which records its
     own: checked as the wrapper checks an unattended run's, and marked
-    `interactive`.
+    `interactive`, with what the session `invoked`, when it invoked anything.
 
     A triage's finished or returned outcome is refused unless it names the records
     it triaged (`triage_outcome_problems`), as the wrapper records such a run
@@ -293,7 +377,36 @@ def record_interactive(path: Path, step: str, outcome: Entry, *, session: str,
         raise StepError("the triage's outcome does not name what it triaged: "
                         + "; ".join(problems))
     return record_outcome(path, step, outcome, session=session, commit=commit,
-                          extra={"interactive": True}, clock=clock)
+                          extra={"interactive": True,
+                                 **({"invoked": list(invoked)} if invoked else {})},
+                          clock=clock)
+
+
+def open_log(path: Path, change: str, step: str, *, interactive: bool,
+             clock: Clock = utc_now) -> Entry:
+    """Open `change`'s log at `path` for a run of `step` that `start` is about to start,
+    creating it if need be: a line carrying the record set's format, so the format is
+    marked before anything the step records — a ledger line, its outcome — and the
+    ledger beside the log is read in it. Nothing routes on the line.
+
+    Refused, writing nothing, where the record set is not in this format: a log
+    holding a newer line, which this engine does not read; and records of an older
+    format — a log holding a line with no format or a lower one, or numbered records
+    under `reviews/` with no line logged — which the owner converts first, since this
+    line would otherwise mark them as current.
+    """
+    entries = read_log(path)
+    refuse_newer(path, entries)
+    if (line := older(entries)) is not None:
+        why = f"its workflow log holds a line of an older format at seq {line['seq']}"
+    elif not entries and has_records(path.parent):
+        why = "it has numbered records under reviews/ and no workflow log"
+    else:
+        return append_entry(path, {"step": OPENING, "outcome": "opened", "starts": step,
+                                   "interactive": interactive}, clock)
+    raise StepError(f"{why}, so its records are not in format {FORMAT}: the owner converts "
+                    f"them with `scripts/change-workflow convert {change}` before a step "
+                    "starts")
 
 
 def note_round(path: Path, sections: Any, by: str, after: int | None = None,
@@ -342,7 +455,7 @@ def standing(path: Path, entries: Sequence[Entry] | None = None) -> Standing:
     triaged = {name for entry in entries
                if (entry.get("step") == "triage"
                    and entry.get("outcome") in ("finished", "returned"))
-               or entry.get("step") == "convert"
+               or entry.get("step") == CONVERSION
                for name in entry.get("triaged") or () if isinstance(name, str)}
     awaiting = set()
     latest: tuple[int, str] | None = None
@@ -352,11 +465,12 @@ def standing(path: Path, entries: Sequence[Entry] | None = None) -> Standing:
         if not record.name.endswith(".md") or not (number := NUMBERED.match(stem)):
             continue
         kind = stem.split("-", 1)[1].removesuffix("-external")
-        if kind in KINDS and (latest is None or int(number[1]) > latest[0]):
+        review = review_phase(kind) is not None
+        if review and (latest is None or int(number[1]) > latest[0]):
             latest = (int(number[1]), kind)
         if stem in triaged:
             continue
-        if kind in KINDS:
+        if review:
             awaiting.add(kind)
         elif kind == "validation":
             validations.append(int(number[1]))
@@ -383,13 +497,55 @@ def direction(next_step: str, kind: str | None = None,
     return {"step": next_step, "target": qualified}
 
 
+def revisit_refusal(entries: Sequence[Entry], seq: int) -> str | None:
+    """Why the triage run at `seq` cannot be revisited; None when it can.
+
+    Only a finished triage naming the reviews it triaged is revisited, and only
+    while it is the latest triage run of those reviews: a later triage of any of
+    them has superseded its outcome, and so has a run that resumed it, which may
+    still wait on the owner with a question or a stop before it names them again.
+    """
+    run = next((entry for entry in entries if entry.get("seq") == seq
+                and entry.get("step") in STEPS), None)
+    if run is None or run.get("step") != "triage" or run.get("outcome") != "finished":
+        what = (f"a {run.get('step')} run that ended {run.get('outcome')}" if run is not None
+                else "no run")
+        return f"seq {seq} is {what}, not a finished triage, so there is no triage to revisit"
+    triaged = {name for name in run.get("triaged") or () if isinstance(name, str)}
+    if not triaged:
+        return f"the triage at seq {seq} names no review it triaged, so none is revisited"
+    later = next((entry for entry in reversed(entries)
+                  if entry["seq"] > seq and entry.get("step") == "triage"
+                  and (triaged & set(entry.get("triaged") or ())
+                       or entry.get("resumes") == seq)), None)
+    if later is not None:
+        return (f"the triage at seq {later['seq']} came after seq {seq}, "
+                + (f"triaging {', '.join(sorted(triaged & set(later['triaged'])))} again"
+                   if later.get("triaged") else f"resuming it, and ended {later.get('outcome')}")
+                + f"; revisit or answer seq {later['seq']} instead")
+    return None
+
+
+def revisit_direction(entries: Sequence[Entry], seq: int) -> Entry | None:
+    """The owner's direction to revisit the triage run at `seq`, while no run has
+    resumed it since; None otherwise. A direction is used once."""
+    direction_ = next((entry for entry in reversed(entries)
+                       if entry.get("outcome") == ORCHESTRATOR and entry.get("by") == "owner"
+                       and entry.get("resumes") == seq), None)
+    if direction_ is None or any(entry["seq"] > direction_["seq"]
+                                 and entry.get("step") in STEPS
+                                 and entry.get("resumes") == seq for entry in entries):
+        return None
+    return direction_
+
+
 def note_orchestrator(path: Path, decision: str, reason: str, *, by: str = ORCHESTRATOR,
                       resolves: int | None = None, reads: int | None = None,
                       next_step: str | None = None, kind: str | None = None,
                       sections: list[list[int | str]] | None = None,
                       target: str | None = None,
                       branch: str | None = None, change: str | None = None,
-                      clock: Clock = utc_now) -> Entry:
+                      resumes: int | None = None, clock: Clock = utc_now) -> Entry:
     """Record a decision: the orchestrating session's own routing or recovery, or
     the owner's, relayed by it.
 
@@ -419,19 +575,24 @@ def note_orchestrator(path: Path, decision: str, reason: str, *, by: str = ORCHE
     `branch` and `change` record the owner's word that `change` is worked on
     `branch` though the branch is not its own, which each step's branch check
     accepts in place of asking (`branch_decisions`); only the owner gives it.
+    `resumes` is the owner's direction to revisit a finished triage, naming its
+    run, which `Wrapper.resume` then resumes once with the owner's words; it is
+    refused unless that run is the latest triage of the reviews it triaged
+    (`revisit_refusal`). It routes nothing: the resumed triage's outcome does.
     """
     if next_step is None and (kind, sections, target) != (None, None, None):
         raise StepError("a kind, sections, or target qualify the step a decision directs")
     directed = direction(next_step, kind, sections, target) if next_step is not None else None
     line = decision_line(path, read_log(path), decision, reason, by=by, resolves=resolves,
-                         reads=reads, directs=directed, branch=branch, change=change)
+                         reads=reads, directs=directed, branch=branch, change=change,
+                         resumes=resumes)
     return append_entry(path, line, clock)
 
 
 def decision_line(path: Path, entries: Sequence[Entry], decision: str, reason: str, *,
                   by: str, resolves: int | None = None, reads: int | None = None,
                   directs: Entry | None = None, branch: str | None = None,
-                  change: str | None = None) -> Entry:
+                  change: str | None = None, resumes: int | None = None) -> Entry:
     """The decision `note_orchestrator` records, checked against `entries`, the lines
     of the log at `path` it would follow, and not yet numbered: `directs` is the
     target of the owner's direction. A line that breaks a rule raises, naming it."""
@@ -461,6 +622,15 @@ def decision_line(path: Path, entries: Sequence[Entry], decision: str, reason: s
             raise StepError(f"the run at seq {reads} recorded no denial; a decision reads "
                             "a run's denials")
         line["reads"] = reads
+    if resumes is not None:
+        if by != "owner":
+            raise StepError("a direction to revisit a triage is the owner's")
+        if directs is not None:
+            raise StepError("a direction to revisit a triage directs no step: the resumed "
+                            "triage names its exit again")
+        if refusal := revisit_refusal(entries, resumes):
+            raise StepError(f"the revisit is refused: {refusal}")
+        line["resumes"] = resumes
     if directs is not None:
         if by != "owner":
             raise StepError("a decision directing a step is the owner's; the orchestrating "

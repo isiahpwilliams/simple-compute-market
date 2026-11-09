@@ -18,8 +18,10 @@ from arkhai_api_selling.settlement_composition import (
 )
 from core_storefront.stage_log import stage_event
 from market_alkahest import AlkahestChainProbe
+from market_arkhai_mediation.contract import INTERFACE as MEDIATION_INTERFACE
 from market_core import MarketDomainContract
 from market_identity import Signer, TrustedIdentitySet
+from market_storefront_kit.dispute_configuration import RegistryDisputePolicy
 from market_settlement_runtime import (
     SettlementConfigurationRegistry,
     SettlementRuntime,
@@ -128,4 +130,6 @@ def build_api_credit_settlement_composition(
         private_results=private_results,
         failure_policy=failure_policy,
         servicing=mechanism_servicing(SELLER_STAGES, settlement_config),
+        disputes=RegistryDisputePolicy.from_document(storefront_config.settings.as_dict()),
+        dispute_interfaces=frozenset({MEDIATION_INTERFACE}),
     )

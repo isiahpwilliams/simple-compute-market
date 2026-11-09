@@ -354,7 +354,11 @@ class _Threads:
 
 async def test_a_counter_needs_a_proposal_and_an_accept_keeps_its_opening_selection():
     runtime = _Runtime(result={})
-    pinned = {"mechanism": "opaque.future.v1", "option_id": "a" * 64, "expiration_unix": 2_000_000_000}
+    pinned = {
+        "option_id": "a" * 64,
+        "settlement": {"schema": "opaque.future.v1"},
+        "expiration_unix": 2_000_000_000,
+    }
     db = _Threads({"buyer_escrow_proposal": {"settlement_selection": pinned}})
     routes = _negotiate(runtime, db)
 
@@ -484,6 +488,12 @@ class _SettleDb(_Threads):
 
     async def load_issuance_progress(self, *, reference):
         return self.progress
+
+    async def load_settlement_evidence_by_ref(self, *, settlement_ref):
+        return SimpleNamespace(negotiation_id=self.thread["negotiation_id"], status="verified")
+
+    async def load_settlement_evidence(self, *, negotiation_id):
+        return None
 
 
 def _settle_routes(db, stage, *, signer=CLAIMANT_SIGNER, composition=None) -> SettleRoutes:

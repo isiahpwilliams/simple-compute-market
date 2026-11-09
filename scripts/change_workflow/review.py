@@ -1,5 +1,6 @@
-"""A review of a change, run read-only on the review row's models and published as
-the change's next numbered record.
+"""A review of a change, run read-only on the review's models, which the repository's
+workflow configuration names (`models.review`), and published as the change's next
+numbered record.
 
 A review runs the `change-review` skill in Codex's read-only sandbox first, and
 when Codex is unavailable, on Claude with no rule that edits; either way the
@@ -18,53 +19,64 @@ the same kind continues on that harness alone; the reviewer's harness and model,
 each model passed over; and the commit it reviewed, `HEAD` when its run started. A
 pre-closeout review refuses to start unless the latest validation record names
 `HEAD`, or an ancestor from which `HEAD` changes only changes' records — after an
-earlier pre-closeout review's triage, only paths under `openspec/` and `docs/` —
+earlier pre-closeout review's triage, only those and the repository's inert paths —
 with the result `passed`; the owner overrides that by `--unvalidated`, or by their
 direction to the review in the workflow log, until a review of that kind has run on
-it. The review's outcome is `finished`,
+it. Every review but the design's reads the change against the branch it lands on,
+`--base` or the one its clone recorded, and refuses with neither. The review's
+outcome is `finished`,
 naming the record this run published and, as its exit, the triage of its kind, or
 `stopped` with the runner's reason; an earlier record never counts.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
-from change_workflow.common import KINDS, ROOT, Clock, Entry, StepError, utc_now
-from change_workflow.cost import review_cost
-from change_workflow.harness import (NETWORK_RETRIES, CodexRunner, Reached, Runner,
-                                     claude_command, codex_command, missing_program,
-                                     resume_command, run_claude, run_codex, unreachable)
-from change_workflow.log import LOG, log_path, read_log, record_outcome, unused_direction
-from change_workflow.records import (TRANSCRIPTS, ChangedSince, changed_since,
-                                     is_documentation, is_record, next_number,
-                                     validation_problem)
-from change_workflow.running import recorded_run, runs_directory
-from change_workflow.steps import HARNESSES, STEP_TABLE, Model, StepRules, load_steps
-from change_workflow.stream import Stream, transcript_denials
-from find_change import ChangeNotFound, change_directory, is_archived
+from . import config
+from .common import Clock, Entry, StepError, repository_root, utc_now
+from .cost import review_cost
+from .find import ChangeNotFound, change_directory, is_archived, landing_branch
+from .graph import KINDS
+from .harness import (NETWORK_RETRIES, CodexRunner, Reached, Runner, claude_command,
+                      codex_command, missing_program, resume_command, run_claude, run_codex,
+                      unreachable)
+from .log import LOG, log_path, read_log, record_outcome, unused_direction
+from .records import (TRANSCRIPTS, ChangedSince, changed_since, exempting, is_record,
+                      next_number, validation_problem)
+from .running import (drop_invocations, invocations_directory, kept_invocations, recorded_run,
+                      runs_directory, termination_deferred, termination_ends_the_run)
+from .steps import HARNESSES, STEP_TABLE, Model, StepRules, load_steps
+from .stream import Stream, transcript_denials
 
-DEFAULT_BASE = "dev"
 SECTIONS = ("Summary", "Assessment", "Questions", "Findings", "Readiness")
+# Each finding's fields, and the values each admits; None admits any non-empty
+# value. A finding with one evident fix states `Alternatives: none — <why>`, so an
+# absent field never stands for "none".
 FIELDS = {
     "Lens": {"direction", "consistency", "testing", "documentation", "architecture",
              "scope", "readiness"},
     "Basis": {"specification", "guidance", "evidence", "judgement"},
     "Severity": {"blocking", "should", "minor"},
     "Evidence": None,
+    "Alternatives": None,
 }
 _FINDING = re.compile(r"^### F\d+\b", re.M)
-_FIELD = re.compile(r"^- \*\*(\w+):\*\*\s*(.*?)\s*$", re.M)
+# A field's value is the rest of its own line: an empty field never takes the line
+# after it for its value.
+_FIELD = re.compile(r"^- \*\*(\w+):\*\*[ \t]*(.*?)[ \t\r]*$", re.M)
 _SESSION_LINE = re.compile(r"^session id: (\S+)\s*$", re.M)
 _SESSION_MARKER = re.compile(r"<!-- reviewer-session: (\S+) -->")
 _REVIEWER = re.compile(r"<!-- reviewer: (\S+) (\S+)(?: (\S+))? -->")
 _UNAVAILABLE_MARKER = re.compile(r"<!-- reviewer-unavailable: (\S+) (\S+): (.*?) -->")
-# The reviewer was the owner's choice for the run, not the review row's.
+# The reviewer was the owner's choice for the run, not the configuration's.
 OVERRIDE_MARKER = "<!-- reviewer-override: owner -->"
 REVIEWED_COMMIT = "<!-- reviewed-commit: {} -->"
 _REVIEWED_COMMIT = re.compile(r"<!-- reviewed-commit: (\S+) -->")
@@ -72,7 +84,7 @@ _REVIEWED_COMMIT = re.compile(r"<!-- reviewed-commit: (\S+) -->")
 # What a review on Claude is told beside its prompt: nobody can answer it, and its
 # final message is the review, which the wrapper checks and publishes.
 REVIEW_UNATTENDED = (
-    "This review runs unattended through scripts/run_change_step.py: nobody can answer a "
+    "This review runs unattended through scripts/change-workflow: nobody can answer a "
     "permission prompt or a question in this session. Follow the change-review skill's "
     "instructions for running unattended. Your final message is the review, in the skill's "
     "format, and nothing else; the wrapper checks it and publishes it. Run one command per "
@@ -83,7 +95,8 @@ class ReviewError(StepError):
     """The review could not be started or produced no review.
 
     `record` holds what the log line records of the run beside its reason: the
-    models passed over, and a Claude attempt's denials and transcript.
+    models passed over, a Claude attempt's denials and transcript, and, once a
+    reviewer ran, its session and what it spent.
     """
 
     def __init__(self, message: str, record: Entry | None = None) -> None:
@@ -176,14 +189,14 @@ def review_problems(text: str, kind: str, change: str) -> list[str]:
     return problems
 
 
-def review_prompt(kind: str, change: str, base: str) -> str:
+def review_prompt(kind: str, change: str, base: str | None) -> str:
     prompt = f"Use the change-review skill. Review kind: {kind}. Change: {change}."
     if kind != "design":
         prompt += f" Base: {base}."
     return prompt
 
 
-def continuation_prompt(kind: str, change: str, base: str, previous: str) -> str:
+def continuation_prompt(kind: str, change: str, base: str | None, previous: str) -> str:
     prompt = (f"The change {change} has been revised since your review, {previous}. Re-read the "
               "change-review skill, which may have changed, and every file in the change, including "
               f"the triage records in reviews/. Then write a complete new {kind} review in the skill's "
@@ -223,26 +236,26 @@ def prior_session(reviews: Path, kind: str) -> tuple[str, str, str] | None:
     return None
 
 
-def review_models(rules: StepRules, model: str | None = None,
+def review_models(models: Sequence[Model], model: str | None = None,
                   effort: str | None = None) -> tuple[Model, ...]:
     """The review's models in order, or the owner's own choice for one run.
 
-    The step table is the workflow's policy, and the loader holds it to that. A
-    model given for one run is the owner's choice for a review run by hand and is
-    outside that policy on purpose, a forbidden model included: it replaces the
-    whole list, with no fallback, since the owner chose it, and its harness is read
-    from its name, a `claude-` model on Claude and any other on Codex. Its effort
-    is the one given, else the table's for that harness. An effort given alone
-    replaces every entry's. The orchestrating session gives neither, and the record
-    says when either was given.
+    The configuration's models are held to the workflow's model policy as it is
+    read. A model given for one run is the owner's choice for a review run by hand
+    and is outside that policy on purpose: it replaces the whole list, with no
+    fallback, since the owner chose it, and its harness is read from its name, a
+    `claude-` model on Claude and any other on Codex. Its effort is the one given,
+    else the configuration's for that harness. An effort given alone replaces every
+    entry's. The orchestrating session gives neither, and the record says when
+    either was given.
     """
     if model:
         harness = "claude" if model.startswith("claude-") else "codex"
-        table = next((entry.effort for entry in rules.models if entry.harness == harness), None)
-        return (Model(harness, model, effort or table),)
+        listed = next((entry.effort for entry in models if entry.harness == harness), None)
+        return (Model(harness, model, effort or listed),)
     if effort:
-        return tuple(Model(entry.harness, entry.model, effort) for entry in rules.models)
-    return rules.models
+        return tuple(Model(entry.harness, entry.model, effort) for entry in models)
+    return tuple(models)
 
 
 def _codex_attempt(model: Model, prompt: str, continuing: str | None, draft: Path, log: Path,
@@ -253,7 +266,8 @@ def _codex_attempt(model: Model, prompt: str, continuing: str | None, draft: Pat
                else codex_command(prompt, draft, root, model.model, model.effort))
     start = log.stat().st_size if log.is_file() else 0
     try:
-        status = runner(command, log)
+        with termination_ends_the_run():
+            status = runner(command, log)
     except FileNotFoundError as exc:
         if not missing_program(exc, command):
             raise
@@ -277,7 +291,8 @@ def _claude_attempt(model: Model, prompt: str, continuing: str | None, draft: Pa
     command = claude_command(prompt, rules, None, model, root=root, session=continuing,
                              system=REVIEW_UNATTENDED)
     try:
-        status = runner(command, root, stream.feed)
+        with termination_ends_the_run():
+            status = runner(command, root, stream.feed, "review")
     except FileNotFoundError as exc:
         if not missing_program(exc, command):
             raise
@@ -290,26 +305,68 @@ def _claude_attempt(model: Model, prompt: str, continuing: str | None, draft: Pa
     return status, unreachable(stream.failure_text(status)), stream.session
 
 
+def _transcript_session(log: Path, harness: str, start: int) -> str | None:
+    """The session a reviewer that never returned had reported, read from its
+    attempt's output, from `start` on: an earlier attempt's session is not its own."""
+    said = log.read_bytes()[start:].decode("utf-8", "replace") if log.is_file() else ""
+    if harness != "claude":
+        sessions = _SESSION_LINE.findall(said)
+        return sessions[-1] if sessions else None
+    session = None
+    for line in said.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get("session_id"), str):
+            session = event["session_id"]
+    return session
+
+
+def _unpublished_record(log: Path, reviews: Path, ran: Model | None, session: str | None,
+                        passed_over: list[Entry], claude_ran: bool, spent: bool,
+                        started: datetime) -> Entry:
+    """What the line of a run that published nothing records beside its reason."""
+    record: Entry = {"unavailable": passed_over} if passed_over else {}
+    if claude_ran and log.is_file():
+        record["transcript"] = log.relative_to(reviews).as_posix()
+        record["denials"] = transcript_denials(log)
+    if ran is not None and spent:
+        tagged = f"{ran.harness}:{session}" if session else None
+        if tagged:
+            record["session"] = tagged
+        # The reviewer ran, and what it spent is spent whatever it produced.
+        record.update(review_cost(log, reviews / LOG, tagged, ran.harness, started))
+    return record
+
+
 def _marker_text(text: str) -> str:
     """`text` on one line, safe inside an HTML comment."""
     return " ".join(text.split()).replace("-->", "->")
 
 
-def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str | None = None,
-               effort: str | None = None, fresh: bool = False, root: Path = ROOT,
+def run_review(change: str, kind: str, *, base: str | None = None, model: str | None = None,
+               effort: str | None = None, fresh: bool = False, root: Path | None = None,
                runner: CodexRunner = run_codex, claude: Runner = run_claude,
                unvalidated: bool = False, head: Callable[[Path], str] = _reviewed_head,
-               changed_since: ChangedSince = changed_since, steps_path: Path = STEP_TABLE,
+               changed_since: ChangedSince = changed_since, steps_path: Path | None = None,
                clock: Clock = utc_now,
                echo: Callable[[str], None] | None = lambda shown: print(
-                   shown, file=sys.stderr, flush=True)) -> Path:
-    """Run the review on the first available of its row's models, and publish it.
+                   shown, file=sys.stderr, flush=True),
+               interrupted: Callable[[Entry], None] = lambda _: None) -> Path:
+    """Run the review on the first available of its models, and publish it.
 
     A review continues the previous reviewer's session only on the same harness,
     since a session cannot move between harnesses; on another it starts fresh. The
-    record names the reviewer's harness and model, and each model passed over.
+    record names the reviewer's harness and model, and each model passed over. The
+    change and the step table are the repository's the command runs in, unless
+    `root` and `steps_path` name others. A reviewer interrupted, or whose runner
+    failed, is passed on as it was raised, once `interrupted` is given what its log
+    line records beside its reason.
     """
     started = clock()
+    root = repository_root() if root is None else root
+    steps_path = repository_root() / STEP_TABLE if steps_path is None else steps_path
     if kind not in KINDS:
         raise ReviewError(f"unknown review kind {kind!r}; expected one of {', '.join(KINDS)}")
     try:
@@ -322,6 +379,18 @@ def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str |
         raise ReviewError(f"{change} is not archived; a closeout review reads the archived "
                           "change, so finish closeout, which archives it, first")
     reviews = directory / "reviews"
+    try:
+        configuration = config.load(root)
+        models = configuration.step_models("review")
+    except config.ConfigError as exc:
+        raise ReviewError(str(exc)) from exc
+    # Every review but the design's reads the change against the branch it lands
+    # on: the one given for this run, or the one its clone recorded.
+    base = base or landing_branch(root, change)
+    if kind != "design" and base is None:
+        raise ReviewError(f"a {kind} review reads {change} against the branch it lands on, "
+                          "and none is recorded, since the change has no clone that recorded "
+                          "one: give it with --base <branch> (REVIEW_BASE=<branch>)")
     reviewed = head(root)
     # The owner's direction to this review, not yet used by a run of it, overrides
     # the validation check as `--unvalidated` does: the check is the review's
@@ -334,14 +403,15 @@ def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str |
         # it, closeout is next and its own checks read the documentation again.
         earlier = any(entry.name.endswith(".triage.md")
                       for entry in reviews.glob("[0-9]*-pre-closeout*.md"))
-        if problem := validation_problem(reviews, reviewed, root, changed_since,
-                                         exempt=is_documentation if earlier else is_record):
+        exempt = exempting(configuration.inert_paths) if earlier else is_record
+        if problem := validation_problem(reviews, reviewed, root, changed_since, exempt=exempt):
             raise ReviewError(f"a pre-closeout review needs a passing validation of HEAD: "
                               f"{problem}; validate first, or override it: UNVALIDATED=1, or "
                               "the owner's direction to this review in the workflow log")
     steps = load_steps(steps_path)
     if "review" not in steps:
-        raise ReviewError(f"{steps_path} has no review row naming the review's models")
+        raise ReviewError(f"{steps_path} has no review row naming the review's skill and "
+                          "rules")
     transcripts = reviews / TRANSCRIPTS
     transcripts.mkdir(parents=True, exist_ok=True)
     provisional = f"pending-{kind}-{uuid.uuid4().hex[:12]}"
@@ -355,13 +425,20 @@ def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str |
     ran: Model | None = None
     claude_ran = False
     finished = False
+    interruption: BaseException | None = None
+    # Where the latest attempt's output starts in the transcript.
+    attempt_start = 0
     try:
-        for ran in review_models(steps["review"], model, effort):
+        # A stop's SIGTERM ends the review as an interrupt does while a reviewer
+        # runs (each attempt's runner call): the reviewer's process is ended, and
+        # nothing is published.
+        for ran in review_models(models, model, effort):
             continuing = prior[1] if prior and prior[0] == ran.harness else None
             prompt = (continuation_prompt(kind, change, base, prior[2]) if prior and continuing
                       else review_prompt(kind, change, base))
             for attempt in range(NETWORK_RETRIES + 1):
                 draft.unlink(missing_ok=True)
+                attempt_start = log.stat().st_size if log.is_file() else 0
                 if ran.harness == "codex":
                     status, reached, session = _codex_attempt(ran, prompt, continuing, draft, log,
                                                               root, runner)
@@ -376,6 +453,8 @@ def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str |
                 break
             passed_over.append({**ran.entry(), "reason": reached[1]})
         finished = True
+    except BaseException as exc:
+        interruption = exc
     finally:
         # Numbered now, after every record written while the reviewer ran; an
         # interrupted run keeps its number too, through its transcript, and
@@ -389,6 +468,18 @@ def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str |
             draft = draft.rename(transcripts / output.with_suffix(".rejected.md").name)
         if not finished:
             output.unlink()
+    if interruption is not None:
+        # The reviewer never returned its session, so it is read back from what
+        # its attempt had written to the transcript. Whatever reading the record
+        # meets, the interruption is passed on.
+        try:
+            interrupted(_unpublished_record(
+                log, reviews, ran,
+                _transcript_session(log, ran.harness, attempt_start) if ran else None,
+                passed_over, claude_ran, ran is not None, started))
+        except Exception:
+            interrupted({})
+        raise interruption
     text = draft.read_text("utf-8") if draft.is_file() else ""
     if reached is not None and reached[0] == "unavailable":
         problems = ["no reviewer is available: " + "; ".join(
@@ -406,15 +497,8 @@ def run_review(change: str, kind: str, *, base: str = DEFAULT_BASE, model: str |
         output.unlink()
         if not text.strip():
             draft.unlink(missing_ok=True)
-        record: Entry = {"unavailable": passed_over} if passed_over else {}
-        if claude_ran and log.is_file():
-            record["transcript"] = log.relative_to(reviews).as_posix()
-            record["denials"] = transcript_denials(log)
-        if ran is not None and (reached is None or reached[0] == "network"):
-            # The reviewer ran, and what it spent is spent whatever it produced.
-            record.update(review_cost(log, reviews / LOG,
-                                      f"{ran.harness}:{session}" if session else None,
-                                      ran.harness, started))
+        record = _unpublished_record(log, reviews, ran, session, passed_over, claude_ran,
+                                     reached is None or reached[0] == "network", started)
         raise ReviewError("the reviewer produced no review: " + "; ".join(problems)
                           + (f"; see {log.relative_to(root)}" if log.is_file() else ""),
                           record)
@@ -471,28 +555,45 @@ def review_outcome(path: Path, kind: str) -> tuple[Entry, str | None, str | None
     return outcome, session, commits[-1] if commits else None, extra
 
 
-def review_and_log(change: str, kind: str, *, root: Path = ROOT, clock: Clock = utc_now,
-                   **options: Any) -> Entry:
+def review_and_log(change: str, kind: str, *, root: Path | None = None,
+                   clock: Clock = utc_now, **options: Any) -> Entry:
     """Run a review and log its outcome, recorded as in progress in the checkout
     until its line is written, since a round view moving the checkout would change
     the commit it reads.
 
     It is `finished` only when this run published its own record, named with the
     commit it reviewed; any other end is `stopped` with the runner's reason, so an
-    earlier record of the same kind never stands in for this run's.
+    earlier record of the same kind never stands in for this run's. A stop's
+    SIGTERM is held for as long as the run is recorded and ends it only while its
+    reviewer runs, so a review published before the signal is logged `finished`.
     """
+    root = repository_root() if root is None else root
     runs = options.pop("runs", runs_directory)
-    with recorded_run(runs(root), "review", change, clock=clock):
+    with termination_deferred(), recorded_run(runs(root), "review", change, clock=clock):
         return _review_and_log(change, kind, root=root, clock=clock, **options)
 
 
 def _review_and_log(change: str, kind: str, *, root: Path, clock: Clock,
+                    invocations: Callable[[Path], Path | None] = invocations_directory,
                     **options: Any) -> Entry:
     log = log_path(root, change)
     head = options.get("head", _reviewed_head)
     started = clock()
     # The owner's choice of reviewer marks every line of the run, however it ends.
     override: Entry = {"override": True} if options.get("model") or options.get("effort") else {}
+
+    def logged(outcome: Entry, session: str | None, commit: str | None, extra: Entry) -> Entry:
+        """The line, with what a reviewer on Claude invoked through `run`: a Codex
+        reviewer's commands see no session of their own, so keep nothing."""
+        ran = session.removeprefix("claude:") if session and session.startswith(
+            "claude:") else None
+        directory = invocations(root)
+        invoked = kept_invocations(directory, ran, change)
+        line = record_outcome(log, "review", outcome, session=session, commit=commit,
+                              extra={**extra, **({"invoked": invoked} if invoked else {})},
+                              clock=clock)
+        drop_invocations(directory, ran, invoked)
+        return line
 
     def stopped(reason: str, record: Entry | None = None) -> Entry:
         try:
@@ -501,25 +602,27 @@ def _review_and_log(change: str, kind: str, *, root: Path, clock: Clock,
             commit = None
         record = {**(record or {}), **override}
         denials = record.pop("denials", [])
-        return record_outcome(log, "review", {"outcome": "stopped", "message": reason,
-                                              "reason": reason, "denials": denials},
-                              session=None, commit=commit, extra={"kind": kind, **record},
-                              clock=clock)
+        session = record.pop("session", None)
+        return logged({"outcome": "stopped", "message": reason, "reason": reason,
+                       "denials": denials}, session, commit, {"kind": kind, **record})
 
+    interrupted: list[Entry] = []
     try:
-        path = run_review(change, kind, root=root, clock=clock, **options)
+        path = run_review(change, kind, root=root, clock=clock,
+                          interrupted=interrupted.append, **options)
     except ReviewError as exc:
         return stopped(str(exc), exc.record)
     except BaseException as exc:
         # A reviewer that could not start, or was interrupted, still ends with a
-        # line; an interrupt is passed on once it is written.
+        # line, recording what the reviewer had reported; an interrupt is passed
+        # on once it is written.
         line = stopped(f"the review did not finish: {type(exc).__name__}"
-                       + (f": {exc}" if str(exc) else ""))
+                       + (f": {exc}" if str(exc) else ""),
+                       interrupted[0] if interrupted else None)
         if not isinstance(exc, Exception):
             raise
         return line
     outcome, session, commit, reviewer = review_outcome(path, kind)
     reviewer.update(review_cost(path.parent / TRANSCRIPTS / path.with_suffix(".log").name,
                                 log, session, reviewer.get("harness"), started))
-    return record_outcome(log, "review", outcome, session=session, commit=commit,
-                          extra={"kind": kind, "record": path.name, **reviewer}, clock=clock)
+    return logged(outcome, session, commit, {"kind": kind, "record": path.name, **reviewer})

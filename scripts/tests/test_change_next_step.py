@@ -2,38 +2,23 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-import change_clone as clones
+from change_workflow import clone as clones
 from change_workflow import graph
-from change_workflow.common import StepError
+from change_workflow import next_step as nxt
+from change_workflow import round_view as rounds
+from change_workflow.common import FORMAT, StepError
+from change_workflow.find import change_directory
 from change_workflow.log import (append_entry, log_path, note_orchestrator, note_round,
                                  read_log, record_outcome, unused_direction)
-from find_change import change_directory
-
-SCRIPTS = Path(__file__).resolve().parents[1]
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    # Registered before it runs: its dataclasses look their module up by name.
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-nxt = _load("change_next_step")
-rounds = sys.modules["round_view"]
+from change_workflow_fixtures import configured
 
 CHANGE = "shape-bounds"
 # The review kind the design records below are named for.
@@ -178,10 +163,12 @@ FIX = ["scripts/change_next_step.py"]
 RECORDS_ONLY = [f"openspec/changes/{CHANGE}/interventions.jsonl"]
 
 
-# The change is worked in the checkout the computation runs in, with no clone,
-# unless a test says otherwise.
+# The change is worked in the checkout the computation runs in, with no clone, and
+# the repository declares `openspec/` and `docs/` inert, unless a test says otherwise.
+INERT = ("openspec/", "docs/")
 HERE = {"branch": lambda _: f"feat/{CHANGE}", "workspace": lambda _: None,
-        "clone": lambda *_: None, "merging": lambda _: False}
+        "clone": lambda *_: None, "merging": lambda _: False,
+        "inert_paths": lambda _: INERT}
 
 
 def _next(root: Path, *, uncommitted: bool = False, changed: list[str] | None = FIX,
@@ -209,6 +196,18 @@ def test_a_finished_design_goes_to_the_exit_it_named(tmp_path: Path) -> None:
 
     assert (result["step"], result["kind"]) == ("review", "design")
     assert f"the design run at seq {run['seq']} chose review:design" in result["reason"]
+
+
+def test_a_line_recording_what_it_invoked_routes_as_one_without(tmp_path: Path) -> None:
+    """`invoked` is an optional field of a run's line: nothing routes on it."""
+    plain, recorded = tmp_path / "plain", tmp_path / "recorded"
+    _log(_repository(plain, "in design"), "design", _done(_to("review", "design")))
+    _log(_repository(recorded, "in design"), "design", _done(_to("review", "design")),
+         invoked=[{"hook": "pre-commit", "command": "make check-repository",
+                   "exit_status": 0, "started": "2026-11-06T09:00:00Z", "seconds": 1.5}])
+
+    assert ({k: v for k, v in _next(recorded).items() if k != "reason"}
+            == {k: v for k, v in _next(plain).items() if k != "reason"})
 
 
 def test_a_published_design_review_is_triaged(tmp_path: Path) -> None:
@@ -316,7 +315,7 @@ def test_an_interactive_session_that_ended_without_recording_is_in_progress(
     assert (result["step"], result["kind"]) == ("triage", "design")
     assert "if no session of it is open, an interactive one ended without recording" in (
         result["reason"])
-    assert f"run_change_step.py record {CHANGE} triage" in result["reason"]
+    assert f"scripts/change-workflow record {CHANGE} triage" in result["reason"]
 
 
 def test_an_interactive_plan_that_set_its_status_and_recorded_nothing(
@@ -330,7 +329,7 @@ def test_an_interactive_plan_that_set_its_status_and_recorded_nothing(
     # Planning, and no round: the plan's outcome carries its exit and its rounds.
     assert result["step"] == "plan"
     assert "no plan outcome is recorded" in result["disagreement"]
-    assert f"run_change_step.py record {CHANGE} plan" in result["disagreement"]
+    assert f"scripts/change-workflow record {CHANGE} plan" in result["disagreement"]
 
 
 # Implementation rounds.
@@ -749,6 +748,40 @@ def test_an_advancing_round_validates_its_fix_commit_then_starts_the_next_planne
                          "reason": validated["reason"]}
 
 
+def test_a_revisit_while_the_fix_commit_is_validated_routes_on_the_resumed_triage(
+        tmp_path: Path) -> None:
+    """A revisit while the fix commit is validated: the validation is stopped and
+    resolved, the triage resumed, and its later outcome governs the reviews."""
+    root = _repository(tmp_path, "in implementation")
+    _planned(root)
+    triage = _triaged_round(root, to=_to("round"), validated="e" * 40)
+    validating = _next(root)
+    stopped = _log(root, "validate", {"outcome": "stopped", "message": "interrupted",
+                                      "reason": "the run did not finish: Terminated: "
+                                                "received SIGTERM", "denials": []})
+    _decide(root, "the owner interrupts the validation", by="owner")
+    interrupted = _next(root)
+    _decide(root, "revisits 02 F1", by="owner", resumes=triage["seq"])
+    directed = _next(root)
+    _decide(root, "the revisit supersedes the validation", by="owner",
+            resolves=stopped["seq"])
+    _check(root, ALL_WORK_DONE)
+    _log(root, "triage", {**_done(_to("review", "pre-closeout")),
+                          "triaged": ["01-validation", "02-implementation"]},
+         resumes=triage["seq"])
+
+    result = _next(root)
+
+    assert (validating["step"], validating["target"]) == ("validate", {"step": "round"})
+    # The stopped validation waits until a decision line resolves it: neither the
+    # interrupt nor the revisit's direction resolves it.
+    assert interrupted["step"] == directed["step"] == "owner"
+    assert interrupted["seq"] == directed["seq"] == stopped["seq"]
+    # The resumed triage's exit governs: its fix commit validated for pre-closeout.
+    assert (result["step"], result["target"]) == (
+        "validate", {"step": "review", "kind": "pre-closeout"})
+
+
 def test_an_inconclusive_validation_of_the_fix_commit_goes_to_the_owner(
         tmp_path: Path) -> None:
     root = _repository(tmp_path, "in implementation")
@@ -964,6 +997,56 @@ def test_a_documentation_correction_at_closeout_needs_no_validation(tmp_path: Pa
                                   "openspec/specs/change-workflow/spec.md"])
 
     assert result["step"] == "archive-cleanup"
+
+
+# The inert paths are the repository's (CW-n7ra): the engine reads none of its own.
+
+def test_a_repository_marks_images_inert(tmp_path: Path) -> None:
+    """CW-n7ra's scenario, the inert paths read from the repository's own
+    configuration file."""
+    root = _repository(tmp_path, "in implementation")
+    configured(root, '[repository]\ninert-paths = ["docs/", "assets/"]\n')
+    _merged(root, reviewed="e" * 40)
+
+    assert _next(root, changed=["assets/logo.svg"], inert_paths=nxt._inert_paths)["step"] \
+        == "closeout"
+    assert _next(root, changed=DOCUMENTS[:1], inert_paths=nxt._inert_paths)["step"] \
+        == "validate"
+
+
+@pytest.mark.parametrize("arrange,changed", [
+    (lambda root: _merged(root, reviewed="e" * 40), DOCUMENTS),
+    (lambda root: _pre_closeout(root, to=_to("review", "pre-closeout"), reviewed="e" * 40),
+     DOCUMENTS),
+])
+def test_with_no_inert_path_declared_documents_are_read_as_code(tmp_path: Path, arrange,
+                                                                changed) -> None:
+    root = _repository(tmp_path, "in implementation")
+    arrange(root)
+
+    assert _next(root, changed=changed, inert_paths=lambda _: None)["step"] == "validate"
+    # Changes' records stay exempt whatever the repository declares.
+    assert _next(root, changed=RECORDS_ONLY, inert_paths=lambda _: None)["step"] != "validate"
+
+
+def test_with_no_inert_path_declared_a_documentation_correction_is_validated(
+        tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in closeout", archived=True)
+    _closeout_triaged(root)
+
+    result = _next(root, changed=["docs/agents/change-workflow.md"], inert_paths=lambda _: None)
+
+    assert (result["step"], result["target"]) == ("validate", {"step": "archive-cleanup"})
+
+
+def test_a_malformed_configuration_leaves_the_change_unclassified(tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in design")
+    configured(root, "[repository]\ninert = []\n")
+
+    result = _next(root, inert_paths=nxt._inert_paths)
+
+    assert result["step"] == "unclassified"
+    assert "repository.inert is no field" in result["reason"]
 
 
 def test_the_owners_waiver_directs_archive_cleanup_past_a_missing_validation(
@@ -1413,7 +1496,8 @@ def test_a_dependency_gating_a_later_phase_does_not_hold_design(tmp_path: Path) 
     assert _next(root)["step"] == "design"
 
 
-def test_a_design_blocked_on_an_unlanded_prerequisite_waits_for_dev(tmp_path: Path) -> None:
+def test_a_design_blocked_on_an_unlanded_prerequisite_waits_for_its_landing(
+        tmp_path: Path) -> None:
     root = _repository(tmp_path, "in design")
     _log(root, "design", {"outcome": "blocked", "message": "Needs split-pools.",
                           "blocked_on": "split-pools"})
@@ -1421,7 +1505,7 @@ def test_a_design_blocked_on_an_unlanded_prerequisite_waits_for_dev(tmp_path: Pa
     result = _next(root)
 
     assert (result["step"], result["prerequisite"]) == ("owner", "split-pools")
-    assert "merge dev" in result["reason"]
+    assert "merge the branch it lands on" in result["reason"]
 
 
 def test_a_prerequisite_merged_in_is_recorded_by_design(tmp_path: Path) -> None:
@@ -1434,13 +1518,13 @@ def test_a_prerequisite_merged_in_is_recorded_by_design(tmp_path: Path) -> None:
     assert result["step"] == "design" and "record the dependency" in result["reason"]
 
 
-def test_a_dependency_with_no_directory_here_waits_for_dev(tmp_path: Path) -> None:
+def test_a_dependency_with_no_directory_here_waits_for_its_landing(tmp_path: Path) -> None:
     root = _repository(tmp_path, "in design", depends_on="`split-pools` (design)")
 
     result = _next(root)
 
     assert (result["step"], result["prerequisite"]) == ("owner", "split-pools")
-    assert "merge dev" in result["reason"]
+    assert "merge the branch it lands on" in result["reason"]
 
 
 def test_a_malformed_dependency_is_unclassified(tmp_path: Path) -> None:
@@ -1470,7 +1554,7 @@ def test_a_log_not_yet_converted_goes_to_the_owner_with_the_command(tmp_path: Pa
 
     result = _next(root)
 
-    command = f"python3 scripts/run_change_step.py convert {CHANGE}"
+    command = f"scripts/change-workflow convert {CHANGE}"
     assert (result["step"], result["convert"]) == ("owner", command)
     assert "seq 2" in result["reason"] and command in result["reason"]
 
@@ -1511,6 +1595,123 @@ def test_an_older_wrapper_appending_after_the_conversion_needs_it_again(
 
     assert (converted["step"], converted["kind"]) == ("review", "design")
     assert _next(root)["step"] == "owner" and "convert" in _next(root)
+
+
+def test_an_empty_log_beside_numbered_records_is_older(tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in design")
+    _record(root, f"03-{KIND}.md", triage="Advance")
+    log_path(root, CHANGE).write_text("\n", "utf-8")
+
+    result = _next(root)
+
+    assert result["step"] == "owner" and "convert" in result
+
+
+def test_a_ledger_with_no_log_is_read_in_this_format(tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in design")
+    (change_directory(root, CHANGE) / "interventions.jsonl").write_text(
+        '{"decision": "the owner chose otherwise"}\n', "utf-8")
+
+    assert _next(root) == {"step": "design", "reason": "in design"}
+
+
+# A log of a newer format is refused; a line naming what the graph does not declare
+# routes nothing.
+
+def _newer(root: Path, seq: int) -> None:
+    _unmarked(root, {"seq": seq, "at": "2026-10-20T10:00:00Z", "format": FORMAT + 1,
+                     "step": "design", "outcome": "finished", "message": "Done.",
+                     "next": {"step": "review", "kind": "design"}})
+
+
+def test_a_newer_log_is_refused_naming_its_format(tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in design")
+    _log(root, "design", _done(_to("review", "design")))
+    _newer(root, 2)
+
+    result = _next(root)
+
+    assert result["step"] == "unclassified"
+    assert f"format {FORMAT + 1} at seq 2" in result["reason"]
+    assert f"reading format {FORMAT}" in result["reason"]
+
+
+def test_a_newer_log_is_refused_on_the_command_line(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _repository(tmp_path, "in design")
+    _newer(root, 1)
+
+    assert nxt.main([CHANGE], root=root, **HERE) == 1
+
+    out, err = capsys.readouterr()
+    assert json.loads(out)["step"] == "unclassified"
+    assert f"format {FORMAT + 1}" in err
+
+
+def test_the_output_names_its_format_before_anything_routed_on(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _repository(tmp_path, "ready for design")
+
+    assert nxt.main([CHANGE], root=root, **HERE) == 0
+
+    printed = json.loads(capsys.readouterr().out)
+    assert list(printed)[:2] == ["format", "step"]
+    assert (printed["format"], printed["step"]) == (FORMAT, "design")
+
+
+def test_an_exit_naming_an_undeclared_node_names_the_owner_and_routes_no_later_line(
+        tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in design")
+    _log(root, "design", _done(_to("review", "design")))
+    append_entry(log_path(root, CHANGE), {"step": "design", "outcome": "finished",
+                                          "message": "Done.", "next": {"step": "deploy"}})
+    # A later exit the computation would otherwise follow.
+    _log(root, "design", _done(_to("review", "design")))
+
+    result = _next(root)
+
+    assert result["step"] == "owner"
+    assert "seq 2" in result["reason"] and "'deploy' is no node" in result["reason"]
+
+
+def test_an_undeclared_line_is_named_before_a_branch_decision_is_read(tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in design")
+    _decide(root, "runs here", by="owner", branch="feat/elsewhere", change=CHANGE)
+    append_entry(log_path(root, CHANGE), {"step": "deploy", "outcome": "finished",
+                                          "message": "Done."})
+
+    # Checked out on the branch the decision names, which it would accept.
+    result = _next(root, branch=lambda _: "feat/elsewhere")
+
+    assert result["step"] == "owner" and "'deploy' is no step" in result["reason"]
+
+
+def test_a_newer_log_is_refused_while_a_merge_is_in_progress(tmp_path: Path) -> None:
+    root = _repository(tmp_path, "in implementation")
+    _log(root, "merge", QUESTION)
+    _newer(root, 2)
+
+    result = _next(root, merging=lambda _: True)
+
+    assert result["step"] == "unclassified" and f"format {FORMAT + 1}" in result["reason"]
+
+
+@pytest.mark.parametrize("line,named", [
+    ({"step": "deploy", "outcome": "finished", "message": "Done."}, "'deploy' is no step"),
+    ({"step": "review", "kind": "security", "outcome": "finished", "message": "Done.",
+      "next": {"step": "triage", "kind": "design"}}, "'security' is no kind of review"),
+    ({"step": "orchestrator", "outcome": "orchestrator", "by": "owner", "decision": "d",
+      "reason": "r", "next": {"step": "triage", "kind": "security"}},
+     "the owner's direction names no node"),
+])
+def test_a_line_naming_an_undeclared_step_or_kind_routes_nothing(
+        tmp_path: Path, line: dict, named: str) -> None:
+    root = _repository(tmp_path, "in design")
+    append_entry(log_path(root, CHANGE), line)
+
+    result = _next(root)
+
+    assert result["step"] == "owner" and named in result["reason"]
 
 
 # The round's join is the table's: what it waits for decides what is named.
@@ -2293,10 +2494,11 @@ def test_a_change_with_no_clone_and_no_records_names_its_clone(tmp_path: Path) -
 
     result = _from_workspace(root)
 
+    # No branch to land on is named: the clone records the workspace's checked-out
+    # branch as it is made.
     assert result["step"] == "clone"
-    assert result["arguments"] == {"CHANGE": CHANGE, "BRANCH": f"feat/{CHANGE}", "FROM": "dev"}
-    assert f"make change-clone CHANGE={CHANGE} BRANCH=feat/{CHANGE} FROM=dev" in (
-        result["reason"])
+    assert result["arguments"] == {"CHANGE": CHANGE, "BRANCH": f"feat/{CHANGE}"}
+    assert f"make change-clone CHANGE={CHANGE} BRANCH=feat/{CHANGE}`" in result["reason"]
 
 
 def test_a_change_whose_records_are_in_the_workspace_goes_to_the_owner(tmp_path: Path) -> None:

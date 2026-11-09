@@ -1,6 +1,6 @@
 [project]
 name = "arkhai-vms-storefront"
-version = "0.26.0"
+version = "0.28.0"
 license = "MIT"
 description = "Provider-side storefront server: hosts /orders, /negotiate, /settle, /alerts/resource endpoints. The provider-side counterpart to arkhai-vms-buyer."
 authors = [
@@ -8,6 +8,12 @@ authors = [
 ]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "arkhai-compute>=0.2.0",
+    "arkhai-compute-delivery>=0.1.0",
+    "arkhai-kit-arkhai-mediation>=0.2.0",
+    "arkhai-kit-deal-servicing>=0.1.0",
+    "arkhai-kit-deal-lifecycle>=0.2.0",
+    "arkhai-kit-deal-lifecycle-contracts>=0.1.0",
     "arkhai-compute-provisioning-contracts>=0.11.0",
     "arkhai-kit-resource-pools-contracts>=0.2.0",
     "arkhai-core-registry-client>=0.12.1",
@@ -22,23 +28,23 @@ dependencies = [
     "arkhai-kit-alkahest>=0.11.0",
     "arkhai-kit-config>=0.5.0",
     "arkhai-kit-policy>=0.6.0",
-    "arkhai-kit-settlement-runtime>=0.6.0",
+    "arkhai-kit-settlement-runtime>=0.7.0",
     "arkhai-kit-storefront==0.10.0",
     "arkhai-kit-negotiation-runtime==0.7.0",
-    "arkhai-kit-contact-exchange==0.4.0",
+    "arkhai-kit-contact-exchange==0.4.1",
     "arkhai-kit-delivery==0.2.1",
     "arkhai-kit-delivery-apprise==0.1.1",
     "arkhai-kit-site>=0.10.0",
     "arkhai-kit-capability-admissibility>=0.1.0",
     "arkhai-bare-metal>=0.10.0",
-    "arkhai-bare-metal-storefront==0.26.0",
+    "arkhai-bare-metal-storefront==0.28.0",
     "arkhai-vms>=0.8.0",
     "arkhai-vms-listings[pools,overrides]>=0.8.0",
     "arkhai-vms-negotiation>=0.6.0",
     "arkhai-vms-settlement>=0.5.0",
     "arkhai-compute-provisioning-client>=0.6.0",
     "arkhai-kit-fulfillment>=0.6.0",
-    "arkhai-kit-arkhai-payments>=0.5.0",
+    "arkhai-kit-arkhai-payments>=0.6.0",
     "opentelemetry-exporter-gcp-trace>=1.9.0,<2.0.0",
     "google-cloud-logging>=3.12.0,<4.0.0",
     "fastapi~=0.115.8",
@@ -73,6 +79,9 @@ dev = [
     # The production VM buyer and its introduction client, which the
     # introduction integration tests drive over loopback.
     "arkhai-vms-buyer>=0.9.0",
+    # The canonical lifecycle client the lifecycle integration tests read and
+    # commit deals through.
+    "arkhai-kit-deal-lifecycle-client>=0.1.0",
     # Validates documents against the generated Helm values schema.
     "jsonschema>=4.0",
 ]

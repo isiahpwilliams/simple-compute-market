@@ -36,6 +36,7 @@ from tests.e2e.roles.helpers.ssh_access import (
     SshKey,
     SshOutcome,
     classify_ssh,
+    _PCI_PROBE,
     _PROBE,
     CONNECT_TIMEOUT_SECONDS,
     MEMORY_SHORTFALL_TOLERANCE,
@@ -45,6 +46,7 @@ from tests.e2e.roles.helpers.ssh_access import (
     SshEndpoint,
     SshSession,
     memory_within_tolerance,
+    parse_pci_probe,
     parse_probe,
     ssh_session,
 )
@@ -75,6 +77,8 @@ FAKE_SSH = """\
 import json, sys
 from pathlib import Path
 
+TIMED_OUT = 124
+
 here = Path(__file__).parent
 plan = json.loads((here / "plan.json").read_text())
 calls = json.loads((here / "calls.json").read_text())
@@ -88,6 +92,8 @@ if step.get("elapse"):
 if step.get("hang"):
     import time
     time.sleep(step["hang"])
+if step.get("times_out"):
+    sys.exit(TIMED_OUT)
 
 args = sys.argv[1:]
 options = {}
@@ -115,6 +121,9 @@ sys.stdout.write(step.get("stdout", ""))
 sys.stderr.write(step.get("stderr", ""))
 sys.exit(step.get("rc", 0))
 """
+
+
+_TIMED_OUT = 124
 
 
 class Clock:
@@ -163,6 +172,18 @@ def fake_ssh(tmp_path: Path):
         @staticmethod
         def calls() -> list[list[str]]:
             return json.loads((bin_dir / "calls.json").read_text())
+
+        timeouts: list[float] = []
+
+        @staticmethod
+        def run(argv: list[str], **options) -> subprocess.CompletedProcess[str]:
+            """``subprocess.run`` over the fake, where a ``times_out`` step runs out of
+            the attempt's time at once instead of hanging until it does."""
+            result = subprocess.run(argv, **options)
+            if result.returncode == _TIMED_OUT:
+                Fake.timeouts.append(options["timeout"])
+                raise subprocess.TimeoutExpired(argv, options["timeout"])
+            return result
 
     return Fake
 
@@ -280,28 +301,45 @@ def test_the_first_host_key_is_trusted_and_logged(
 
 @pytest.fixture
 def hanging_session(tmp_path: Path, fake_ssh, clock: Clock) -> SshSession:
-    """A session whose attempts run out of time after half a second of real time."""
+    """A session whose attempts run out of time when the fake plans ``times_out``."""
     directory = tmp_path / "hung"
     directory.mkdir(mode=0o700)
     return SshSession(
         directory, ssh=fake_ssh.path, clock=clock, sleep=clock.sleep,
+        connect_retry_seconds=60, run=fake_ssh.run,
+    )
+
+
+def test_an_attempt_that_really_hangs_is_retried_as_a_connection_failure(
+    tmp_path: Path, fake_ssh, clock: Clock
+):
+    """The one test that spends real time: an ``ssh`` still running at the
+    attempt's limit is stopped by the real subprocess timeout and retried."""
+    directory = tmp_path / "really-hung"
+    directory.mkdir(mode=0o700)
+    session = SshSession(
+        directory, ssh=fake_ssh.path, clock=clock, sleep=clock.sleep,
         connect_retry_seconds=60, attempt_seconds=0.5,
     )
+    fake_ssh.plan({"hang": 5}, {"host_key": HOST_KEY, "stdout": "up"})
+    assert session.run(ENDPOINT, session.new_key("buyer"), "true") == "up"
+    assert len(fake_ssh.calls()) == 2
 
 
 def test_an_attempt_that_hangs_is_retried_as_a_connection_failure(
     hanging_session: SshSession, fake_ssh
 ):
-    fake_ssh.plan({"hang": 5}, {"host_key": HOST_KEY, "stdout": "up"})
+    fake_ssh.plan({"times_out": True}, {"host_key": HOST_KEY, "stdout": "up"})
     assert hanging_session.run(ENDPOINT, hanging_session.new_key("buyer"), "true") == "up"
     assert len(fake_ssh.calls()) == 2
+    assert len(fake_ssh.timeouts) == 1
 
 
 def test_an_attempt_that_hangs_is_not_a_refusal_but_is_retried(
     hanging_session: SshSession, fake_ssh, clock: Clock
 ):
     """Something answered and stayed connected: only ``ssh`` failing later refuses."""
-    fake_ssh.plan({"hang": 5}, {"rc": 255, "stderr": "Connection refused"})
+    fake_ssh.plan({"times_out": True}, {"rc": 255, "stderr": "Connection refused"})
     key = hanging_session.new_key("buyer")
     assert hanging_session.assert_refused(ENDPOINT, key) == "Connection refused"
     assert len(fake_ssh.calls()) == 2
@@ -311,7 +349,7 @@ def test_an_attempt_that_hangs_is_not_a_refusal_but_is_retried(
 def test_access_still_hanging_at_the_bound_fails(
     hanging_session: SshSession, fake_ssh
 ):
-    fake_ssh.plan({"hang": 5})
+    fake_ssh.plan({"times_out": True})
     with pytest.raises(SshAccessError, match="not shown to refuse buyer within 10s"):
         hanging_session.assert_refused(ENDPOINT, hanging_session.new_key("buyer"), bound=10)
     assert len(fake_ssh.calls()) == 10 // RETRY_INTERVAL_SECONDS
@@ -320,7 +358,7 @@ def test_access_still_hanging_at_the_bound_fails(
 def test_access_accepted_after_a_hang_fails_as_still_accepted(
     hanging_session: SshSession, fake_ssh
 ):
-    fake_ssh.plan({"hang": 5}, {"host_key": HOST_KEY})
+    fake_ssh.plan({"times_out": True}, {"host_key": HOST_KEY})
     with pytest.raises(SshAccessError, match="still accepted buyer after 10s"):
         hanging_session.assert_refused(ENDPOINT, hanging_session.new_key("buyer"), bound=10)
 
@@ -389,10 +427,12 @@ def test_an_attempt_cut_short_by_the_bound_is_not_a_refusal(
     directory.mkdir(mode=0o700)
     session = SshSession(
         directory, ssh=fake_ssh.path, clock=clock, sleep=clock.sleep, attempt_seconds=5,
+        run=fake_ssh.run,
     )
-    fake_ssh.plan({"host_key": HOST_KEY, "elapse": 24.5}, {"hang": 10})
+    fake_ssh.plan({"host_key": HOST_KEY, "elapse": 24.5}, {"times_out": True})
     with pytest.raises(SshAccessError, match="not shown to refuse buyer within 30s"):
         session.assert_refused(ENDPOINT, session.new_key("buyer"), bound=30)
+    assert fake_ssh.timeouts == [pytest.approx(0.5)]
 
 
 @pytest.mark.parametrize("call", ["run", "assert_key_refused"])
@@ -468,6 +508,85 @@ def test_the_probe_command_parses_as_shell():
     can at least refuse a command that would not parse there."""
     parsed = subprocess.run(["bash", "-n", "-c", _PROBE], capture_output=True, text=True)
     assert parsed.returncode == 0, parsed.stderr
+
+
+# PCI class codes and vendor IDs as sysfs reports them.
+VGA, DISPLAY_3D, AUDIO, ETHERNET = "0x030000", "0x030200", "0x040300", "0x020000"
+NVIDIA, AMD, QEMU_VGA, VIRTIO, ASPEED, INTEL = (
+    "0x10de", "0x1002", "0x1234", "0x1af4", "0x1a03", "0x8086",
+)
+
+
+def _pci_probe_against(tmp_path, devices: dict[str, tuple[str, str]] | None) -> str:
+    """The PCI probe's output against a fixture sysfs tree: ``None`` for a
+    machine whose sysfs lists no PCI bus at all."""
+    root = tmp_path / "sys"
+    if devices is not None:
+        listing = root / "bus/pci/devices"
+        listing.mkdir(parents=True)
+        for address, (pci_class, vendor) in devices.items():
+            (listing / address).mkdir()
+            (listing / address / "class").write_text(pci_class + "\n")
+            (listing / address / "vendor").write_text(vendor + "\n")
+    result = subprocess.run(
+        ["bash", "-c", _PCI_PROBE], capture_output=True, text=True,
+        env={**os.environ, "SYSFS_ROOT": str(root)},
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _gpus(output: str) -> list[str]:
+    return [device.address for device in parse_pci_probe(output) if device.is_gpu]
+
+
+def test_a_passed_through_gpu_is_found(tmp_path):
+    output = _pci_probe_against(tmp_path, {
+        "0000:00:01.0": (VGA, QEMU_VGA),
+        "0000:06:00.0": (VGA, NVIDIA),
+        "0000:06:00.1": (AUDIO, NVIDIA),
+        "0000:07:00.0": (DISPLAY_3D, AMD),
+    })
+    assert _gpus(output) == ["0000:06:00.0", "0000:07:00.0"]
+
+
+def test_an_emulated_display_is_no_gpu(tmp_path):
+    output = _pci_probe_against(tmp_path, {
+        "0000:00:01.0": (VGA, QEMU_VGA),
+        "0000:00:02.0": (VGA, VIRTIO),
+        "0000:00:03.0": (VGA, ASPEED),
+        "0000:00:04.0": (ETHERNET, INTEL),
+    })
+    assert len(parse_pci_probe(output)) == 4
+    assert _gpus(output) == []
+
+
+def test_a_readable_list_with_no_devices_reads_as_no_gpu(tmp_path):
+    assert parse_pci_probe(_pci_probe_against(tmp_path, {})) == ()
+
+
+def test_a_pci_list_that_cannot_be_read_is_no_reading(tmp_path):
+    output = _pci_probe_against(tmp_path, None)
+    assert output.strip() == "pci=unavailable"
+    with pytest.raises(SshAccessError, match="could not be read"):
+        parse_pci_probe(output)
+
+
+@pytest.mark.parametrize(
+    "output",
+    ["", "pci=read\nunreadable=0000:06:00.0\n", "pci=read\ndevice=0000:06:00.0 0x030000\n"],
+    ids=["nothing", "unreadable-device", "device-missing-vendor"],
+)
+def test_an_incomplete_pci_probe_is_refused(output: str):
+    with pytest.raises(SshAccessError):
+        parse_pci_probe(output)
+
+
+def test_the_pci_probe_reads_the_guests_devices(session: SshSession, fake_ssh):
+    fake_ssh.plan({"host_key": HOST_KEY,
+                   "stdout": f"pci=read\ndevice=0000:06:00.0 {VGA} {NVIDIA}\n"})
+    (device,) = session.pci_devices(ENDPOINT, session.new_key("buyer"))
+    assert device.is_gpu
 
 
 def test_memory_is_the_negotiated_amount_less_a_strict_tolerance():
@@ -721,15 +840,9 @@ def test_scenarios_and_other_helpers_do_not_build_their_own_ssh_commands():
     assert not forbidden, f"SSH commands must use helpers/ssh_access.py: {forbidden}"
 
 
-def test_single_access_probe_timeout_is_not_revocation(session, clock, monkeypatch):
-    attempts = []
-
-    def timed_out(argv, **options):
-        attempts.append(argv)
-        raise subprocess.TimeoutExpired(argv, options["timeout"])
-
-    monkeypatch.setattr(subprocess, "run", timed_out)
+def test_single_access_probe_timeout_is_not_revocation(hanging_session, fake_ssh, clock):
+    fake_ssh.plan({"times_out": True})
     with pytest.raises(SshAccessError, match="neither access nor revocation: timed out"):
-        session.access_outcome(ENDPOINT, session.new_key("buyer"))
-    assert len(attempts) == 1
+        hanging_session.access_outcome(ENDPOINT, hanging_session.new_key("buyer"))
+    assert len(fake_ssh.calls()) == 1
     assert clock.sleeps == []

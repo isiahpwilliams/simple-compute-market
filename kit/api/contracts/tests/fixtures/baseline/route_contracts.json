@@ -150,6 +150,18 @@
       ],
       "body_resource": null,
       "exact_retry_safe": true,
+      "method": "POST",
+      "operation": "capacity_activate_lease",
+      "optional_body_resource": false,
+      "path_resource": "reservation_id",
+      "pattern": "/api/v1/capacity/reservations/(?P<reservation_id>[^/]+)/activate-lease"
+    },
+    {
+      "allowed_roles": [
+        "seller"
+      ],
+      "body_resource": null,
+      "exact_retry_safe": true,
       "method": "GET",
       "operation": "capacity_reservations_list",
       "optional_body_resource": false,

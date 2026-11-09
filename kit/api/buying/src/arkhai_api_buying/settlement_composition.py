@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
 import typer
 from core_buyer.buyer_config import ResolvedBuyerIdentity
+from core_buyer.registry_config import resolve_indexer_urls
 from core_buyer.settlement import BuyerSettlementPolicy
 from market_config.config_loader import load_user_config
 from market_core import SettlementStageTable
 from market_core.schemas import Agreement, SettlementSelection
+from market_deal_lifecycle.selection import AuthoritySelection
 from market_settlement_runtime import (
     MechanismReadiness,
     SettlementConfig,
@@ -21,6 +24,7 @@ from market_settlement_runtime import (
 from arkhai_api_buying.common import resolve_fresh_buyer_identity
 from arkhai_api_buying.contributions import BuyingContributions
 from arkhai_api_buying.credentials import CredentialStore, FileCredentialStore
+from arkhai_api_buying.disputes import buyer_dispute_authorities
 from arkhai_api_buying.stages import BuyerStage, BuySession, EscrowCodec, StageOption, StageOptions
 
 
@@ -75,7 +79,7 @@ class BuyerSettlementComposition:
         if accepted.settlement is None:
             raise ValueError("accepted Agreement has no settlement option")
         try:
-            return self.stages[accepted.settlement.mechanism]
+            return self.stages[accepted.settlement.settlement_schema]
         except KeyError as exc:
             raise ValueError(
                 f"unsupported accepted {self.contributions.noun} settlement mechanism"
@@ -133,7 +137,7 @@ class BuyerSettlementComposition:
         stage's; a proposal of neither kind records nothing.
         """
         if isinstance(proposal, SettlementSelection):
-            stage = self.stages[proposal.mechanism] if proposal.mechanism in self.stages else None
+            stage = self.stages.get(proposal.settlement_schema)
         else:
             stage = self._escrow_stage if proposal is not None else None
         return stage.listing_record(match) if stage is not None else {}
@@ -168,8 +172,13 @@ class BuyerSettlementComposition:
         config: Mapping[str, Any] | None = None,
         *,
         identity: ResolvedBuyerIdentity | None = None,
+        registry_urls: str | None = None,
     ) -> BuyerSettlementPolicy:
-        """Resolve the shared hierarchy without constructing unused mechanisms."""
+        """Resolve the shared hierarchy without constructing unused mechanisms.
+
+        Dispute authorities are resolved per registry, from the registries'
+        recommendations only when ``identity`` can read them.
+        """
         document = dict(load_user_config() if config is None else config)
         if "settlement" in document:
             raise ValueError(
@@ -182,11 +191,23 @@ class BuyerSettlementComposition:
         if not isinstance(raw, Mapping):
             raise ValueError("[Settlement] must be a table")
         registry = self.registry()
+        authorities = buyer_dispute_authorities(
+            document, identity,
+            resolve_indexer_urls(override=registry_urls) if identity is not None else (),
+        )
+        contexts = {
+            mechanism: stage.term_context
+            for mechanism, stage in self.stages.items()
+            if stage.term_context is not None
+        }
         return BuyerSettlementPolicy(
             config=registry.resolve(raw, role="buyer"),
             registry=registry,
             stages=self.stages,
-            public_context={},
+            option_preference=AuthoritySelection(
+                authorities, contexts=contexts, report=logging.getLogger(__name__).info,
+            ),
+            public_context={"dispute_authorities_by_registry": authorities},
         )
 
     async def readiness(self) -> tuple[SettlementConfig, tuple[MechanismReadiness, ...]]:

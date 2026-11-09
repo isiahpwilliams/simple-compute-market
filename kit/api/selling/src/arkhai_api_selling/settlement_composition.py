@@ -13,7 +13,9 @@ from typing import Any
 
 from arkhai_api_client import AuthorityClient
 from market_core import MarketDomainContract, SettlementStageTable
+from market_core.schemas import settlement_option_schema
 from market_identity import Identity
+from market_storefront_kit.dispute_configuration import RegistryDisputePolicy
 from market_settlement_runtime import (
     MechanismReadiness,
     SettlementConfigurationRegistry,
@@ -106,9 +108,15 @@ class SellingSettlementComposition:
     private_results: PrivateResultRepository
     failure_policy: Any
     servicing: Mapping[str, Any] = field(default_factory=dict)
+    # The dispute authorities each publication offers; the storefront refreshes
+    # the registries' recommendations at startup.
+    disputes: RegistryDisputePolicy = field(
+        default_factory=lambda: RegistryDisputePolicy.from_document({}), repr=False
+    )
+    dispute_interfaces: frozenset[str] = frozenset()
 
     def accepted_settlement_artifacts(self, agreement: Mapping[str, Any]) -> dict[str, Any]:
-        mechanism = agreement["settlement"]["mechanism"]
+        mechanism = settlement_option_schema(agreement["settlement"])
         return self.stages[mechanism].agreement_artifacts(agreement, self)
 
     async def readiness(
@@ -179,7 +187,11 @@ class SellingSettlementComposition:
         no artifact is returned; the readiness returned beside them says why,
         which the caller judges.
         """
-        merged_resources = {**self.mechanism_resources, **resources}
+        merged_resources = {
+            **self.mechanism_resources, **resources,
+            "dispute_authorities": self.disputes.for_publication(),
+            "dispute_interfaces": self.dispute_interfaces,
+        }
         compiled = (
             [
                 compile_settlement_publication_clause(
@@ -269,7 +281,7 @@ async def prepare_settlement(stages: SettlementStageTable, **context: Any) -> An
         raise ValueError("accepted negotiation is unavailable")
     agreement, _raw = accepted_agreement(thread)
     try:
-        stage = stages[agreement.settlement.mechanism]
+        stage = stages[agreement.settlement.settlement_schema]
     except KeyError as exc:
         raise ValueError("unsupported accepted settlement mechanism") from exc
     return await stage.prepare(**context)
@@ -332,7 +344,7 @@ async def fulfill_settlement(
     db = prepared.fulfillment_input.sqlite_client
     thread = await db.load_negotiation_thread_row(negotiation_id=prepared.agreement_ref)
     agreement, _raw = accepted_agreement(thread)
-    return await stages[agreement.settlement.mechanism].deliver_prepared(
+    return await stages[agreement.settlement.settlement_schema].deliver_prepared(
         prepared, mechanism_client=mechanism_client,
     )
 

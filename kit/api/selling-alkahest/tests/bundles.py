@@ -92,9 +92,11 @@ def accepted_agreement() -> tuple[Agreement, bytes]:
     params = {"accepted_escrow": {"chain_name": "anvil"}}
     option = SettlementOption(
         option_id=derive_settlement_option_id(
-            mechanism=ALKAHEST_MECHANISM_ID, asset="0x" + "01" * 20, rates=[], params=params
+            price={"asset": "0x" + "01" * 20, "rates": []},
+            settlement={"schema": ALKAHEST_MECHANISM_ID, **params},
         ),
-        mechanism=ALKAHEST_MECHANISM_ID, asset="0x" + "01" * 20, rates=[], params=params,
+        price={"asset": "0x" + "01" * 20, "rates": []},
+        settlement={"schema": ALKAHEST_MECHANISM_ID, **params},
     )
     agreement = Agreement(
         negotiation_id=NEGOTIATION, listing_id="L-1", listing_hash="0" * 64,

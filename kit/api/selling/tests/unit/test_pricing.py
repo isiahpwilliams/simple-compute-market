@@ -46,13 +46,11 @@ def _listing(rate="100"):
 def _rated_option(rate=None):
     rates = [RateValue(field="amount", per="credit", value=rate)] if rate else []
     option = {
-        "mechanism": "example.rated.v1",
-        "asset": "usd",
-        "rates": [r.model_dump(mode="json") for r in rates],
-        "params": {},
+        "price": {"asset": "usd", "rates": [r.model_dump(mode="json") for r in rates]},
+        "settlement": {"schema": "example.rated.v1"},
     }
     option["option_id"] = derive_settlement_option_id(
-        mechanism="example.rated.v1", asset="usd", rates=rates, params={}
+        price={"asset": "usd", "rates": rates}, settlement={"schema": "example.rated.v1"},
     )
     return option
 
@@ -60,8 +58,8 @@ def _rated_option(rate=None):
 def _selecting(option):
     return {
         "settlement_selection": {
-            "mechanism": option["mechanism"],
             "option_id": option["option_id"],
+            "settlement": {"schema": option["settlement"]["schema"]},
             "expiration_unix": 2_000_000_000,
         }
     }
@@ -105,8 +103,8 @@ def test_a_proposal_selecting_nothing_is_priced_from_no_entry(proposal):
 def test_a_selection_matching_no_option_is_refused_by_pricing():
     unknown = {
         "settlement_selection": {
-            "mechanism": "example.rated.v1",
             "option_id": "f" * 64,
+            "settlement": {"schema": "example.rated.v1"},
             "expiration_unix": 2_000_000_000,
         }
     }

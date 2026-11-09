@@ -11,6 +11,7 @@ import typer
 from arkhai_api_buying.credentials import error_text
 from arkhai_api_buying.stages import BuyRequest, BuyRun, SettlementResume
 from market_arkhai_payments import ARKHAI_PAYMENTS_MECHANISM, create_arkhai_payments_registration
+from market_deal_lifecycle.terms import TermContext
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -109,6 +110,7 @@ class PaymentBuySession:
             buy_config=run.config,
             settlement_config=self._request.settlement.config,
             payer_account=self._payer_account,
+            dispute_interfaces=self._stage.dispute_interfaces,
             poll_interval=run.poll_interval,
             total_timeout=run.settlement_timeout,
             on_event=on_event,
@@ -117,7 +119,12 @@ class PaymentBuySession:
 
 
 class PaymentBuyerStage:
-    """``payer_section`` is the buyer configuration table holding the payer account; ``load_config`` reads the buyer's configuration."""
+    """``payer_section`` is the buyer configuration table holding the payer account; ``load_config`` reads the buyer's configuration.
+
+    ``dispute_interfaces`` are the dispute authority interfaces the composing
+    plugin can follow a deal's case through; an option adjudicated through
+    another is neither selected nor approved.
+    """
 
     mechanism_id = ARKHAI_PAYMENTS_MECHANISM
     escrow_codec = None
@@ -125,11 +132,17 @@ class PaymentBuyerStage:
     registration = staticmethod(create_arkhai_payments_registration)
 
     def __init__(
-        self, payer_section: str, *, load_config: Callable[[], Mapping[str, Any]] | None = None,
+        self, payer_section: str, *, dispute_interfaces: frozenset[str],
+        load_config: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         if not payer_section.strip():
             raise ValueError("payer_section must be non-empty")
         self.payer_section = payer_section
+        self.dispute_interfaces = frozenset(dispute_interfaces)
+        self.term_context = TermContext(
+            mechanism=ARKHAI_PAYMENTS_MECHANISM, has_adapter=True,
+            dispute_interfaces=self.dispute_interfaces,
+        )
         self._load_config = load_config
 
     def payer_account(self) -> str:
@@ -149,7 +162,9 @@ class PaymentBuyerStage:
 
     def prepare_selection(self, selected: Any, **_unused: Any) -> Any:
         return replace(selected, selection=selected.selection.model_copy(update={
-            "params": {"payer_account": self.payer_account()},
+            "settlement": {
+                **selected.selection.settlement, "payer_account": self.payer_account(),
+            },
         }))
 
     def accepted_entry(self, selected: Any) -> None:
@@ -205,6 +220,7 @@ class PaymentBuyerStage:
                 buy_config=buy_config,
                 settlement_config=resume.settlement_config(),
                 payer_account=self.payer_account(),
+                dispute_interfaces=self.dispute_interfaces,
                 agreement=deal.agreement,
                 agreement_bytes=deal.agreement_bytes,
                 settlement_selection=deal.settlement_selection,

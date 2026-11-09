@@ -1056,9 +1056,12 @@ record is first decoded.
 Host inventory records MUST describe how to reach and dispatch work to a machine —
 addressing, credentials, machine alias, pool membership, and enabled state — and
 MUST NOT be the authoritative source of a Physical Resource's sellable capacity.
-Capacity projection MUST NOT read host inventory records at all, and MUST NOT
-project a host that no capacity declaration names. A host record is joined to a
-capacity declaration only where its connection is used: at dispatch.
+Capacity projection MUST NOT read host inventory records for capacity,
+attributes, or connection identity, and MUST NOT project a host that no capacity
+declaration names. A host record is joined to a capacity declaration only where
+its connection is used: at dispatch. Site admission, settlement scheduling, and
+capacity projection MUST learn of hosts only the identifiers of those taking new
+delivery, as the compute composition reports them.
 
 #### Scenario: Host record carries a legacy capacity column
 
@@ -1071,7 +1074,9 @@ capacity declaration only where its connection is used: at dispatch.
 #### Scenario: Host inventory is inspected for capacity authority
 
 - **WHEN** the projection path is traced from host inventory to published capacity
-- **THEN** no host inventory record contributes to the projection
+- **THEN** no host inventory record contributes capacity or attributes to the
+  projection, and the projection reads of hosts only the identifiers of those
+  taking new delivery
 
 #### Scenario: A host has no capacity declaration
 
@@ -1509,10 +1514,14 @@ Connection secrets MUST be persisted, stored, and passed to executors only in a 
 representation (a scheme and its ciphertext). A secret submitted with a host's
 connection MUST be turned into a protected value by that connection kind's codec before
 it is persisted, and the submitted secret MUST NOT be stored, returned, or logged. The
-host authority MUST treat a protected value as opaque, MUST NOT encrypt or decrypt it, and
-MUST keep it out of every read, logging, and error surface. Only a connection codec MAY
-decrypt a protected value, just in time for execution, and plaintext MUST stay confined
-to the submitting request, the codec, and the transient storage the connection requires.
+host authority MUST treat a protected value as opaque and MUST NOT encrypt or decrypt it.
+It MUST return a protected value only through its internal reads for execution and for an
+executor's readiness, and MUST keep it out of every other read and every API, logging, and
+error surface. Only a connection codec MAY decrypt a protected value: just in time for
+execution, or in memory to check that it decrypts when an executor's readiness is
+reported, the plaintext then discarded at once and never written to storage. Plaintext
+MUST stay confined to the submitting request, the codec, and the transient storage the
+connection requires for execution.
 
 #### Scenario: A host is registered with an embedded key
 
@@ -1525,6 +1534,13 @@ to the submitting request, the codec, and the transient storage the connection r
 - **WHEN** an executor runs a job against that host
 - **THEN** it receives the protected envelope, and only the `ssh` codec decrypts the key,
   into transient storage removed when execution ends
+
+#### Scenario: Readiness checks a host with an embedded key
+
+- **WHEN** system status is read while that host is enabled
+- **THEN** the Ansible readiness component receives the protected envelope through the host
+  authority's internal read, the `ssh` codec decrypts the key in memory only, nothing is
+  written to storage, and the component's detail carries no plaintext or ciphertext
 
 ### Requirement: Provisioning adapters import neither each other nor the deployed service
 
@@ -1835,10 +1851,10 @@ versioned projection.
 
 No caller writes a lease. Commit MUST record a lease's window; provisioning MUST record its
 executor target when the reservation's fulfillment becomes active, in the transaction that
-makes it active, as the target that fulfillment recorded; and the lease lifecycle records
-release. A recorded target MUST NOT be replaced. A target the data prevents recording
-(metadata naming no job-backed target, or a reservation the site refuses) MUST NOT fail
-the activation; any other failure to record it MUST leave the fulfillment unactivated, for
+makes it active, as the target that fulfillment recorded; the site's capacity API records
+the lease's activation; and the lease lifecycle records release. A recorded target MUST NOT
+be replaced. A target the data prevents recording (metadata naming no job-backed target, or
+a reservation the site refuses) MUST NOT fail the fulfillment's activation; any other failure to record it MUST leave the fulfillment unactivated, for
 convergence to retry. Convergence MUST keep recording the target of every active
 job-backed fulfillment whose reservation records none, and MUST report each it cannot
 record and each reservation that records a different target. No route MAY change a lease's executor identity, its start, or its create or
@@ -1883,7 +1899,14 @@ composed executors rather than from deployment profiles, together with each cont
 readiness component's readiness and a versioned detail. A component that is not ready MUST
 degrade the status. The status MUST NOT disclose a database URL or any credential.
 Readiness MUST have no route of its own, and an execution implementation MUST contribute
-its readiness rather than serve it.
+its readiness rather than serve it. Once any Ansible executor is real, the Ansible
+readiness component MUST refuse an enabled host's `ssh` connection exactly as execution
+refuses it, reporting itself not ready with a reason naming the host, and MUST report
+every other host as it would without it; it MUST skip a host of another connection kind.
+The Ansible component's detail MUST be of kind `compute_provisioning.ansible.readiness` at
+schema version 2, the only version it produces: an embedded key's `exists` says whether the
+key decrypts under the configured key, and a host whose stored connection execution refuses
+has no `ssh_keys` entry.
 
 #### Scenario: Every executor is mocked
 
@@ -1896,6 +1919,14 @@ its readiness rather than serve it.
 - **WHEN** the Ansible executor for one offering mode names a playbook that does not exist
 - **THEN** the Ansible component reports that playbook and is not ready, and the status is
   degraded
+
+#### Scenario: An enabled host is stored at an unserved connection version
+
+- **WHEN** system status is read while an enabled host is stored at `ssh` version 1 and an
+  Ansible executor is real, whether its key is a file that exists or a protected key that
+  decrypts
+- **THEN** the Ansible component is not ready, its reasons naming the host and the version
+  served, and every other enabled host is reported as it would be without it
 
 ### Requirement: Host connectivity is probed by connection kind
 
@@ -2431,6 +2462,44 @@ Host preparation MUST default to preparing a host for the image source VM creati
 
 - **WHEN** an operator runs host preparation naming the golden image setup type
 - **THEN** the golden-image steps run as before
+
+### Requirement: Intended lease ends are reported separately from capacity release
+
+Compute provisioning MUST deliver each stored `lease_ended` report to the owning storefront from a durable outbox keyed by event identity, signing the stored payload with the site's service identity. It MUST keep acknowledgements separate from the capacity-released callback and expose the same signed report through the authenticated lease read for recovery. The report MUST state intended end, not prove teardown or free capacity.
+
+#### Scenario: The site crashes after recording an end
+
+- **WHEN** the end transition commits and the process crashes before sending its report
+- **THEN** recovery delivers the stored event with its original identity, instant and cause, rather than rebuilding them from the reservation's later state
+
+#### Scenario: An acknowledgement is lost
+
+- **WHEN** the storefront receives a report but its acknowledgement is lost
+- **THEN** the outbox retries the same event identity and payload until acknowledged
+
+#### Scenario: An older receiver is unsupported
+
+- **WHEN** the owning storefront responds 404 or explicitly unsupported to a report push
+- **THEN** the outbox parks push for that peer and retains the signed event for authenticated pull recovery; transient failures instead retry
+
+#### Scenario: Teardown completes after the report
+
+- **WHEN** the site reports an intended end and physical teardown completes later
+- **THEN** the separate capacity-released callback retains its own acknowledgement and is still the signal of proven capacity return
+
+#### Scenario: The storefront recovers by reading the lease
+
+- **WHEN** a storefront misses a pushed report and reads the lease
+- **THEN** the authenticated response contains the original report's payload and site proof for verbatim retention and return to the buyer
+
+### Requirement: Site end reporting is mechanism neutral
+
+The site MUST report lease ends only to the owning storefront and MUST NOT require a payment transaction ID, payment-mechanism dependency or payee credential to record or deliver them.
+
+#### Scenario: A lease ends under either settlement mechanism
+
+- **WHEN** a VM or bare-metal lease ends regardless of its deal's settlement mechanism
+- **THEN** the same site event and delivery path apply without a call to any payment authority
 
 ### Requirement: A bare-metal reclaim tolerates an account its grant never created
 
@@ -3231,6 +3300,139 @@ The provisioning service MUST NOT read an INI inventory at startup. `inventory_i
 
 - **WHEN** an operator submits an INI inventory to `POST /api/v1/hosts/import`
 - **THEN** the Ansible implementation's route applies it as before, and no startup digest is read or recorded
+
+### Requirement: Disabling a host keeps new deliveries off it
+
+Disabling a registered host MUST keep new deliveries off it: no capacity
+declaration naming it, in a backed pool whose provider needs a host, MAY be
+admitted against, placed on, or projected enabled while it is disabled. Work
+already placed on it MUST be unaffected: an assignment made before the host was
+disabled keeps the host, its create waits at dispatch until the host is enabled
+again, and teardown and operator jobs run against the host. Enabling the host MUST
+lift that restriction: its declarations are then offered as any other declaration
+is, subject to their own `enabled`, their pool, fit, and availability. The host
+authority MUST report the hosts taking new
+delivery, as the identifiers of registered, enabled hosts, to the compute
+composition, which supplies the report to the site authority, for admission and
+its projections, and to settlement scheduling.
+
+#### Scenario: A host is disabled
+
+- **WHEN** an operator disables a host named by an enabled declaration in a backed
+  pool whose provider needs a host
+- **THEN** a new claim is neither admitted against nor placed on that declaration,
+  and the declaration is projected not enabled
+
+#### Scenario: A disabled host already holds an assignment
+
+- **GIVEN** an assignment placed on a host before it was disabled
+- **WHEN** the assignment's create is dispatched while the host is disabled
+- **THEN** the create is refused and retried, and is submitted once the host is
+  enabled again
+
+#### Scenario: A disabled host is enabled again
+
+- **GIVEN** an enabled declaration, in an enabled backed pool whose provider needs
+  a host, naming a disabled host
+- **WHEN** an operator enables the host
+- **THEN** the declaration is again admitted against, placed on, and projected
+  enabled as any other eligible declaration is
+
+#### Scenario: A declaration is itself disabled when its host is enabled again
+
+- **GIVEN** a disabled declaration naming a disabled host
+- **WHEN** an operator enables the host
+- **THEN** the declaration is still neither admitted against, placed on, nor
+  projected enabled
+
+### Requirement: Ansible output is kept only redacted unless an operator configures otherwise
+
+The provisioning service's packaged Ansible configuration MUST NOT name a log file. The output of a playbook run MUST be kept only as the job's logs, redacted, and the output of a connectivity check, including the text of an error running it, MUST be returned only redacted in the check's result: the value of a `password` field, an SSH identity-file argument, and an `sshpass` password are replaced. A probe runs no domain's playbook, and its inventory names a key only by the path of a transient file, so no domain's secret variable reaches its output. An operator whose `ansible_cfg` names a configuration stating a log file receives Ansible's unredacted output there, and the service MUST NOT override that configuration.
+
+#### Scenario: A playbook runs under the packaged configuration
+
+- **WHEN** a real playbook runs and the profile names no `ansible_cfg`
+- **THEN** no Ansible log file is written, and the job's logs hold its redacted output
+
+#### Scenario: A connectivity check's output carries a secret
+
+- **WHEN** the output of a connectivity check contains the value of a `password` field, an SSH identity-file argument, or an `sshpass` password
+- **THEN** the check's result carries that output with the value redacted
+
+#### Scenario: An operator configures a log file
+
+- **WHEN** the profile's `ansible_cfg` names a configuration stating `log_path`
+- **THEN** the service runs Ansible under that configuration unchanged
+
+### Requirement: A protected key that cannot be decrypted is named, not hidden
+
+When an `ssh` connection's protected private key cannot be decrypted with the configured key, because it was protected under another key, its ciphertext is not a token the configured key can read, or no key is configured, the codec MUST raise an error naming the host and how to recover, carrying no ciphertext or key material. The caller MUST give the codec the host's id, so that every caller reports one failure with one message. A job MUST fail with that message and MUST NOT be retried, since a retry meets the same configuration. A connectivity check MUST answer the host unreachable with that message as its detail. Once any Ansible executor is real, the Ansible readiness component MUST report itself not ready, naming the host, MUST report every other host as it would without it, and MUST check a protected key only by decrypting it in memory. A stored protected value with no ciphertext, which no write stores, is not a connection the host authority can read: every read returning that host's connection fails, a listing as a whole, and the Ansible readiness component reports the host registry unreadable and no host.
+
+#### Scenario: A job runs against a host whose key was protected under another key
+
+- **WHEN** a job is dispatched against a host whose protected key does not decrypt under the configured key
+- **THEN** it fails, unretried, with an error naming the host and carrying no ciphertext, and no key file remains
+
+#### Scenario: A connectivity check meets such a host
+
+- **WHEN** an operator checks that host's connectivity
+- **THEN** the result is unreachable, with the same reason as its detail
+
+#### Scenario: System status is read with such a host enabled
+
+- **WHEN** system status is read while that host is enabled and an Ansible executor is real
+- **THEN** the `ansible` component is not ready, its reasons naming the host, and its key is reported as not existing, while every other enabled host's key is reported as it would be without it
+
+### Requirement: Bare-metal delivery enters through the core fulfillment hook
+
+Bare-metal payment settlement and the Alkahest ready continuation MUST start delivery by calling core's `fulfill_domain` with a `StorefrontFulfillmentContext`, never by calling the bare-metal fulfillment service directly. The registered bare-metal hook MUST build its service and the compute delivery path from the clients in the context's `ports` and the storefront's lifecycle in its `domain_input`, so every bare-metal delivery passes end-service admission and core's check that the result keeps the deal's negotiation, settlement reference and site.
+
+#### Scenario: A bare-metal payment deal settles
+
+- **WHEN** a bare-metal buyer's payment receipt verifies
+- **THEN** settlement calls `fulfill_domain`, the hook runs the delivery path with admission, and core validates the returned identities
+
+#### Scenario: The hook is called without the storefront's lifecycle
+
+- **WHEN** the bare-metal hook is invoked with no lifecycle in `domain_input`
+- **THEN** it refuses before any capacity or fulfillment call
+
+### Requirement: A VM host's diagnostics are read through an operator job
+
+The VM operator surface MUST offer a host diagnostics action that runs as a job on a
+registered host, like the VM list, and reports its boot identity, uptime, kernel, the
+count of running guests, and for `libvirtd.service`, `frpc-buyers.service` and an
+optional caller-named management unit, the unit's active state, invocation ID, main PID,
+restart count, active-enter time and result. A caller-named unit MUST be a systemd
+service unit name, matching systemd's unit-name syntax with the `.service` type, or be
+refused before any job is queued, since only a service has a main PID and a restart
+count. The operator client MUST submit the action as it submits every operator action,
+returning the job's submission, and MUST offer a typed parse of a succeeded job's result
+that refuses a malformed fact, naming the field; the client MUST NOT wait on the job. In
+the mock profile the action MUST answer with default output rendered from the job's
+parameters.
+
+#### Scenario: Diagnostics are read from a real host
+
+- **WHEN** an operator requests host diagnostics naming a management unit
+- **THEN** a job runs on that host and its typed result reports each unit's invocation
+  ID and restart count
+
+#### Scenario: An invalid unit name is named
+
+- **WHEN** the request names a management unit that is not a systemd service unit name
+- **THEN** it is refused and no job is queued
+
+#### Scenario: A diagnostics job reports a malformed fact
+
+- **WHEN** a succeeded diagnostics job's result lacks a reported field or carries one
+  of the wrong type
+- **THEN** the typed parse refuses it naming the field, and returns no partial result
+
+#### Scenario: A mock-profile host is diagnosed
+
+- **WHEN** the provisioning service runs its mock profile
+- **THEN** the diagnostics job succeeds with default output the typed result parses
 
 ## Evidence
 

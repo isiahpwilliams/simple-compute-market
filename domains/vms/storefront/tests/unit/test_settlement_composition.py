@@ -39,7 +39,7 @@ from market_storefront.settlement_composition import (
 from market_storefront.settlement_stages import vm_seller_stages
 from market_storefront.utils.sqlite_client import SQLiteClient
 from tests._settings_overrides import replaced_setting
-from tests.fulfillment_fixtures import vm_delivery_evidence
+from tests.fulfillment_fixtures import vm_delivery_evidence, seed_delivery_admission
 
 _BUYER_SIGNER = Ed25519Signer(b"\x31" * 32)
 _SELLER_SIGNER = Ed25519Signer(b"\x32" * 32)
@@ -146,10 +146,8 @@ async def _persist_accepted_negotiation(
         }
     }
     option_body = {
-        "mechanism": "alkahest.v1",
-        "asset": "0x" + "22" * 20,
-        "rates": [],
-        "params": params,
+        "price": {"asset": "0x" + "22" * 20, "rates": []},
+        "settlement": {"schema": "alkahest.v1", **(params or {})},
     }
     option = SettlementOption(
         option_id=derive_settlement_option_id(**option_body), **option_body
@@ -162,7 +160,7 @@ async def _persist_accepted_negotiation(
         seller=_SELLER.model_dump(mode="json"),
         settlement=option,
         amount=42,
-        asset=option.asset,
+        asset=option.price_asset,
         duration_seconds=3600,
         start_utc="2026-01-01T00:00:00Z",
         accepted_at="2026-01-01T00:00:00Z",
@@ -195,6 +193,7 @@ async def _persist_accepted_negotiation(
 
 
 def _prepared(db: SQLiteClient, *, escrow_uid: str = "0xescrow") -> PreparedSettlement:
+    seed_delivery_admission(db, commitment_ref=escrow_uid)
     obligation = _obligation()
     obligation_ref = derive_obligation_ref("neg-1", 0, obligation)
     return PreparedSettlement(
@@ -516,15 +515,7 @@ async def test_fulfillment_keeps_private_delivery_out_of_public_runtime_result(
     await reserve_vm_settlement_start(prepared, "0xescrow", "neg-1")
     await db.update_vm_delivery(negotiation_id="neg-1", fulfillment_uid="0xfulfillment")
 
-    outcome = await fulfill_vm_settlement(
-        domain,
-        prepared,
-        # Peer evidence publication resolves the chain client from the
-        # mechanism adapter, so a bare object() is nothing the production
-        # path can use.
-        mechanism_client=SimpleNamespace(chain_client=lambda chain: object()),
-        sqlite_client=db,
-    )
+    outcome = await fulfill_vm_settlement(domain, prepared, sqlite_client=db)
 
     assert outcome.status == "fulfilled"
     assert outcome.fulfillment_ref == "0xfulfillment"
@@ -560,11 +551,8 @@ def test_composition_rejects_repository_domain_mismatch_before_registration(
 
 
 @pytest.mark.asyncio
-async def test_a_release_model_the_domain_cannot_deliver_composes_and_is_unready(tmp_path):
-    """The composition hands Alkahest readiness the models its domain's entry
-    declares, so a coherent model outside them is a configuration blocker
-    rather than a startup refusal. VM's own entry delivers every model, so a
-    contract declaring fewer stands in for a domain that delivers fewer."""
+async def test_a_release_model_the_domain_cannot_deliver_refuses_composition(tmp_path):
+    """A domain cannot start while offering a model its stage cannot deliver."""
     base = build_vm_storefront_domain()
     stages = base.settlement.seller_stages
     restricted = SettlementStageTable(
@@ -583,30 +571,26 @@ async def test_a_release_model_the_domain_cannot_deliver_composes_and_is_unready
         "priority": ["alkahest.v1"],
         "alkahest": {
             "enabled": True,
-            "interruptible": True,
+            "release_models": ["interruptible"],
             # A development address; never used on a public network.
             "interruptible_oracle_addresses": ["0x" + "cd" * 20],
         },
     }
 
-    with replaced_setting("settlement", settlement):
-        composition = build_vm_settlement_composition(
+    with (
+        replaced_setting("settlement", settlement),
+        pytest.raises(ValueError, match="cannot deliver"),
+    ):
+        build_vm_settlement_composition(
             domain=db.domain_registry.resolve_mode("vm").contract,
             sqlite_client=db,
             alkahest_clients={},
             marketplace_signer=_SELLER_SIGNER,
         )
-        readiness = await composition.readiness()
-
-    (alkahest,) = [status for status in readiness if status.mechanism == "alkahest.v1"]
-    assert alkahest.ready is False
-    assert ("alkahest.release_model_undeliverable", "configuration") in {
-        (blocker.code, blocker.kind) for blocker in alkahest.blockers
-    }
 
 
 @pytest.mark.asyncio
-async def test_persist_outcome_preserves_legacy_ready_projection(db):
+async def test_persist_outcome_records_the_ready_projection_and_no_credential(db):
     prepared = _prepared(db)
     await reserve_vm_settlement_start(prepared, "0xescrow", "neg-1")
     from market_settlement_runtime import FulfillmentOutcome
@@ -627,7 +611,8 @@ async def test_persist_outcome_preserves_legacy_ready_projection(db):
     assert row["status"] == "ready"
     assert row["fulfillment_uid"] == "0xfulfillment"
     assert row["connection_details"] == "ssh tenant@host"
-    assert json.loads(row["tenant_credentials"]) == {"password": "secret"}
+    assert row["tenant_credentials"] is None
+    assert (await db.load_vm_delivery(negotiation_id="neg-1"))["tenant_credentials"] is None
 
 
 @pytest.mark.asyncio
@@ -662,12 +647,7 @@ async def test_a_deferred_fulfillment_leaves_the_escrow_open_for_the_resume_pass
     await reserve_vm_settlement_start(prepared, "0xescrow", "neg-1")
     status_before = (await db.load_escrow(escrow_uid="0xescrow"))["status"]
 
-    outcome = await fulfill_vm_settlement(
-        domain,
-        prepared,
-        mechanism_client=SimpleNamespace(chain_client=lambda chain: object()),
-        sqlite_client=db,
-    )
+    outcome = await fulfill_vm_settlement(domain, prepared, sqlite_client=db)
     await persist_vm_settlement_outcome(prepared, outcome)
 
     assert outcome.status == "deferred"
@@ -675,6 +655,42 @@ async def test_a_deferred_fulfillment_leaves_the_escrow_open_for_the_resume_pass
     row = await db.load_escrow(escrow_uid="0xescrow")
     assert row["status"] == status_before
     assert row["status"] not in {"ready", "failed", "refunded"}
+
+
+@pytest.mark.asyncio
+async def test_an_available_deal_whose_claim_is_pending_is_deferred_not_fulfilled(tmp_path):
+    """A VM made available whose Alkahest continuation has not completed has a
+    running VM and no claim yet: the settlement is deferred to the resume
+    pass, and neither the escrow nor the delivery is terminal."""
+    available = {
+        "negotiation_id": "neg-1",
+        "settlement_ref": "0xescrow",
+        "site_id": "site-1",
+        "state": "fulfilled",
+        "domain_result": {"outcome": "available", "message": "available", "fulfillment_uid": None},
+    }
+    domain = build_vm_storefront_domain()
+    domain = replace(
+        domain,
+        fulfillment=replace(domain.fulfillment, fulfill=AsyncMock(return_value=available)),
+    )
+    db = SQLiteClient(
+        db_path=str(tmp_path / "available-fulfillment.db"),
+        registry=build_vm_storefront_registry(domain),
+    )
+    await _persist_accepted_negotiation(
+        db, negotiation_id="neg-1", listing_id="listing-1", proposal=None
+    )
+    prepared = _prepared(db)
+    await reserve_vm_settlement_start(prepared, "0xescrow", "neg-1")
+    status_before = (await db.load_escrow(escrow_uid="0xescrow"))["status"]
+
+    outcome = await fulfill_vm_settlement(domain, prepared, sqlite_client=db)
+    await persist_vm_settlement_outcome(prepared, outcome)
+
+    assert outcome.status == "deferred"
+    assert (await db.load_escrow(escrow_uid="0xescrow"))["status"] == status_before
+    assert (await db.load_vm_delivery(negotiation_id="neg-1"))["status"] == "provisioning"
 
 
 def test_serialize_keeps_physical_and_onchain_fulfillment_ids_distinct():
@@ -694,7 +710,8 @@ def test_serialize_keeps_physical_and_onchain_fulfillment_ids_distinct():
 
     assert serialized["fulfillment_id"] == "physical-123"
     assert serialized["fulfillment_uid"] == "0xonchain"
-    assert serialized["tenant_credentials"] == {"password": "secret"}
+    # A stored credential is never projected; the settle routes read it live.
+    assert "tenant_credentials" not in serialized
     assert "obligation_ref" not in serialized
 
 

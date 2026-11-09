@@ -1968,42 +1968,7 @@
         "type": "object"
       },
       "SettlementOption": {
-        "additionalProperties": false,
-        "description": "One immutable, mechanism-tagged settlement choice on a listing.",
-        "properties": {
-          "asset": {
-            "minLength": 1,
-            "title": "Asset",
-            "type": "string"
-          },
-          "mechanism": {
-            "minLength": 1,
-            "title": "Mechanism",
-            "type": "string"
-          },
-          "option_id": {
-            "title": "Option Id",
-            "type": "string"
-          },
-          "params": {
-            "additionalProperties": true,
-            "title": "Params",
-            "type": "object"
-          },
-          "rates": {
-            "items": {
-              "$ref": "#/components/schemas/RateValue"
-            },
-            "title": "Rates",
-            "type": "array"
-          }
-        },
-        "required": [
-          "option_id",
-          "mechanism",
-          "asset"
-        ],
-        "title": "SettlementOption",
+        "additionalProperties": true,
         "type": "object"
       },
       "SettlementPlan": {
@@ -2076,31 +2041,19 @@
             ],
             "title": "Expiration Unix"
           },
-          "mechanism": {
-            "minLength": 1,
-            "title": "Mechanism",
-            "type": "string"
-          },
           "option_id": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Option Id",
             "type": "string"
           },
-          "params": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Params"
+          "settlement": {
+            "additionalProperties": true,
+            "title": "Settlement",
+            "type": "object"
           }
         },
         "required": [
-          "mechanism",
+          "settlement",
           "option_id"
         ],
         "title": "SettlementSelection",

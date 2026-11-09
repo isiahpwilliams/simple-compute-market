@@ -21,7 +21,6 @@ def test_payments_only_registry_resolution_does_not_resolve_wallet(monkeypatch) 
         "service_url": "https://payments.example",
         "service_identity": Ed25519Signer(bytes(range(32))).identity.model_dump(mode="json"),
         "fee_bps": 250,
-        "dispute_authority": "33333333-3333-4333-8333-333333333333",
         "api_key_env": "ARKHAI_PAYMENTS_API_KEY",
     }
 
@@ -59,7 +58,8 @@ def test_an_escrow_proposal_records_its_listings_release_conditions() -> None:
 
 def test_a_payment_selection_records_nothing_about_its_listing() -> None:
     selection = SettlementSelection(
-        mechanism=ARKHAI_PAYMENTS_MECHANISM, option_id="a" * 64,
+        option_id="a" * 64,
+        settlement={"schema": ARKHAI_PAYMENTS_MECHANISM},
         expiration_unix=1_800_000_000,
     )
 

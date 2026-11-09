@@ -125,7 +125,7 @@ def refuse_mixed_explicit_units(
         None,
     )
     mechanisms = {
-        proposal.mechanism if isinstance(proposal, SettlementSelection) else escrow
+        proposal.settlement_schema if isinstance(proposal, SettlementSelection) else escrow
         for proposal in (match["_selected_buyer_proposal"] for match in matches)
     }
     if len(mechanisms) > 1:
@@ -262,7 +262,9 @@ def register(
         )
         signer = identity.signer
         principal = identity.principal
-        buyer_settlement = settlement.resolve_policy(identity=identity)
+        buyer_settlement = settlement.resolve_policy(
+            identity=identity, registry_urls=registry_urls,
+        )
         config_keys = {
             registration.mechanism_id: registration.config_key
             for registration in buyer_settlement.registry.registrations

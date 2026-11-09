@@ -1,6 +1,6 @@
 ---
 name: change-review
-description: Review an OpenSpec change as an independent reviewer — a design, implementation, pre-closeout, or closeout review — and produce one Markdown review whose findings each carry a lens, a basis, a severity, and evidence. Use when asked to review a change ("review <change>", "design review of <change>"), or when `make review` invokes you. Review only; never edit files.
+description: Review an OpenSpec change as an independent reviewer — a design, implementation, pre-closeout, or closeout review — and produce one Markdown review whose findings each carry a lens, a basis, a severity, evidence, and its alternatives. Use when asked to review a change ("review <change>", "design review of <change>"), or when `make review` invokes you. Review only; never edit files.
 ---
 
 # Reviewing an OpenSpec change
@@ -26,7 +26,7 @@ in Codex's read-only sandbox, or, when Codex is unavailable, on Claude, whose ru
 let it read the repository and its history and edit nothing. Nothing in this
 skill changes for either: your final message is the review, and nothing else —
 on Claude too, where no outcome schema is given. It carries no structured
-outcome; `scripts/run_change_step.py` checks it, publishes it, and logs an outcome
+outcome; `scripts/change-workflow review` checks it, publishes it, and logs an outcome
 from the record it publishes, naming as its exit a review's one successor, the
 triage of its kind (`{"step": "triage", "kind": "<kind>"}`), or a stopped one when
 your message is not a review.
@@ -49,13 +49,13 @@ change's next `NN-<kind>-external.md` and triages it like any other review.
 
 Read all of this before forming a view:
 
-- `AGENTS.md` and every document it requires: `docs/development/ARCHITECTURE.md`,
-  `docs/development/TESTING.md`, `docs/development/DEPLOYMENT_AND_CONFIG.md`, and
-  `openspec/README.md`.
-- `docs/development/ROADMAP.md`, the goal the change serves, and the change's row,
-  campaign, and dependencies in `openspec/changes/README.md`.
+- The documents `scripts/change-workflow config load review` prints: the
+  repository's guidance, which its configuration names.
+- The goal the change serves, in the roadmap `openspec/README.md`'s documentation
+  placement names, and the change's row, campaign, and dependencies in
+  `openspec/changes/README.md`.
 - Every file in the change's directory, including `specs/` and
-  `interventions.jsonl`. The directory is what `python3 scripts/find_change.py
+  `interventions.jsonl`. The directory is what `scripts/change-workflow find
   <change>` prints: `openspec/changes/<change>/`, or for a closeout review, which
   follows the archive, the change's dated directory under
   `openspec/changes/archive/`.
@@ -66,11 +66,12 @@ Read all of this before forming a view:
   would carry an earlier reviewer's reasoning into yours.
 - Another change's records, where a claim rests on them — a dependency's findings,
   an earlier change's validation. They are untracked, so they are where that change
-  was worked: `python3 scripts/find_change.py --records <change>` prints where, this
+  was worked: `scripts/change-workflow find --records <change>` prints where, this
   checkout's or, from a change's clone, the owner's workspace's, which holds the
   history of every cleaned-up change.
 - For every capability the change names or touches: `openspec/specs/<capability>/spec.md`
-  and its `architecture.md` companion when one exists.
+  and its companion when one exists — `README.md` where the capability has an
+  `index.md`, which you read too, and `architecture.md` elsewhere.
 - The code the change cites, and the code it changes or would change. Read enough
   to verify every factual claim it makes.
 - For `implementation`, `pre-closeout`, and `closeout`: the change's diff,
@@ -79,9 +80,13 @@ Read all of this before forming a view:
   for one: validation runs beside an implementation review, and its results are
   triaged with yours. A pre-closeout review starts only once a passing validation
   of `HEAD` exists — or of an ancestor `HEAD` differs from only in changes' ledgers
-  and reviews, or, after an earlier pre-closeout review's triage, only in paths
-  under `openspec/` and `docs/` — unless the owner overrides it; when none exists, say so in
-  your readiness section rather than as a finding.
+  and reviews, or, after an earlier pre-closeout review's triage, only in the
+  repository's inert paths — unless the owner overrides it; when none exists, say so in
+  your readiness section rather than as a finding. The repository's checks before a
+  commit change nothing, so you may run them for evidence:
+  `scripts/change-workflow run pre-commit <change>`, which on the clean checkout
+  you read runs `pre-commit` alone — the workflow's default checks and the
+  repository's closing checks.
 
 Check claims against the files, never against the prose describing them. A checked
 task, a "promoted to" note, or a "verified" line is a claim; open the file and
@@ -146,9 +151,12 @@ checks your understanding here before reading anything that rests on it. Then:
    Does any open question have its
    answer prescribed elsewhere (`openspec/README.md#open-questions-and-prescribed-tasks`)?
    Does every cited path resolve?
-5. **`scope`** — Has the scope grown beyond the original proposal, and should any of
-   it be its own change? Does anything give the change a prerequisite it could close
-   out without?
+5. **`scope`** — Has the scope grown beyond the original proposal? Growth that is a
+   small, understood defect fix, or unification the architecture favours, stays;
+   work that is large, or not understood well enough to fix without a design of its
+   own, should be its own change
+   (`openspec/README.md#defects-found-during-a-change`). Does anything give the
+   change a prerequisite it could close out without?
 6. **`readiness`** — Are there related changes that must land first? Is the design
    ready for planning? If the change already has a `tasks.md`, does it describe the
    design as now settled, or an earlier one?
@@ -176,7 +184,10 @@ checks your understanding here before reading anything that rests on it. Then:
    universal market behavior in core, reusable inter-market functionality in kit, and
    does the domain compose that functionality rather than encode it?
 5. **`consistency`** — Does the implementation do what the design and delta specs
-   say, and only that?
+   say, and only that, beyond a small, understood defect fixed outside the plan and
+   recorded in the task notes or a triage record
+   (`openspec/README.md#defects-found-during-a-change`)? An unrecorded one is a
+   finding.
 
 ### Pre-closeout review
 
@@ -184,8 +195,11 @@ checks your understanding here before reading anything that rests on it. Then:
    disposition of it in the triage file: was it materially addressed? Answer for each
    one by its review and number. An accepted finding left unaddressed is a finding.
 2. **`scope`** — What scope crept in during implementation? Review anything new under
-   the implementation review's questions. Changes are rarely split at this stage, so
-   say what the new scope needs rather than only that it exists.
+   the implementation review's questions. A small, understood defect fixed in place
+   belongs in the change; large or vague work belongs in its own change or an
+   unowned gap (`openspec/README.md#defects-found-during-a-change`). Changes are
+   rarely split at this stage, so say what the new scope needs rather than only that
+   it exists.
 3. **`documentation`** — Are the change's comments and imports as closeout will
    confirm them? Closeout edits no code, so this is the last review that can ask
    for a code change. Read the comments the change added for any naming the review,
@@ -242,6 +256,16 @@ and why it holds. The reader must be able to tell "no issue" from "not examined"
 - `should` — resolved within this change unless the owner defers it.
 - `minor` — optional; the implementing agent may decline with a reason.
 
+**Alternatives** — the fixes a reasonable owner might choose, each with its
+trade-off; or `none — <why the fix is evident>`, when only one fix is reasonable,
+such as a citation to a heading that has one current name. Every finding states
+the field: "none" is a statement, and a finding without the field is not
+published, since an absent line cannot tell "none" from "not considered". A
+direction finding lists here the alternatives its prose weighs. Like every field,
+its value is the rest of its own line: separate several alternatives inline, each
+after `; or`, never as a nested list, which the publishing check reads as an empty
+field.
+
 A finding that is a written rule broken but never mechanically checked is worth
 saying so in its text: it tells the owner a check is missing.
 
@@ -289,9 +313,10 @@ semantics walk for each interface.>
 - **Basis:** <specification | guidance | evidence | judgement>
 - **Severity:** <blocking | should | minor>
 - **Evidence:** <`path:line` references and requirement or heading citations>
+- **Alternatives:** <each fix a reasonable owner might choose, with its trade-off; or none — why the fix is evident>
 
 <The finding: what is wrong or missing and why it matters. For a direction finding,
-the context, alternatives, and trade-offs.>
+the context, alternatives, and trade-offs, its alternatives also listed above.>
 
 **Suggested action:** <what you would do>
 

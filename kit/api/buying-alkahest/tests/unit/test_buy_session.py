@@ -184,6 +184,6 @@ def test_an_unavailable_session_leaves_prices_and_refuses_to_settle():
 
 def test_a_negotiation_records_the_selected_chain():
     stage = AlkahestBuyerStage()
-    selected = SimpleNamespace(option=SimpleNamespace(params={"accepted_escrow": {"chain_name": "anvil"}}))
+    selected = SimpleNamespace(option=SimpleNamespace(settlement_params={"accepted_escrow": {"chain_name": "anvil"}}))
     assert stage.negotiation_run_fields({}, selected) == {"chain_name": "anvil"}
     assert stage.negotiation_run_fields({}, None) == {"chain_name": None}

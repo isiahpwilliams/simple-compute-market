@@ -40,7 +40,8 @@ def _composition(clients=None):
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_a_configured_section_naming_contradictory_release_models_is_refused(enabled):
+def test_a_section_offering_a_release_model_the_stage_cannot_deliver_is_refused(enabled):
+    """Enabled or not, since the section still services the deals accepted under it."""
     stage = _stage()
     registry = build_settlement_registry(SettlementStageTable({ALKAHEST_MECHANISM_ID: stage}))
     config = registry.resolve(
@@ -49,24 +50,22 @@ def test_a_configured_section_naming_contradictory_release_models_is_refused(ena
             "priority": [ALKAHEST_MECHANISM_ID] if enabled else [],
             "alkahest": {
                 "enabled": enabled,
-                "interruptible": True,
-                "oracle_gated": True,
-                "trusted_oracle_addresses": ["0x" + "cd" * 20],
+                "release_models": ["interruptible"],
+                "interruptible_oracle_addresses": ["0x" + "cd" * 20],
             },
         },
         role="seller",
     )
 
-    with pytest.raises(ReleaseModelError, match="mutually exclusive"):
+    with pytest.raises(ReleaseModelError, match="cannot deliver"):
         stage.validate_configuration(config)
 
 
-def test_an_undeliverable_release_model_is_left_to_readiness():
-    """A coherent model the stage cannot deliver starts; readiness reports it."""
+def test_a_deliverable_release_model_is_accepted():
     stage = _stage()
     registry = build_settlement_registry(SettlementStageTable({ALKAHEST_MECHANISM_ID: stage}))
     config = registry.resolve(
-        {"schema_version": 1, "priority": [], "alkahest": {"enabled": False, "interruptible": True}},
+        {"schema_version": 1, "priority": [], "alkahest": {"enabled": False, "release_models": ["recipient"]}},
         role="seller",
     )
 

@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import Column, MetaData, String, Table, create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool, StaticPool
 from market_resource_pools.db import (
@@ -93,6 +93,48 @@ def seeded(ledger: CapacityLedgerService) -> CapacityLedgerService:
         pool_id="default",
     )
     return ledger
+
+
+@pytest.mark.parametrize("transition", ["release", "begin_releasing", "release_failure", "force_release"])
+def test_lease_end_and_borrowed_outbox_are_atomic_and_deduplicated(transition):
+    outbox = Table("fixture_end_outbox", MetaData(), Column("event_id", String, primary_key=True))
+    fail = [True]
+
+    def reserve_report(db, payload):
+        db.execute(outbox.insert().values(event_id=payload["event_id"]))
+        if fail[0]:
+            raise RuntimeError("report reservation failed")
+
+    ledger = _make_ledger(site_id="fixture-site", lease_end_effect=reserve_report)
+    with ledger._session_factory() as db, db.begin():
+        outbox.create(db.connection())
+        db.add(CapacityReservation(
+            capacity_reservation_id="fixture-end", state="leased", offering_mode="vm",
+        ))
+
+    def end():
+        if transition == "release":
+            return ledger.release(capacity_reservation_id="fixture-end")
+        if transition == "force_release":
+            return ledger.release(capacity_reservation_id="fixture-end", forced=True)
+        if transition == "release_failure":
+            return ledger.record_release_failed("fixture-end", reason="fixture failure")
+        return ledger.begin_releasing("fixture-end", release_job_id="fixture-release")
+
+    with pytest.raises(RuntimeError, match="report reservation failed"):
+        end()
+    assert ledger.get_reservation("fixture-end")["state"] == "leased"
+    assert ledger.lease_end_events("fixture-end") == []
+    with ledger._session_factory() as db:
+        assert db.execute(select(outbox)).all() == []
+    fail[0] = False
+    assert end() is not None
+    original = ledger.lease_end_events("fixture-end")
+    assert len(original) == 1
+    end()
+    assert ledger.lease_end_events("fixture-end") == original
+    with ledger._session_factory() as db:
+        assert db.execute(select(outbox.c.event_id)).scalars().all() == [original[0]["event_id"]]
 
 
 def test_snapshot_reports_availability(seeded: CapacityLedgerService):
@@ -434,8 +476,7 @@ def test_reserve_is_idempotent_by_escrow_uid(seeded: CapacityLedgerService):
 
 def test_reserve_idempotent_hit_includes_resource_id(seeded: CapacityLedgerService):
     """The idempotent-hit payload must be byte-compatible with a fresh
-    reservation's payload for callers that read resource_id directly
-    (e.g. vm_fulfillment_service.py)."""
+    reservation's payload for callers that read resource_id directly."""
     first = seeded.reserve(claim={"offering_mode": "vm", **{"gpu_count": 1}}, deal_ref={"escrow_uid": "0xres"})
     second = seeded.reserve(claim={"offering_mode": "vm", **{"gpu_count": 1}}, deal_ref={"escrow_uid": "0xres"})
     assert second["resource_id"] == first["resource_id"] == "compute-kvm1-001"
@@ -486,6 +527,222 @@ def test_reserve_after_hold_expiry_reserves_fresh_for_the_same_escrow_uid(
     second = seeded.reserve(claim={"offering_mode": "vm", **{"gpu_count": 1}}, deal_ref={"escrow_uid": "0xexpired"})
     assert second is not None
     assert second["capacity_reservation_id"] != first["capacity_reservation_id"]
+
+
+_SETTLEMENT_KEY = "neg-4c1e:settlement"
+_HOLD_KEY = "neg-4c1e:hold"
+_WINDOW = {
+    "lease_start_utc": "2030-01-01T00:00:00Z",
+    "lease_duration_seconds": 3600,
+}
+
+
+def _keyed_reserve(
+    ledger: CapacityLedgerService,
+    key: str,
+    *,
+    claim: dict | None = None,
+    **kwargs,
+) -> dict | None:
+    window = {**_WINDOW, **kwargs}
+    return ledger.reserve(
+        claim=claim or {"offering_mode": "vm", "gpu_count": 2},
+        deal_ref={"listing_id": "lst-1", "placement_key": key},
+        **window,
+    )
+
+
+def _reservation_count(ledger: CapacityLedgerService) -> int:
+    with ledger._session_factory() as db:
+        return db.query(CapacityReservation).count()
+
+
+def test_a_lost_reserve_acknowledgement_is_replayed_under_its_placement_key(
+    seeded: CapacityLedgerService,
+):
+    """A storefront repeating a reserve whose answer it never received gets
+    the reservation the first call created, and the site admits nothing."""
+    first = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+    _, version = seeded.events_after(0)
+
+    replay = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+
+    assert replay["capacity_reservation_id"] == first["capacity_reservation_id"]
+    assert replay["state"] == "reserved"
+    assert replay["resource_id"] == first["resource_id"]
+    assert replay["deal_ref"]["placement_key"] == _SETTLEMENT_KEY
+    assert _reservation_count(seeded) == 1
+    assert seeded.events_after(0)[1] == version
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"lease_start_utc": "2030-01-01T00:30:00Z"},
+        {"lease_duration_seconds": 7200},
+        {"claim": {"offering_mode": "vm", "gpu_count": 3}},
+        {"claim": {"offering_mode": "vm", "gpu_count": 2, "pool_id": "default"}},
+        {"claim": {"offering_mode": "bare_metal", "gpu_count": 2}},
+    ],
+    ids=["start", "duration", "dimensions", "pool", "offering_mode"],
+)
+def test_a_replay_that_changes_the_request_is_refused_with_nothing_written(
+    seeded: CapacityLedgerService, change: dict
+):
+    first = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+    _, version = seeded.events_after(0)
+    available = seeded.snapshot()[0]["available"]
+
+    with pytest.raises(CapacityConflictError):
+        _keyed_reserve(seeded, _SETTLEMENT_KEY, **change)
+
+    assert _reservation_count(seeded) == 1
+    assert seeded.events_after(0)[1] == version
+    assert seeded.snapshot()[0]["available"] == available
+    recorded = seeded.get_reservation(first["capacity_reservation_id"])
+    assert recorded["state"] == "reserved"
+    assert recorded["lease_start_utc"] == "2030-01-01T00:00:00+00:00"
+
+
+def test_a_lapsed_hold_is_replaced_by_another_placement_and_still_answers_its_key(
+    seeded: CapacityLedgerService,
+):
+    """An expired ``:hold`` placement does not stand in for the deal's
+    ``:settlement`` placement, which is admitted fresh; a replay under the
+    hold's key still returns the expired hold rather than a new one."""
+    hold = _keyed_reserve(seeded, _HOLD_KEY, ttl_seconds=60)
+    with seeded._session_factory() as db:
+        row = db.get(CapacityReservation, hold["capacity_reservation_id"])
+        row.hold_expires_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat()
+        db.commit()
+
+    settlement = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+    hold_replay = _keyed_reserve(seeded, _HOLD_KEY, ttl_seconds=60)
+
+    assert settlement["capacity_reservation_id"] != hold["capacity_reservation_id"]
+    assert seeded.get_reservation(settlement["capacity_reservation_id"])["state"] == "reserved"
+    assert hold_replay["capacity_reservation_id"] == hold["capacity_reservation_id"]
+    assert hold_replay["state"] == "released"
+    assert hold_replay["failure_reason"] == "hold_expired"
+    assert _reservation_count(seeded) == 2
+
+
+def test_a_released_placement_replays_released_and_admits_nothing(
+    seeded: CapacityLedgerService,
+):
+    """Unlike the escrow lookup, a placement key answers after release: the
+    caller learns its placement ended, and is never handed a fresh hold."""
+    first = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+    seeded.release(capacity_reservation_id=first["capacity_reservation_id"])
+    _, version = seeded.events_after(0)
+
+    replay = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+
+    assert replay["capacity_reservation_id"] == first["capacity_reservation_id"]
+    assert replay["state"] == "released"
+    assert _reservation_count(seeded) == 1
+    assert seeded.events_after(0)[1] == version
+    assert seeded.snapshot()[0]["available_units"] == 8
+
+
+def test_a_replay_is_judged_against_the_request_not_the_lease_it_became(
+    seeded: CapacityLedgerService,
+):
+    """Commit and truncation move the row's window after admission; the exact
+    request replayed afterwards still finds the committed, truncated lease."""
+    first = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+    seeded.commit(
+        capacity_reservation_id=first["capacity_reservation_id"],
+        lease_start_utc="2030-01-01T00:05:00+00:00",
+        lease_end_utc="2030-01-01T01:00:00+00:00",
+    )
+    seeded.truncate_lease(
+        capacity_reservation_id=first["capacity_reservation_id"],
+        lease_end_utc="2030-01-01T00:20:00+00:00",
+    )
+
+    replay = _keyed_reserve(seeded, _SETTLEMENT_KEY)
+
+    assert replay["capacity_reservation_id"] == first["capacity_reservation_id"]
+    assert replay["state"] == "leased"
+    assert replay["lease_start_utc"] == "2030-01-01T00:05:00+00:00"
+    assert replay["lease_end_utc"] == "2030-01-01T00:20:00+00:00"
+
+
+def test_a_keyed_reserve_adopts_its_escrow_s_unkeyed_reservation(
+    seeded: CapacityLedgerService,
+):
+    """A reservation placed by escrow alone is adopted under the first key that
+    names its escrow, so the key answers with it even after release."""
+    unkeyed = seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 2},
+        deal_ref={"escrow_uid": "0xadopt"},
+        **_WINDOW,
+    )
+    keyed_request = {
+        "claim": {"offering_mode": "vm", "gpu_count": 2},
+        "deal_ref": {"escrow_uid": "0xadopt", "placement_key": _SETTLEMENT_KEY},
+        **_WINDOW,
+    }
+
+    adopted = seeded.reserve(**keyed_request)
+    seeded.release(capacity_reservation_id=unkeyed["capacity_reservation_id"])
+    replay = seeded.reserve(**keyed_request)
+
+    assert adopted["capacity_reservation_id"] == unkeyed["capacity_reservation_id"]
+    assert replay["capacity_reservation_id"] == unkeyed["capacity_reservation_id"]
+    assert replay["state"] == "released"
+    assert _reservation_count(seeded) == 1
+
+
+def test_a_keyed_reserve_never_answers_with_another_placement_s_reservation(
+    seeded: CapacityLedgerService,
+):
+    """An escrow held under one placement key does not answer a reserve under
+    another: the second is refused, and nothing is written."""
+    seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 2},
+        deal_ref={"escrow_uid": "0xheld", "placement_key": _HOLD_KEY},
+        **_WINDOW,
+    )
+    _, version = seeded.events_after(0)
+
+    with pytest.raises(CapacityConflictError):
+        seeded.reserve(
+            claim={"offering_mode": "vm", "gpu_count": 2},
+            deal_ref={"escrow_uid": "0xheld", "placement_key": _SETTLEMENT_KEY},
+            **_WINDOW,
+        )
+
+    assert _reservation_count(seeded) == 1
+    assert seeded.events_after(0)[1] == version
+
+
+def test_a_keyed_request_whose_start_the_site_supplied_replays_equal(
+    seeded: CapacityLedgerService,
+):
+    """The window is recorded as asked, so a duration with no start replays
+    as the same request even though the site's clock has moved."""
+    first = _keyed_reserve(seeded, _SETTLEMENT_KEY, lease_start_utc=None)
+
+    replay = _keyed_reserve(seeded, _SETTLEMENT_KEY, lease_start_utc=None)
+
+    assert replay["capacity_reservation_id"] == first["capacity_reservation_id"]
+    assert _reservation_count(seeded) == 1
+
+
+@pytest.mark.parametrize("key", ["", "   ", 7])
+def test_a_placement_key_that_is_not_a_string_is_refused(
+    seeded: CapacityLedgerService, key
+):
+    with pytest.raises(ValueError):
+        seeded.reserve(
+            claim={"offering_mode": "vm", "gpu_count": 1},
+            deal_ref={"placement_key": key},
+        )
+    assert _reservation_count(seeded) == 0
 
 
 def test_future_reservation_ignores_non_overlapping_current_lease(seeded: CapacityLedgerService):
@@ -686,6 +943,203 @@ def test_truncate_lease_refuses_an_uncommitted_hold_and_the_lifecycle_states(
     ) is None
     row = seeded.get_reservation(releasing)
     assert (row["state"], row["release_job_id"]) == ("releasing", "fulfillment-1")
+
+
+# ----------------------------------------------------------------------
+# Lease activation: one instant, recorded once, on a lease with a lease end.
+# ----------------------------------------------------------------------
+
+
+def _file_ledger(path) -> CapacityLedgerService:
+    """A ledger over a database file, so a second instance reads what the first
+    wrote, as a restarted site does."""
+    engine = create_engine(f"sqlite:///{path}", poolclass=NullPool)
+    Base.metadata.create_all(bind=engine)
+    ResourcePoolBase.metadata.create_all(bind=engine)
+    return CapacityLedgerService(
+        sessionmaker(bind=engine),
+        unit_claim_keys=("units", "gpu_count"),
+        mirror_dimension="gpu_count",
+    )
+
+
+def test_a_first_activation_records_the_site_s_instant_and_moves_nothing(
+    seeded: CapacityLedgerService,
+):
+    reservation_id = _committed(seeded, "0xactivate")
+    before = seeded.get_reservation(reservation_id)
+    events_before, _ = seeded.events_after(0)
+    assert before["activated_at_utc"] is None
+
+    earliest = datetime.now(timezone.utc)
+    activated = seeded.activate_lease(reservation_id)
+    latest = datetime.now(timezone.utc)
+
+    instant = datetime.fromisoformat(activated["activated_at_utc"])
+    assert instant.utcoffset() == timedelta(0)
+    assert earliest <= instant <= latest
+    assert {key: value for key, value in activated.items() if key != "activated_at_utc"} == {
+        key: value for key, value in before.items() if key != "activated_at_utc"
+    }
+    assert seeded.get_reservation(reservation_id) == activated
+    assert seeded.events_after(0)[0] == events_before
+
+
+def test_a_retried_activation_returns_the_first_instant_after_a_restart(tmp_path):
+    path = tmp_path / "site.db"
+    first = _file_ledger(path)
+    with first._session_factory() as db, db.begin():
+        db.add(ResourcePool(
+            id=DEFAULT_POOL_ID, label="Default Pool", provider="test", enabled=True,
+            policy_tags={"deliverable_modes": ["vm"]},
+        ))
+    first.register_resource(
+        host_id="kvm1", resource_id="compute-kvm1-001", total_units=8,
+        resource_subtype="h200", attributes={"gpu_model": "H200"}, pool_id="default",
+    )
+    reservation_id = _committed(first, "0xrestart")
+    recorded = first.activate_lease(reservation_id)["activated_at_utc"]
+
+    assert first.activate_lease(reservation_id)["activated_at_utc"] == recorded
+    restarted = _file_ledger(path)
+    assert restarted.activate_lease(reservation_id)["activated_at_utc"] == recorded
+    assert restarted.get_reservation(reservation_id)["activated_at_utc"] == recorded
+
+
+def test_an_activation_after_a_truncation_carries_the_truncated_end(
+    seeded: CapacityLedgerService,
+):
+    reservation_id = _committed(seeded, "0xtruncated-first")
+    seeded.truncate_lease(
+        capacity_reservation_id=reservation_id, lease_end_utc="2027-01-01 00:00"
+    )
+
+    activated = seeded.activate_lease(reservation_id)
+
+    assert activated["lease_end_utc"] == "2027-01-01 00:00"
+    assert activated["activated_at_utc"] is not None
+    assert seeded.get_reservation(reservation_id)["lease_end_utc"] == "2027-01-01 00:00"
+
+
+def test_a_truncation_between_a_lost_answer_and_its_retry_is_adopted(
+    seeded: CapacityLedgerService,
+):
+    """An activation whose answer was lost, a truncation, then the retry: the
+    retry answers the shorter end and the first instant, and neither call
+    extends the lease."""
+    reservation_id = _committed(seeded, "0xlost-answer")
+    first = seeded.activate_lease(reservation_id)
+    seeded.truncate_lease(
+        capacity_reservation_id=reservation_id, lease_end_utc="2027-01-01 00:00"
+    )
+
+    retried = seeded.activate_lease(reservation_id)
+
+    assert retried["activated_at_utc"] == first["activated_at_utc"]
+    assert first["lease_end_utc"] == "2099-01-01 00:00"
+    assert retried["lease_end_utc"] == "2027-01-01 00:00"
+    assert seeded.get_reservation(reservation_id)["lease_end_utc"] == "2027-01-01 00:00"
+
+
+def _released_by_the_lifecycle(seeded: CapacityLedgerService, state: str) -> str:
+    """A committed lease taken to ``state`` through the ledger's own transitions."""
+    reservation_id = _committed(seeded, f"0xactivate-{state}")
+    if state == "releasing":
+        seeded.begin_releasing(reservation_id, release_job_id="f-1")
+    elif state == "release_failed":
+        seeded.begin_releasing(reservation_id, release_job_id="f-1")
+        seeded.record_release_failed(reservation_id, reason="teardown_failed", release_job_id="f-1")
+    elif state == "unmanaged":
+        seeded.record_unmanaged(reservation_id, reason="oversight_released")
+    elif state == "released":
+        seeded.release(capacity_reservation_id=reservation_id)
+    elif state == "force_released":
+        seeded.release(capacity_reservation_id=reservation_id, forced=True)
+    assert seeded.get_reservation(reservation_id)["state"] == state
+    return reservation_id
+
+
+@pytest.mark.parametrize(
+    "state", ["releasing", "release_failed", "unmanaged", "released", "force_released"]
+)
+def test_an_activation_after_the_lifecycle_claimed_the_lease_is_refused(
+    seeded: CapacityLedgerService, state: str
+):
+    reservation_id = _released_by_the_lifecycle(seeded, state)
+    before = seeded.get_reservation(reservation_id)
+    capacity_before = seeded.snapshot()
+
+    with pytest.raises(CapacityConflictError, match=f"is {state}; cannot activate"):
+        seeded.activate_lease(reservation_id)
+
+    assert seeded.get_reservation(reservation_id) == before
+    assert before["activated_at_utc"] is None
+    assert seeded.snapshot() == capacity_before
+
+
+def test_an_uncommitted_hold_is_not_activated(seeded: CapacityLedgerService):
+    held = seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 1}, deal_ref={"escrow_uid": "0xheld"}
+    )["capacity_reservation_id"]
+
+    with pytest.raises(CapacityConflictError, match="is reserved; cannot activate"):
+        seeded.activate_lease(held)
+
+    row = seeded.get_reservation(held)
+    assert (row["state"], row["activated_at_utc"]) == ("reserved", None)
+
+
+def test_an_open_ended_hold_has_no_lease_tail_to_activate(seeded: CapacityLedgerService):
+    held = seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 1}, deal_ref={"escrow_uid": "0xopen"}
+    )["capacity_reservation_id"]
+    seeded.commit(capacity_reservation_id=held, lease_end_utc=None)
+
+    with pytest.raises(CapacityConflictError, match="has no lease tail"):
+        seeded.activate_lease(held)
+
+    row = seeded.get_reservation(held)
+    assert (row["state"], row["lease_end_utc"], row["activated_at_utc"]) == (
+        "leased", None, None,
+    )
+
+
+def test_an_unknown_reservation_is_not_activated(seeded: CapacityLedgerService):
+    assert seeded.activate_lease("missing") is None
+    assert seeded.activate_lease("") is None
+
+
+def test_admission_around_an_activated_lease_is_unchanged(seeded: CapacityLedgerService):
+    """Admission accounts a lease's full agreed window before and after its
+    activation alike."""
+    lease = seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 6},
+        deal_ref={"escrow_uid": "0xadmitted"},
+        lease_start_utc="2030-01-01T00:00:00Z",
+        lease_duration_seconds=7200,
+    )["capacity_reservation_id"]
+    seeded.commit(
+        capacity_reservation_id=lease,
+        lease_start_utc="2030-01-01T00:00:00Z",
+        lease_end_utc="2030-01-01T02:00:00Z",
+    )
+    window = {"lease_start_utc": "2030-01-01T01:00:00Z", "lease_duration_seconds": 3600}
+
+    def overlapping(units: int):
+        return seeded.probe(claim={"offering_mode": "vm", "gpu_count": units}, **window)
+
+    before = (overlapping(2), overlapping(3), seeded.snapshot())
+    seeded.activate_lease(lease)
+    after = (overlapping(2), overlapping(3), seeded.snapshot())
+
+    assert after == before
+    assert before[0] is not None and before[1] is None
+    assert seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 3}, deal_ref={}, **window
+    ) is None
+    assert seeded.reserve(
+        claim={"offering_mode": "vm", "gpu_count": 2}, deal_ref={}, **window
+    ) is not None
 
 
 def _record_target(seeded: CapacityLedgerService, reservation_id: str, target: str):
@@ -1929,6 +2383,29 @@ def _pause_after_the_obligation_check(ledger, monkeypatch):
     return checked, release
 
 
+class _ReportingLock:
+    """The ledger's lock, reporting through ``reached`` when the thread named
+    ``reporter`` tries to take it: the moment that thread is serialized, which
+    a test can wait on instead of a duration."""
+
+    def __init__(self, lock, reporter: str, reached: threading.Event) -> None:
+        self._inner, self._reporter, self._reached = lock, reporter, reached
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if threading.current_thread().name == self._reporter:
+            self._reached.set()
+        return self._inner.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._inner.release()
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *_exc) -> None:
+        self.release()
+
+
 def _move_in_one_transaction(ledger, resource_id: str, pool_id: str) -> None:
     """A caller composing a pool move into its own transaction, as the
     document importer does: serialized through its commit."""
@@ -1992,6 +2469,10 @@ def test_a_reservation_racing_a_pool_move_never_survives_against_the_moved_resou
     ledger.register_resource(resource_id="r1", pool_id="default", total_units=4)
     checked, release = _pause_after_the_obligation_check(ledger, monkeypatch)
     outcomes: dict[str, object] = {}
+    # Set when the reserve reaches the ledger's lock or finishes, whichever
+    # comes first.
+    reached = threading.Event()
+    monkeypatch.setattr(ledger, "_lock", _ReportingLock(ledger._lock, "reserver", reached))
 
     def reserve():
         try:
@@ -2001,18 +2482,19 @@ def test_a_reservation_racing_a_pool_move_never_survives_against_the_moved_resou
             )
         except Exception as exc:  # the refusal is an acceptable outcome
             outcomes["reserve"] = exc
+        finally:
+            reached.set()
 
     mover = threading.Thread(target=_move_in_one_transaction, args=(ledger, "r1", "pool-b"))
-    reserver = threading.Thread(target=reserve)
+    reserver = threading.Thread(target=reserve, name="reserver")
     mover.start()
     assert checked.wait(timeout=10)
     reserver.start()
-    # Give the reserve the whole pause to run in. Serialized, it cannot
-    # finish while the move holds the lock, so this wait expires and the
-    # move resumes; unserialized, it would finish here and commit against
-    # the old pool before the move writes. The assertion below does not
-    # depend on this wait, only whether the counterfactual is exercised.
-    reserver.join(timeout=1)
+    # Resume the move only once the reserve has run as far as it can inside
+    # the pause. Serialized, it is blocked on the lock the move holds;
+    # unserialized, it has finished and committed against the old pool before
+    # the move writes, the counterfactual the assertion below would catch.
+    assert reached.wait(timeout=10), "the reserve never ran"
     release.set()
     mover.join(timeout=10)
     reserver.join(timeout=10)

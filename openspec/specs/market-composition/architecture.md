@@ -156,7 +156,7 @@ Seller-first and fused stages need no adapter.
 
 Composition roots register installed settlement mechanisms explicitly. Each registration contributes its canonical ID, typed configuration, role applicability, preflight, client factory, listing-option builder, buyer compatibility, and optional command group. Core roles consume only ordered registrations and common readiness; they neither branch on mechanism IDs nor import concrete configuration models.
 
-A domain's seller stage for a mechanism may also declare what the domain can deliver under it. Each domain's Alkahest seller stage declares the release models it can deliver — VM all three, bare metal `recipient` and `oracle_gated`, API credits `recipient` — and a configured model the domain does not declare makes Alkahest unready with a configuration blocker naming it, so the storefront starts and publishes its other mechanisms (see the [settlement configuration architecture](../settlement-configuration/architecture.md)). A stage's `settles_from_agreement` likewise says whether a deal under its mechanism settles from the accepted Agreement alone; an exact selection of a mechanism whose registration builds no accepted obligation is accepted without a plan only when it does.
+A domain's seller stage for a mechanism may also declare what the domain can deliver under it. Each domain's Alkahest seller stage declares the release models it can deliver — VM all three, bare metal `recipient` and `oracle_gated`, API credits `recipient` — and a storefront whose Alkahest section, enabled or not, lists a model the domain does not declare refuses to start, naming it (see the [settlement configuration architecture](../settlement-configuration/architecture.md)). A stage's `settles_from_agreement` likewise says whether a deal under its mechanism settles from the accepted Agreement alone; an exact selection of a mechanism whose registration builds no accepted obligation is accepted without a plan only when it does.
 
 Registration controls construction, not lifecycle ownership. A composition injects the marketplace signer, wallet, chains, or other shared resources only into mechanisms that declare them, then composes only the lifecycle the selected mechanism uses. An Arkhai-payment-only VM composition starts without EVM resources. Its mandate and receipt feed the existing selected-site fulfillment stage, not the obligation journal.
 
@@ -284,15 +284,25 @@ nothing, and an exited or cancelled loop stays distinct from a running one
 whose last cycle failed. The controller's snapshot is what every storefront's
 system status reports as `lifecycle`.
 
-Every capacity effect — reserve, commit, release, lease truncation — passes
-one guarded boundary, `CapacityEffects`, composed over any aggregate capacity
-client and acting only at the sites that aggregate names. It asks the binding's
-delegate to admit the effect before checking the site, so an unbacked listing
-is refused before any site call, and a refusal is a conflict rather than an
-unknown site. `CapacityRuntime` composes one over its own aggregate; a
-storefront with its own aggregate, as bare metal's is, builds one over that,
-so whatever the aggregate records per reservation is still recorded. Nothing
-reserves, commits, releases, or truncates through an aggregate directly.
+Every capacity effect — reserve, commit, lease activation, release, lease
+truncation — passes one guarded boundary, `CapacityEffects`, composed over any
+aggregate capacity client and acting only at the sites that aggregate names. It
+asks the binding's delegate to admit the effect before checking the site, so an
+unbacked listing is refused before any site call, and a refusal is a conflict
+rather than an unknown site. `CapacityRuntime` composes one over its own
+aggregate; a storefront with its own aggregate, as bare metal's is, builds one
+over that, so whatever the aggregate records per reservation is still recorded.
+Because the aggregate is whatever a storefront composes, `CapacityEffects` also
+refuses a reserve or activation result the aggregate tags with a site other than
+the binding's. Nothing reserves, commits, activates, releases, or truncates
+through an aggregate directly. `CapacityEffects` always names the binding's
+site, so a storefront never takes an aggregate's route order, the cache-first
+walk across sites `AggregateCapacityClient` keeps for a caller that names none.
+Where a site refuses with an error rather than a null answer, as commit and
+activation do, route order raises the most informative failure when no site
+accepts: a site's refusal of a reservation it holds (a 409 naming its state)
+over a site that could not be asked, and either over a 404, so a reservation
+claimed by release is never reported as one no site holds.
 Seller-authenticated creation carries the capacity source separately from the
 public resource. The storefront checks that source against the configured site
 topology and the parsed offer, then writes the listing projection and immutable

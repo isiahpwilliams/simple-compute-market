@@ -37,8 +37,10 @@ from market_core import (
     SettlementEvidence,
     validate_domain_contract,
 )
-from market_core.schemas import Agreement
+from market_core.schemas import AGREEMENT_SETTLEMENT_SCHEMA_PATH, Agreement
 from market_identity import Identity
+from market_deal_lifecycle.evidence import CommitmentAttempt
+from market_deal_servicing import EndSession, EvidenceSession
 from market_pool_overrides import pool_override_migrations
 from market_settlement_runtime import settlement_migrations
 from pydantic import BaseModel
@@ -46,6 +48,7 @@ from pydantic import BaseModel
 from .domain_runtime import get_market_domain_contract
 from .migrations import BARE_METAL_STOREFRONT_MIGRATIONS
 from .settlement_evidence import EvidencePayload
+from .lifecycle_records import register_agreement
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -123,13 +126,13 @@ class SQLiteClient(CoreSQLiteClient):
                     WHERE t.terminal_state = 'success'
                       AND t.agreement_bytes IS NOT NULL
                       AND CASE WHEN json_valid(CAST(t.agreement_bytes AS TEXT))
-                          THEN json_extract(CAST(t.agreement_bytes AS TEXT), '$.settlement.mechanism')
+                          THEN json_extract(CAST(t.agreement_bytes AS TEXT), ?)
                           END = ?
                       AND (r.status IN ('accepted', 'refunding') OR (r.status = 'settlement_verified' AND l.negotiation_id IS NULL))
                     ORDER BY t.created_at ASC, t.negotiation_id ASC
                     LIMIT ?
                     """,
-                    (mechanism, limit),
+                    (AGREEMENT_SETTLEMENT_SCHEMA_PATH, mechanism, limit),
                 ).fetchall()
             return [str(row[0]) for row in rows]
 
@@ -564,79 +567,11 @@ class SQLiteClient(CoreSQLiteClient):
             thread_binding=thread_binding,
         )
 
-    async def ensure_bare_metal_fulfillment_lifecycle(
-        self,
-        *,
-        negotiation_id: str,
-        settlement_ref: str,
-        site_id: str,
-        physical_resource_id: str,
-    ) -> dict[str, Any] | None:
-        """Start a deal's delivery only while its settlement evidence is verified.
-
-        The lifecycle row is the delivery-start marker: it is inserted in the same
-        transaction that checks the settlement record, so refund intent recorded
-        first prevents delivery, and an existing row (an interrupted delivery)
-        is returned as is. Returns ``None`` when a refund already owns the deal.
-        """
-
-        def _start() -> dict[str, Any] | None:
-            conn = sqlite3.connect(self.db_path, isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    row = conn.execute(
-                        "SELECT * FROM bare_metal_fulfillment_lifecycle WHERE negotiation_id = ?",
-                        (negotiation_id,),
-                    ).fetchone()
-                    if row is None:
-                        record = conn.execute(
-                            "SELECT status, settlement_ref FROM bare_metal_settlement_records "
-                            "WHERE negotiation_id = ?",
-                            (negotiation_id,),
-                        ).fetchone()
-                        if record is None or record["status"] != "settlement_verified":
-                            conn.execute("ROLLBACK")
-                            return None
-                        if record["settlement_ref"] != settlement_ref:
-                            raise RuntimeError(
-                                "bare-metal fulfillment lifecycle identity conflict"
-                            )
-                        conn.execute(
-                            "INSERT INTO bare_metal_fulfillment_lifecycle("
-                            "negotiation_id, settlement_ref, site_id, physical_resource_id, state"
-                            ") VALUES (?, ?, ?, ?, 'planning')",
-                            (negotiation_id, settlement_ref, site_id, physical_resource_id),
-                        )
-                        row = conn.execute(
-                            "SELECT * FROM bare_metal_fulfillment_lifecycle "
-                            "WHERE negotiation_id = ?",
-                            (negotiation_id,),
-                        ).fetchone()
-                    conn.execute("COMMIT")
-                except BaseException:
-                    if conn.in_transaction:
-                        conn.execute("ROLLBACK")
-                    raise
-                result = dict(row)
-                expected = {
-                    "settlement_ref": settlement_ref,
-                    "site_id": site_id,
-                    "physical_resource_id": physical_resource_id,
-                }
-                if any(result[key] != value for key, value in expected.items()):
-                    raise RuntimeError("bare-metal fulfillment lifecycle identity conflict")
-                return result
-            finally:
-                conn.close()
-
-        return await asyncio.to_thread(_start)
-
     async def record_bare_metal_refund_intent(self, *, negotiation_id: str) -> dict[str, Any]:
         """Record refund intent before reversing; report whether delivery had started.
 
-        Serialized against ``ensure_bare_metal_fulfillment_lifecycle``: whichever
+        Serialized against the delivery path's creation of the lifecycle row,
+        which reads the settlement record in its own transaction: whichever
         commits first decides whether delivery precedes the refund.
         """
 
@@ -787,6 +722,35 @@ class SQLiteClient(CoreSQLiteClient):
 
         return await asyncio.to_thread(_save)
 
+    async def record_bare_metal_settlement_resource(
+        self, *, negotiation_id: str, settlement_resource_id: str
+    ) -> None:
+        """Record the resource scheduling bound the deal's reservation to, once.
+
+        The delivery state is left as it is; a different resource is refused,
+        since scheduling is idempotent by reservation and returns the same one.
+        """
+
+        def _save() -> None:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        "UPDATE bare_metal_fulfillment_lifecycle SET settlement_resource_id = ?, "
+                        "updated_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                        "WHERE negotiation_id = ? "
+                        "AND (settlement_resource_id IS NULL OR settlement_resource_id = ?)",
+                        (settlement_resource_id, negotiation_id, settlement_resource_id),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError(
+                            "bare-metal fulfillment lifecycle is missing or bound to another resource"
+                        )
+            finally:
+                conn.close()
+
+        await asyncio.to_thread(_save)
+
     @staticmethod
     def _decode_bare_metal_settlement_record(row: sqlite3.Row) -> dict[str, Any]:
         record = dict(row)
@@ -839,7 +803,7 @@ class SQLiteClient(CoreSQLiteClient):
         return await asyncio.to_thread(_load)
 
     async def record_bare_metal_settlement_acceptance(
-        self, *, negotiation_id: str, agreement_bytes: bytes
+        self, *, negotiation_id: str, agreement_bytes: bytes, settlement_data: Any = None
     ) -> None:
         """Record an accepted deal's settlement identity and unverified evidence, once.
 
@@ -848,10 +812,13 @@ class SQLiteClient(CoreSQLiteClient):
         different mechanism or Agreement is a conflict, not an update.
         """
 
+        if settlement_data is None:
+            thread = await self.load_negotiation_thread_row(negotiation_id=negotiation_id)
+            settlement_data = (thread or {}).get("settlement_data")
         agreement = Agreement.model_validate_json(agreement_bytes)
         if agreement.settlement is None:
             raise ValueError("accepted Agreement has no selected settlement")
-        mechanism = agreement.settlement.mechanism
+        mechanism = agreement.settlement.settlement_schema
         agreement_sha256 = hashlib.sha256(agreement_bytes).hexdigest()
         evidence_json = EvidencePayload(
             agreement_sha256=agreement_sha256
@@ -861,6 +828,8 @@ class SQLiteClient(CoreSQLiteClient):
             conn = sqlite3.connect(self.db_path)
             try:
                 with conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    register_agreement(conn, agreement_bytes, settlement_data, capture=True)
                     conn.execute(
                         "INSERT OR IGNORE INTO bare_metal_settlement_records("
                         "negotiation_id, mechanism, agreement_sha256, status, "
@@ -975,6 +944,17 @@ class SQLiteClient(CoreSQLiteClient):
                     raise RuntimeError(
                         "settlement evidence is bound to another Agreement"
                     )
+                session = EndSession(conn)
+                delivery = session.read(evidence.negotiation_id)
+                committed_at = (
+                    payload.source["receipt"]["receipt"]["approvedAt"]
+                    if evidence.mechanism == "arkhai.payments.v1"
+                    else delivery.committed_at or int(conn.execute("SELECT unixepoch()").fetchone()[0])
+                )
+                session.confirm_commitment(evidence.negotiation_id, committed_at=committed_at)
+                EvidenceSession(conn).record_commitment(
+                    evidence.negotiation_id, CommitmentAttempt(commitment_ref=delivery.commitment_ref),
+                )
                 conn.execute(
                     "UPDATE bare_metal_settlement_records SET settlement_ref = ?, status = ?, "
                     "evidence_json = ?, updated_at = STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now') "

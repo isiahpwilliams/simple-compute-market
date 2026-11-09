@@ -44,6 +44,7 @@ from market_core.schemas import (
     SettlementOption,
     SettlementPlan,
     SettlementSelection,
+    settlement_option_schema,
 )
 from market_identity import Identity
 from market_negotiation_runtime import (
@@ -369,12 +370,12 @@ def _accepted_selection_artifacts(
         raise OfferUnfulfillableError("selected_settlement_option_not_exact") from exc
     if (
         accepted.option_id != advertised_option.option_id
-        or accepted.mechanism != advertised_option.mechanism
+        or accepted.settlement_schema != advertised_option.settlement_schema
     ):
         raise OfferUnfulfillableError("settlement_selection_not_exact")
-    if accepted.mechanism not in dispatch:
+    if accepted.settlement_schema not in dispatch:
         raise OfferUnfulfillableError("settlement_mechanism_unsupported")
-    build_obligation = dispatch[accepted.mechanism]
+    build_obligation = dispatch[accepted.settlement_schema]
     if build_obligation is None:
         if not settles_from_agreement:
             raise OfferUnfulfillableError("settlement_selection_requires_plan")
@@ -460,10 +461,11 @@ def _accepted_settlement_artifacts(
         options = json.loads(options)
     option = next(
         (
-            item for item in options
+            item
+            for item in options
             if isinstance(item, Mapping)
             and item.get("option_id") == selection.option_id
-            and item.get("mechanism") == selection.mechanism
+            and settlement_option_schema(item) == selection.settlement_schema
         ),
         None,
     )
@@ -529,8 +531,8 @@ def _with_agreement(
         else None
     )
     plan = artifacts.get("settlement_plan")
-    asset = settlement.asset if settlement is not None else None
-    if asset is None and isinstance(plan, Mapping):
+    asset = settlement.price_asset if settlement is not None else None
+    if settlement is None and isinstance(plan, Mapping):
         obligations = plan.get("obligations")
         if isinstance(obligations, list) and obligations and isinstance(obligations[0], Mapping):
             raw_asset = obligations[0].get("asset")
@@ -559,7 +561,9 @@ def _with_agreement(
         settlement=settlement,
         settlement_params=SettlementSelection.model_validate(
             artifacts["settlement_selection"]
-        ).params if artifacts.get("settlement_selection") is not None else {},
+        ).settlement_params
+        if artifacts.get("settlement_selection") is not None
+        else {},
         amount=acceptance.agreed_amount,
         asset=asset,
         duration_seconds=acceptance.agreement.duration_seconds,
@@ -607,7 +611,7 @@ def _build_response_artifacts(
         if agreement.settlement is None:
             raise OfferUnfulfillableError("accepted_settlement_unavailable")
         try:
-            stage = domain.settlement.seller_stages[agreement.settlement.mechanism]
+            stage = domain.settlement.seller_stages[agreement.settlement.settlement_schema]
             data = stage.accepted_data(agreement, payments_stage, artifacts=artifacts)
         except (KeyError, ValueError) as exc:
             raise OfferUnfulfillableError(str(exc)) from exc
@@ -721,6 +725,7 @@ async def _place_capacity_hold(
     if ttl <= 0:
         return
     binding = acceptance.binding
+    placement: dict[str, Any] = {}
 
     async def reserve() -> _HoldAttempt:
         claim = compute_capacity_claim_from_order(dict(acceptance.listing_record))
@@ -730,13 +735,26 @@ async def _place_capacity_hold(
                 repository, acceptance.listing_id, site_projections
             ),
         )
+        # The hold is placed under its own placement key and recorded with the
+        # exact request, so delivery can replay it to learn whether a hold
+        # whose commit is refused has lapsed or is still live.
+        placement.update(
+            claim=dict(claim),
+            deal_ref={
+                "listing_id": acceptance.listing_id,
+                "negotiation_id": acceptance.negotiation_id,
+            },
+            ttl_seconds=capped_ttl,
+            lease_start_utc=acceptance.agreement.start_utc,
+            lease_duration_seconds=acceptance.agreement.duration_seconds,
+        )
         return _HoldAttempt(
             await capacity_runtime.reserve(
                 binding,
                 claim=claim,
                 deal_ref={
-                    "listing_id": acceptance.listing_id,
-                    "negotiation_id": acceptance.negotiation_id,
+                    **placement["deal_ref"],
+                    "placement_key": f"{acceptance.negotiation_id}:hold",
                 },
                 ttl_seconds=capped_ttl,
                 lease_start_utc=acceptance.agreement.start_utc,
@@ -779,7 +797,7 @@ async def _place_capacity_hold(
         negotiation_id=acceptance.negotiation_id,
         listing_id=acceptance.listing_id,
         capacity_reservation_id=str(held["capacity_reservation_id"]),
-        payload=held,
+        payload={**held, "placement": placement},
         expires_at=held.get("hold_expires_at"),
     )
     stage_event(

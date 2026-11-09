@@ -228,6 +228,21 @@ the inference registry, all derived by the identities README's rule and pinned
 where they are consumed. Root targets `e2e-inference-stack-env` and
 `e2e-inference-dev-env` print them; `e2e-dev-identities-env` gains the stack.
 
+*Amended 2026-11-09, on merging `dev`.* `dev` moved every lane from printed
+environment files to committed overlays, registry profiles, and secret
+overlays, and removed the `e2e-*-dev-env` targets. The inference stack follows:
+`compose.inference-local.yml` binds the committed credential files by path; the
+registry loads `dev-env/registry/config-inference-registry.env` by
+`ACTIVE_PROFILES`; the storefront's wallet key moves from
+`inference.wallet.env` and an environment variable to
+`dev-env/identities/inference.storefront.secrets.toml`; and the lane's compute
+and API-credit registries run the committed `compute-registry` and
+`api-credits-registry` profiles with their descriptors pointed at the lane
+network. The lane runs no payments double, since inference settles through
+Alkahest alone. Promotion of this to the testing and identity documents is
+already in `dev-env/identities/README.md`; `docs/development/TESTING.md`'s lane
+list still needs the inference lane at closeout.
+
 ### D11. The scenario runs in its own lane
 
 `test-e2e-inference` builds the inference images and every registry its

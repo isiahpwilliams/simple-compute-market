@@ -19,7 +19,7 @@ ledger, and a prerequisite's proposal and dependency (both in section 4).
 Run interactively, as most runs are, this section does not apply but for the
 outcome it describes, which an interactive run records itself ("Running
 interactively"); nothing else in the skill changes.
-When this skill runs through `scripts/run_change_step.py` —
+When this skill runs through `scripts/change-workflow start --unattended` —
 `make design UNATTENDED=1`, or the orchestrating session — nobody can answer in
 the session, and every turn ends with an outcome matching
 `.agents/change-outcome.schema.json`, whose `message` the owner reads as written:
@@ -76,7 +76,7 @@ command — no wrapper records the run, so its last act records the outcome it w
 end with unattended, as "Running unattended" gives it:
 
 ```text
-python3 scripts/run_change_step.py record <change> design --outcome '<the outcome, as JSON>'
+scripts/change-workflow record <change> design --outcome '<the outcome, as JSON>'
 ```
 
 `record` checks the outcome against `.agents/change-outcome.schema.json` and
@@ -96,23 +96,24 @@ again, to be resumed, or its outcome recorded with the command above.
 Answers given from a partial picture are confidently wrong in exactly the
 places that matter, so read all of this first, in full:
 
-- `AGENTS.md` and every document it requires: `docs/development/ARCHITECTURE.md`,
-  `docs/development/TESTING.md`, `docs/development/DEPLOYMENT_AND_CONFIG.md`,
-  and `openspec/README.md`.
-- `docs/development/ROADMAP.md`, the goal this change serves, and this change's
-  row and campaign in `openspec/changes/README.md`.
+- The documents `scripts/change-workflow config load design` prints: the
+  repository's guidance, and the roadmap where the configuration names it for
+  design.
+- The goal this change serves, in the roadmap, and this change's row and campaign
+  in `openspec/changes/README.md`.
 - Every file in `openspec/changes/<change>/`, including `specs/`,
   `interventions.jsonl`, and any `reviews/` (earlier reviews and their triage
   are design input).
 - For every capability the change names or touches: `openspec/specs/<capability>/spec.md`
-  and its `architecture.md` companion when one exists.
+  and its companion when one exists — `README.md` where the capability has an
+  `index.md`, which you read too, and `architecture.md` elsewhere.
 - The code the design cites, and the code it would change. Read enough of it to
   check every factual claim the design makes about the current system.
 - Each change listed in the row's `Depends on`, at least its `proposal.md` and
   `design.md`.
 - Another change's records, where the design rests on them — a dependency's
   reviews, an earlier change's findings or validation. They are untracked, so they
-  are where that change was worked: `python3 scripts/find_change.py --records
+  are where that change was worked: `scripts/change-workflow find --records
   <change>` prints where, this checkout's or, from a change's clone, the owner's
   workspace's, which holds the history of every cleaned-up change.
 
@@ -209,9 +210,10 @@ Present consequences and conventions together, once the judgements they depend
 on are settled, each still with its context, alternatives, and recommendation,
 so the owner can confirm the batch or pull one out for discussion.
 
-Never ask the owner where documentation should live. Name a provisional
-permanent destination for each decision in `proposal.md`; planning and review
-confirm or move it.
+Never ask the owner where documentation should live, at which test level a
+behaviour is proven, or which evidence a section records: state each as a
+provisional answer — the documentation destination in `proposal.md`, the test
+level from `TESTING.md` — for planning and review to confirm or move.
 
 ### Do not argue from absence of a caller alone
 
@@ -295,13 +297,13 @@ through dev, never written here:
 4. Once the proposal has merged to dev and dev has been merged into this branch,
    record the dependency: add the prerequisite to this change's `Depends on`
    gating `design` (`` `<prerequisite>` (design) ``), name it in `Notes`, keep the
-   status `in design`, and run `make check-change-index`. `blocked in design` is
+   status `in design`, and run `scripts/change-workflow check index`. `blocked in design` is
    for reasons that are not another change; the dependency itself holds design,
    through section 1's entry check, and the design halts again until it lands.
 5. Once the prerequisite is archived and dev is merged in again, the index check
    refuses this change's dependency on an archived change. On the owner's word,
    drop only that dependency, leaving the status `in design`, run
-   `make check-change-index`, and resume the discussion.
+   `scripts/change-workflow check index`, and resume the discussion.
 
 ## 5. Check the whole before recording
 
@@ -316,8 +318,12 @@ When every decision is settled, and before writing anything:
 - **Compare the scope with the original proposal.** List what was added, which
   decisions added it, and whether any of it gives the change a new prerequisite
   or a second domain, subsystem, or acceptance boundary. Ask the owner
-  explicitly whether any of it should be split into its own change. A change
-  that can close out on its own is preferred to one waiting on another.
+  explicitly whether any of it should be split into its own change, as
+  `openspec/README.md#defects-found-during-a-change` frames it: a small,
+  understood defect fix, or unification the architecture favours, belongs in the
+  change; work that is large, or not understood well enough to fix without a
+  design of its own, is split. A change that can close out on its own is
+  preferred to one waiting on another.
 - **List the principles the owner stated** that no permanent document records,
   for promotion to `ARCHITECTURE.md`.
 - **Settle the implementation cadence** with the owner, as a decision like any
@@ -336,26 +342,32 @@ Present these results and resolve what they raise before recording.
 
 Only when the owner says the design is settled:
 
-- Record each decision in `design.md` under `## Decisions`, with its rationale
-  and the alternatives rejected and why. Describe the design as it will be,
-  not the conversation that produced it. Record the implementation cadence there
-  too, in terms of the work, as the change's implementation cadence.
+- Record each decision in `design.md` under `## Decisions`, each under its own
+  `### D<n> — <title>` heading, with its rationale and the alternatives rejected
+  and why. Describe the design as it will be, not the conversation that produced
+  it. Record the implementation cadence there too, in terms of the work, as the
+  change's implementation cadence.
 - Keep under `## Open Questions` only what is genuinely deferred, each with what
   would trigger revisiting it. A question may not stay open while a task
   prescribes its answer (`openspec/README.md#open-questions-and-prescribed-tasks`).
 - Amend `proposal.md` when scope, non-goals, capabilities, or impact moved, and
   keep its `## Permanent documentation impact` and `### Knowledge to promote`
-  naming the permanent destination of every material decision.
+  naming the permanent destination of every material decision: a bullet starting
+  `D<n>` for each decision heading, `- D<n>: no permanent destination — <reason>`
+  for one with nothing to promote, which the repository's closing checks check.
 - Amend the delta specs in `specs/` so every accepted behavior is a requirement
-  with at least one WHEN/THEN scenario.
-- Run `make check-change CHANGE=<change>`, which runs the strict OpenSpec
-  validation and the change's citations check among the repository's closing
-  checks, and report the result. A citation of a file the change itself will
-  create is expected; any other is a defect.
+  with at least one WHEN/THEN scenario. Run the OpenSpec CLI, wherever you need
+  it, as `scripts/change-workflow openspec <arguments>`, which runs the command
+  the repository's configuration names.
+- Run `scripts/change-workflow run pre-commit <change>`, which runs the strict
+  OpenSpec validation among the workflow's default checks and the change's
+  citations check among the repository's closing checks, and report the result.
+  A citation of a file the change itself will create is expected; any other is a
+  defect.
 - Commit the recorded design as one commit — the change's documents, the index
   row, and the ledger lines this step wrote — whose message names the change and
   says its design is settled, so the design review reads a committed design. Then
-  push it with `make push-branch`, the guarded push of exactly `HEAD`; if it
+  push it with `scripts/change-workflow push`, the guarded push of exactly `HEAD`; if it
   refuses, stop and report its reasons.
 
 Do not write or amend `tasks.md`: planning is a separate phase and starts only
@@ -364,7 +376,13 @@ once the design review's triage records that the change advances.
 ## 7. Hand off to design review
 
 The design phase ends with a design review, not with this skill. Tell the owner
-the design is ready for review and leave the status `in design`. Its triage names,
+the design is ready for review and leave the status `in design`. Finishing after a
+return to design, recommend that the owner waive another design review when a
+criterion of `docs/agents/change-workflow.md`'s "Waivers" holds — what this session
+settled is confined to one requirement's wording, or to a choice the design review
+already weighed — naming the criterion and its evidence; with none holding,
+recommend none. Only the owner waives, and the orchestrating session writes the
+ledger line of their answer. Its triage names,
 as its exit, whether the change advances to planning or another design review runs;
 when it advances, the triage sets `ready for planning`, and planning follows
 without another question to the owner.

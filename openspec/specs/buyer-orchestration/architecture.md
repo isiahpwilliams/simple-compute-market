@@ -53,6 +53,17 @@ Marketplace identity and transaction credentials have independent lifetimes. Wal
 
 Run logs persist the canonical public principal, signature-contract version, accepted obligation and operation identities, and domain state required to resume. They do not serialize credential material. Recovery checks the complete recorded principal and permits a different credential only when a completed rotation authorizes it as an active replacement, before submitting another authenticated or settlement mutation.
 
+A protocol `signer` field is public evidence only when it is exactly the canonical
+`{scheme, identifier}` mapping validated by the identity codec. Run-log validation
+preserves that evidence unchanged while refusing signer objects, private fields,
+noncanonical or extended mappings, and secret/provider carriers at every nesting
+level. The field name alone grants no exception.
+
+Settlement polling sends only public status to progress observers. The complete
+authenticated delivery result returns through its private result boundary, so
+credentials cannot enter a run log through a progress callback. Retained journals
+remain recovery evidence; reading or resuming them does not rewrite their events.
+
 ## Configured mechanism choice and buyer actions
 
 The buyer intersects installed, enabled registration compatibility with its
@@ -96,7 +107,7 @@ exact Agreement bytes and domain settlement data; the buyer keeps no
 SettlementEvidence. Seller delivery is authorized only by the storefront's
 verified evidence.
 
-The buyer preserves exact Agreement bytes and opaque settlement data in accepted run state. Its `payer_account` travels in selection params, independently of the profile signer. It validates the seller-derived mandate against that Agreement and local policy, approves and polls the same transaction ID, then calls seller settlement with only the negotiation ID. Resume does not reconstruct the Agreement or use current priority to fail over.
+The buyer preserves exact Agreement bytes and opaque settlement data in accepted run state. Its `payer_account` travels in selection params, independently of the profile signer. It validates the seller-derived mandate against that Agreement and local policy, approves and polls the same transaction ID, then calls compute seller `commit` (API credits uses settle) with only the negotiation ID. Resume does not reconstruct the Agreement or use current priority to fail over.
 
 VM `market negotiate` and API-credit `market credits negotiate` use their
 respective buyer tables for selection enrichment, accepted artifacts,
@@ -117,6 +128,43 @@ The installed bare-metal contribution preserves the selected profile signer, exa
 ## API-credit payment recovery
 
 API-credit buys preserve the accepted option, exact Agreement, and mandate rather than reconstructing a partial listing. Approval and polling retain transaction identity, and seller settle calls identify only the negotiation. Seller receipt verification precedes recoverable, idempotent credits issuance. Credentials use the private buyer result channel; a missing credential response is not permission to charge or issue again.
+
+## Delivery-only ends and case evidence
+
+VM `market end` and `market bare-metal teardown` compose the same
+`kit/deal-lifecycle-buyer` half and signed canonical client
+`end_delivery(negotiation_id)`. They require an accepted settlement-stage run and
+address its retained storefront, not a current listing. No caller-supplied `at`
+is allowed. The storefront signs its own durable receipt instant; same-key retry
+keeps it and an earlier selected final request still controls. A once-only or
+current Alkahest end is delivery surrender, not a fabricated payment stop/refund.
+The lifecycle read keeps physical progress available even when authority state
+is unsupported or unavailable.
+
+The buyer verifies the seller's acknowledgement through the foundation's neutral
+binding verifier and retains exact request/response bytes under the negotiation.
+If surrender is selected, its embedded mediation `SignedDeliveryEndClaim` binds
+payer cause, delivered=true and the receipt instant. The buyer can file that
+claim as concurrence with exact Agreement and evidence. An uncertain response is
+resolved by same-key surrender retry before fixing the claim; an earlier seller
+end suppresses automatic payer filing. Original case ownership/adoption and
+separate pending/unknown progress survive restart. Payment and dispute calls
+report their own authority's answers; the storefront is no payment-command relay.
+
+Stop-then-hint with priced notice, rate-stop outage retry and buyer watchdog
+execution require the rate adapter. The common retry/evidence structure does not
+claim that production rate path exists. The display separates delivery
+acknowledgement, payment effect and case protection.
+
+The buyer keeps signed acceptance before commitment, peer/site/authority bytes and
+its own delivery/access observations separately from seller assertions. It verifies
+a site report directly only with independent site trust; otherwise it keeps the
+report for adjudication. Prune refreshes each deal's records before applying the
+frozen Agreement window; unavailable/incomplete observations and adapter-less
+deals retain evidence. Export preserves exact bytes and superseded commitments.
+API credits checks full authority identity at selection/approval but composes no
+buyer lifecycle evidence/filing path. See
+[buyer surrender and cases](../deal-lifecycle/architecture.md#buyer-surrender-and-cases).
 
 ## Current limits
 

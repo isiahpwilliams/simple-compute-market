@@ -16,9 +16,9 @@ dependencies = [
     "arkhai-kit-negotiation-runtime>=0.6.0",
     "arkhai-kit-policy>=0.6.0",
     "arkhai-kit-resource-pools>=0.7.0",
-    "arkhai-kit-settlement-runtime>=0.4.0",
+    "arkhai-kit-settlement-runtime>=0.7.0",
     "arkhai-kit-site-client>=0.11.0",
-    "arkhai-kit-storefront>=0.8.0",
+    "arkhai-kit-storefront>=0.10.0",
     # The authentication module reads the request and signs the response.
     "fastapi~=0.115.8",
     "httpx>=0.27",

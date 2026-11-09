@@ -17,8 +17,11 @@ machine's hardware. Both are declared through the site's own administration.
 
 Every ordinary read returns a ``HostResponse``, which names each protected value
 and its scheme but never carries its ciphertext; the persistence row never leaves
-this module. Only ``lookup``, the read made immediately before execution, returns
-the full protected envelope, inside an ``ExecutionHost``.
+this module. Only the internal reads return the full protected envelope, inside
+an ``ExecutionHost``: ``lookup``, made immediately before execution, and
+``execution_hosts``, which an executor's readiness reads to check each host as
+execution would. No route serves either, and every API, log, and error surface
+carries a protected value's scheme only.
 """
 
 from __future__ import annotations
@@ -160,9 +163,15 @@ def _view(host: Host) -> HostResponse:
     )
 
 
+def _execution_host(host: Host) -> ExecutionHost:
+    """A host as an internal read returns it: its full protected envelope."""
+    return ExecutionHost(host_id=host.host_id, pool_id=host.pool_id, connection=host.connection())
+
+
 class HostAuthority:
-    """CRUD, lookup, inventory application, and the session-scoped write a host
-    definitions document applies through, for the ``hosts`` registry."""
+    """CRUD, the internal reads for execution and readiness, inventory
+    application, and the session-scoped write a host definitions document
+    applies through, for the ``hosts`` registry."""
 
     def __init__(
         self,
@@ -209,14 +218,41 @@ class HostAuthority:
             host = db.query(Host).filter(Host.host_id == host_id).one_or_none()
             if host is None:
                 return None
-            return ExecutionHost(
-                host_id=host.host_id, pool_id=host.pool_id, connection=host.connection()
-            )
+            return _execution_host(host)
+
+    def execution_hosts(self, *, enabled_only: bool = True) -> list[ExecutionHost]:
+        """Every host as an executor reads it, for that executor's readiness.
+
+        One query, ordered by ``host_id``; with ``enabled_only``, disabled hosts
+        are left out. Each host carries its full connection envelope, protected
+        values included, so the executor can check each connection exactly as it
+        would execute against it. No route serves this read.
+        """
+        with self._session_factory() as db:
+            query = db.query(Host)
+            if enabled_only:
+                query = query.filter(Host.enabled.is_(True))
+            return [_execution_host(host) for host in query.order_by(Host.host_id)]
 
     @staticmethod
     def host_ids_in_session(db: Session) -> list[str]:
         """Every registered host's id, in the caller's session, ordered."""
         return [host_id for (host_id,) in db.query(Host.host_id).order_by(Host.host_id)]
+
+    def deliverable_host_ids(self, db: Session) -> frozenset[str]:
+        """The hosts taking new delivery: every registered, enabled host's id.
+
+        Read in the caller's session, so site admission, scheduling, and the
+        site's offered read judge a declaration against the host state of the
+        transaction that decides. A host with no record is never in it, so a
+        declaration naming an unregistered host has no usable host. This is
+        the only host fact those layers learn: identifiers, never a
+        connection.
+        """
+        return frozenset(
+            host_id
+            for (host_id,) in db.query(Host.host_id).filter(Host.enabled.is_(True))
+        )
 
     def host_definitions(self) -> list[HostDefinition]:
         """Every host a host definitions entry can state, ordered by ``host_id``.
@@ -389,7 +425,13 @@ class HostAuthority:
 
     def disable_host(self, host_id: str) -> HostResponse:
         """Exclude a host from new work; it is never deleted, so job history
-        naming it stays resolvable."""
+        naming it stays resolvable.
+
+        A disabled host leaves ``deliverable_host_ids``, so no declaration
+        naming it, in a backed pool whose provider needs a host, is admitted,
+        placed, or offered; work already placed on it keeps it, and its create
+        is refused at submission until it is enabled.
+        """
         return self._set_enabled(host_id, False)
 
     def apply_inventory(self, entries: Sequence[InventoryHost]) -> list[HostResponse]:

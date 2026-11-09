@@ -10,9 +10,10 @@ import uuid
 import copy
 
 from market_core.schemas import RateValue, SettlementOption, derive_settlement_option_id
-from market_arkhai_payments.fixtures import FakePaymentsClient, build_signed_receipt
+from market_arkhai_payments.fixtures import FakePaymentsClient, build_signed_receipt, dispute_lifecycle
 from arkhai_bare_metal_storefront.models import BareMetalSettleRequest
 from arkhai_bare_metal_storefront.fulfillment_service import BareMetalFulfillmentError
+from market_deal_servicing.journal import stable_ref
 from market_identity import Ed25519Signer
 from arkhai_bare_metal_storefront.settlement_composition import (
     BareMetalStorefrontSettlementComposition,
@@ -25,6 +26,11 @@ from storefront_client import StorefrontClient, StorefrontClientError
 from storefront_client.models import SettleResponse, SettleStatusResponse
 from market_core.schemas import Agreement, EscrowProposal, SettlementPlan
 from market_core import VersionedEnvelope
+from compute_provisioning_contracts import (
+    FulfillmentAcceptanceResponse,
+    FulfillmentScheduleResponse,
+    FulfillmentStatusResponse,
+)
 from arkhai_bare_metal_storefront.settlement_stages import legacy_alkahest_option
 from datetime import datetime, timezone
 from market_settlement_runtime import derive_obligation_ref
@@ -199,8 +205,9 @@ def _alkahest(escrow: EscrowOnChain | None = None):
 
 
 async def _accepted_runtime(
-    path: str, verifier, *, commit_plan: bool = True
+    path: str, verifier, *, commit_plan: bool = True, start: datetime | None = None
 ) -> tuple[BareMetalStorefrontRuntime, str]:
+    """An accepted Alkahest deal for one hour from ``start``, by default now."""
     domain = get_market_domain_contract()
     db = SQLiteClient(path, domain=domain)
     runtime = BareMetalStorefrontRuntime(
@@ -267,9 +274,9 @@ async def _accepted_runtime(
         settlement=settlement,
         settlement_params={},
         amount=100,
-        asset=settlement.asset,
+        asset=settlement.price_asset,
         duration_seconds=3600,
-        start_utc=now,
+        start_utc=start.isoformat() if start is not None else now,
         provision_terms=message.model_dump(mode="json", exclude_none=True),
         accepted_at=now,
     )
@@ -553,11 +560,24 @@ class _CapacityClient:
         self.reservation_sites = {}
         self.reserve_calls = []
         self.commit_calls = []
+        self.activations = []
         self.committed_window: tuple[str, str] | None = None
+        self.activated_at: str | None = None
 
     def site(self, site_id):
         assert site_id == "site-a"
         return self.site_client
+
+    async def activate_lease(self, **request):
+        """Write-once, as the site's: the first activation's instant is kept."""
+        self.activations.append(request)
+        if self.activated_at is None:
+            self.activated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        return {
+            "capacity_reservation_id": request["capacity_reservation_id"],
+            "activated_at_utc": self.activated_at,
+            "site": request["site_id"],
+        }
 
     async def reserve(self, **request):
         self.reserve_calls.append(request)
@@ -604,7 +624,7 @@ class _ProvisioningClient:
         """The resource as a major-3 schedule response names it: the host its
         declaration names, and its machine among its top-level attributes,
         with no copy of either in its publication settings."""
-        return SimpleNamespace(
+        return FulfillmentScheduleResponse(
             settlement_resource_id="settlement-resource-a",
             pool_id="pool-a",
             resource_kind="compute.bare-metal",
@@ -615,7 +635,7 @@ class _ProvisioningClient:
 
     async def begin_fulfillment(self, body):
         self.begin_calls.append(body)
-        return SimpleNamespace(
+        return FulfillmentAcceptanceResponse(
             fulfillment_id="fulfillment-a",
             capacity_reservation_id="reservation-a",
             state="dispatch_pending",
@@ -623,10 +643,10 @@ class _ProvisioningClient:
 
     async def get_fulfillment_status(self, fulfillment_id, **request):
         assert fulfillment_id == "fulfillment-a"
-        return SimpleNamespace(
+        return FulfillmentStatusResponse(
+            fulfillment_id=fulfillment_id,
+            capacity_reservation_id="reservation-a",
             state="torn_down" if self.torn_down else "active",
-            failure_reason=None,
-            failure_message=None,
         )
 
     async def get_fulfillment_result(self, fulfillment_id, **request):
@@ -736,7 +756,7 @@ async def test_alkahest_recovery_refuses_non_active_journal_before_physical_effe
     )
     restarted = replace(runtime, db=SQLiteClient(path, domain=runtime.domain))
     with pytest.raises(BareMetalFulfillmentError, match="no longer active"):
-        await restarted.fulfillment_service().begin(
+        await restarted.fulfillment_service().deliver(
             negotiation_id=negotiation_id, buyer_principal=BUYER_SIGNER.identity
         )
     assert await restarted.db.load_bare_metal_fulfillment_lifecycle(
@@ -778,7 +798,7 @@ async def test_alkahest_recovery_rechecks_chain_before_physical_effects(
     restarted = replace(runtime, db=SQLiteClient(path, domain=runtime.domain))
     source_valid = False
     with pytest.raises(BareMetalFulfillmentError, match="stored escrow source"):
-        await restarted.fulfillment_service().begin(
+        await restarted.fulfillment_service().deliver(
             negotiation_id=negotiation_id, buyer_principal=BUYER_SIGNER.identity
         )
     assert await restarted.db.load_bare_metal_fulfillment_lifecycle(
@@ -788,14 +808,16 @@ async def test_alkahest_recovery_rechecks_chain_before_physical_effects(
     assert provisioning.begin_calls == []
 
     source_valid = True
-    first = await restarted.fulfillment_service().begin(
+    first = await restarted.fulfillment_service().deliver(
         negotiation_id=negotiation_id, buyer_principal=BUYER_SIGNER.identity
     )
-    repeated = await restarted.fulfillment_service().begin(
+    repeated = await restarted.fulfillment_service().deliver(
         negotiation_id=negotiation_id, buyer_principal=BUYER_SIGNER.identity
     )
     assert repeated == first
     assert len(capacity.reserve_calls) == len(provisioning.begin_calls) == 1
+    # Verification and every drive, the refused one included, recheck the
+    # chain before any protected step.
     assert len(calls) == 4
     assert all(call["escrow_uid"] == ESCROW_UID for call in calls)
     thread = await restarted.db.load_negotiation_thread_row(negotiation_id=negotiation_id)
@@ -868,7 +890,7 @@ async def test_http_fulfillment_restarts_on_recorded_site_and_redacts_result(
 
     assert settled.status == "settlement_verified"
     assert ready["state"] == "active"
-    assert tearing_down["state"] == "terminating"
+    assert tearing_down["delivery"]["progress"] == "tearing_down"
     assert torn_down["state"] == "torn_down"
     assert recorded == {"capacity_reservation_id": "reservation-a", "state": "released"}
     assert released["state"] == "released"
@@ -879,7 +901,7 @@ async def test_http_fulfillment_restarts_on_recorded_site_and_redacts_result(
     assert capacity.reserve_calls[0]["claim"]["gpu_model"] == LISTING_HARDWARE["gpu_model"]
     assert capacity.reserve_calls[0]["claim"]["dimensions"] == {"units": 1}
     assert len(provisioning.begin_calls) == 1
-    assert provisioning.terminations == [("reservation-a", "buyer_teardown")]
+    assert provisioning.terminations == [("reservation-a", stable_ref(negotiation_id, "terminate", "terminate"))]
     assert provisioning.teardown_calls == []
     # The storefront never releases capacity itself.
     assert restarted_capacity.site_client.releases == []
@@ -1123,13 +1145,15 @@ PAYER = "00000000-0000-4000-8000-000000000011"
 PAYEE = "00000000-0000-4000-8000-000000000012"
 
 
-async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
-    tmp_path,
-):
+async def _payment_deal(tmp_path, *, provisioning=None) -> SimpleNamespace:
+    """An accepted ``arkhai.payments.v1`` deal whose payment is not yet
+    approved: its storefront runtime, the parties' signers, the payments fake,
+    and the settlement data acceptance derived. Development keys only; never
+    used on any network."""
     buyer = Ed25519Signer(bytes.fromhex("66" * 32))
     seller = Ed25519Signer(bytes.fromhex("77" * 32))
     receipt_signer = Ed25519Signer(bytes.fromhex("55" * 32))
-    payments = FakePaymentsClient()
+    payments = FakePaymentsClient(signer=receipt_signer)
     domain = get_market_domain_contract()
     db = SQLiteClient(str(tmp_path / "payment.db"), domain=domain)
     composition = BareMetalStorefrontSettlementComposition.from_raw_config(
@@ -1141,26 +1165,21 @@ async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
                 "development_auth": True,
                 "service_identity": receipt_signer.identity.model_dump(mode="json"),
                 "fee_bps": 0,
-                "dispute_authority": "00000000-0000-4000-8000-000000000013",
             },
         },
         payments_client_for_owner=payments,
     )
-    params = {
-        "payee_account": PAYEE,
-        "asset": "USD/2",
-        "window": "PT1H",
-        "deposit_agreement": False,
-    }
+    params = {"payee_account": PAYEE, "window": "PT1H", "deposit_agreement": False}
     rates = [RateValue(field="amount", per="hour", value=100)]
     option = SettlementOption(
         option_id=derive_settlement_option_id(
-            mechanism="arkhai.payments.v1", asset="USD/2", rates=rates, params=params
+            price={"asset": "USD/2", "rates": rates},
+            settlement={"schema": "arkhai.payments.v1", **(params or {})},
+            lifecycle=dispute_lifecycle("00000000-0000-4000-8000-000000000013"),
         ),
-        mechanism="arkhai.payments.v1",
-        asset="USD/2",
-        rates=rates,
-        params=params,
+        price={"asset": "USD/2", "rates": rates},
+        settlement={"schema": "arkhai.payments.v1", **(params or {})},
+        lifecycle=dispute_lifecycle("00000000-0000-4000-8000-000000000013"),
     )
     await db.upsert_bare_metal_listing(
         listing_id="listing-payment",
@@ -1183,7 +1202,8 @@ async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
         accepted_escrows=[],
         settlement_options=[option.model_dump(mode="json")],
     )
-    capacity, provisioning = _CapacityClient(), _ProvisioningClient()
+    capacity = _CapacityClient()
+    provisioning = provisioning or _ProvisioningClient()
     runtime = BareMetalStorefrontRuntime(
         db=db,
         domain=domain,
@@ -1237,6 +1257,29 @@ async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
         agreement_bytes=agreement_bytes,
         settlement_data=data.to_wire(),
     )
+    return SimpleNamespace(
+        runtime=runtime,
+        db=db,
+        domain=domain,
+        negotiation_id=negotiation_id,
+        buyer=buyer,
+        seller=seller,
+        receipt_signer=receipt_signer,
+        payments=payments,
+        data=data,
+        capacity=capacity,
+        provisioning=provisioning,
+    )
+
+
+async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
+    tmp_path,
+):
+    deal = await _payment_deal(tmp_path)
+    runtime, db, domain = deal.runtime, deal.db, deal.domain
+    negotiation_id, buyer, data = deal.negotiation_id, deal.buyer, deal.data
+    payments, receipt_signer = deal.payments, deal.receipt_signer
+    capacity, provisioning = deal.capacity, deal.provisioning
     request = BareMetalSettleRequest(
         negotiation_id=negotiation_id, buyer_principal=buyer.identity
     )
@@ -1246,7 +1289,7 @@ async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
     )
     assert (pending.status_code, pending.payload["status"]) == (202, "pending")
     with pytest.raises(BareMetalFulfillmentError, match="not authoritatively verified"):
-        await delivery.begin(
+        await delivery.deliver(
             negotiation_id=negotiation_id, buyer_principal=buyer.identity
         )
     assert capacity.reserve_calls == [] and provisioning.begin_calls == []
@@ -1257,11 +1300,17 @@ async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
     )
     assert verified.status_code == 200
     assert verified.payload["settlement_ref"] == data.transaction_id
-    # Settlement started delivery itself; a later begin is the same delivery.
-    first = await delivery.begin(
+    # Settlement drove delivery itself; a later drive is the same delivery.
+    first = await delivery.deliver(
         negotiation_id=negotiation_id, buyer_principal=buyer.identity
     )
     assert len(capacity.reserve_calls) == len(provisioning.begin_calls) == 1
+    # Activated before billing start and availability; the payment deal has no
+    # step after availability but recording its result, so it converges.
+    assert len(capacity.activations) == 1
+    assert first.public_result == {
+        "outcome": "converged", "disposition": "fulfilled", "available": True,
+    }
 
     original = await runtime.settlement_service().verified_evidence(
         negotiation_id=negotiation_id, buyer_principal=buyer.identity
@@ -1282,7 +1331,7 @@ async def test_payment_evidence_gates_replay_and_rechecks_receipt_after_restart(
         )
 
     restarted = replace(runtime, db=SQLiteClient(db.db_path, domain=domain))
-    repeated = await restarted.fulfillment_service().begin(
+    repeated = await restarted.fulfillment_service().deliver(
         negotiation_id=negotiation_id, buyer_principal=buyer.identity
     )
     ready = await restarted.fulfillment_service().status(

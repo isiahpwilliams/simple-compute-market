@@ -6,7 +6,9 @@ The [normative contract](spec.md) defines established deployment, persistence, m
 
 Registry, seller stack, and buyer are independently operable roles. A buyer is normally a one-shot CLI or long-running agent, not a service required to keep the seller stack healthy. A seller composition owns its storefront and physical or quota authorities; a registry may be operated separately.
 
-Local development composes domain stacks with development-only dependencies such as the local chain. Deployment charts compose the same roles conditionally without making test fixtures part of the production authority model.
+Local development composes domain stacks with development-only dependencies such as the local chain. Deployment charts compose the same roles conditionally without making test fixtures part of the production authority model. The payments lane double is such a fixture: the end-to-end lanes run it, and the local release enables its subchart through its own values so that payments are configured through exactly the values a deployment supplies — agent configuration, the runtime secret overlay, the CA bundle option — never through a development-only mode. Release values never enable it.
+
+Each stack's configuration is in committed overlay, profile and secret-overlay files; a Makefile selects which configuration loads and carries none of it, and a base Compose file holds only what its topology fixes, with no committed fallback for a credential or definition document, so a base stack without its overlay refuses to start rather than running on development values.
 
 One umbrella release may instantiate the schema-opaque registry role more than
 once. The primary `registry` instance selects the compute filter specification;
@@ -50,6 +52,8 @@ For compute provisioning and e2e, profile-based Dynaconf construction is a found
 
 Settings and secret files, supported dotenv behavior, environment prefixes, missing-file tolerance, typed wrappers, validators, and exported accessors remain consumer policy. Compute provisioning therefore filters absent YAML includes before construction and uses normal Dynaconf `.env` discovery without adding `.env.local`, while e2e preserves every requested include path, adds its project `.secrets.toml`, and points dotenv loading at the project `.env`. Dotenv-sourced prefixed values participate in Dynaconf's environment layer, with already-set process variables taking precedence. Keeping those differences above the shared bootstrap prevents a code-deduplication change from becoming an implicit configuration migration. Unsupported constructor arguments that never affected runtime behavior are not promoted into the shared contract.
 
+The registry takes the same resolver variables without the shared bootstrap. Its settings are a `pydantic_settings` class, not Dynaconf, so it parses `ACTIVE_PROFILES` itself and layers `config-<profile>.env` dotenv files from `CONFIG_DIRECTORY` after its default dotenv files, a later profile winning and the process environment above every file. The files therefore have provisioning's selection and layering but not its format; moving the registry onto the shared bootstrap would change only the profiles' format. Its chart renders its values into one such profile and layers an operator's `secretProfile` after it, as the provisioning chart renders its YAML profile.
+
 ## Bare-metal seller artifact
 
 The bare-metal storefront is a separately installable role distribution and dedicated image. The image installs only staged wheels, runs as an unprivileged user, persists seller state and reservation-to-site routing tables in one role-owned SQLite database, and invokes the `bare-metal-storefront` command. It includes the bare-metal domain and shared storefront, identity, policy, site-client, settlement-runtime, and compute-provisioning client boundaries; it does not include or import the VM storefront implementation.
@@ -85,11 +89,11 @@ Rollback is valid only before the identity schema cutover and before authenticat
 
 ## Settlement configuration cutover
 
-Role TOML, generated defaults and references, environment overlays, Helm values, Compose, and automation all consume the same typed `[Settlement]` hierarchy; the storefront charts pass it through with null-valued keys removed rather than rendering it key by key. A values-file `null` means removal independently of Helm's merge behavior; the chart's schema accepts it for accepted keys while continuing to refuse secret and retired keys. See [the storefront chart contract](spec.md#requirement-a-storefront-chart-passes-service-configuration-through) and [operator configuration](../../../docs/development/DEPLOYMENT_AND_CONFIG.md#storefront-agents-pass-through-configuration). Public mechanism policy and trust pins may render through ordinary configuration; private signer or wallet material comes from approved Secret overlays. Payment-provider, administrator, webhook, ledger database, and service-migration settings remain owned by the payments service and are not marketplace deployment inputs.
+Role TOML, generated defaults and references, environment overlays, Helm values, Compose, and automation all consume the same typed `[Settlement]` hierarchy; the storefront charts pass it through with null-valued keys removed rather than rendering it key by key. A values-file `null` means removal independently of Helm's merge behavior; the chart's schema accepts it for accepted keys while continuing to refuse secret and retired keys. See [the storefront chart contract](spec.md#requirement-a-storefront-chart-passes-service-configuration-through) and [operator configuration](../../../docs/development/DEPLOYMENT_AND_CONFIG.md#storefront-agents-pass-through-configuration). Public mechanism policy and trust pins may render through ordinary configuration; private signer, wallet, and a storefront's payments-key and dispute-credential material come from approved Secret overlays, never from an environment variable a configuration names; only the buyer's payments key is named by variable, for its own provider. Payment-provider, administrator, webhook, ledger database, and service-migration settings remain owned by the payments service and are not marketplace deployment inputs.
 
 The settlement cutover deliberately rejects runtime aliases. Migration tooling is deployed first, then operators preview and back up every affected role file and overlay, quiesce publication and configuration automation, migrate and validate the complete population, and activate the matching image and configuration together. A schema/image mismatch fails before publication or settlement mutation. Rollback restores prior artifacts and backups only before the new configuration is activated; after new effects begin, recovery rolls forward from pinned plans and operation journals.
 
-Typed settlement metadata generates role-appropriate templates, edit validation, environment schema fragments, and reference output. The VM storefront chart's values schema carries one generated definition that refuses secret-marked, role-inapplicable, and unknown typed fields under an agent's pass-through configuration, in any spelling, with no defaults and no required fields. Drift checks keep those surfaces aligned while omitting secrets and role-inapplicable fields.
+Typed settlement metadata generates role-appropriate templates, edit validation, environment schema fragments, and reference output. Each storefront chart's values schema carries a generated definition that refuses secret-marked, role-inapplicable, and unknown typed fields under the pass-through configuration, in any spelling, with no defaults and no required fields; the storefronts' generators also refuse the payments `api_key_env` and every `[[DisputeCredential]]` entry there, since no variable the chart sets holds a key and a credential entry is incomplete without its token. Drift checks keep those surfaces aligned while omitting secrets and role-inapplicable fields.
 
 
 
@@ -112,13 +116,53 @@ recovery using those immutable bindings.
 
 ## Arkhai payment consumers
 
-The independently operated payments service owns its ledger, transactions, hold release, fees, disputes, and provider operations. SCM installs `arkhai-kit-arkhai-payments` from `.dist`; its wire models come from the published JSON Schema rather than service implementation imports.
+The independently operated payments service owns ledger, transactions, hold
+release/extensions, fees and provider operations. The independent Agreement-named
+dispute authority owns cases, outcomes and their payment effects. SCM installs `arkhai-kit-arkhai-payments` from `.dist`; its wire models come from the published JSON Schema rather than service implementation imports.
 
-Buyer and seller roles configure the trusted service origin, Ed25519 receipt identity, fee and dispute policy, and a credential environment-variable name under `[Settlement.arkhai_payments]`. WorkOS user-scoped API keys reach only the owning process, separately from marketplace signer Secrets. HTTPS is required outside loopback. Generated public config and images contain no resolved API key, provider object, or payment-service persistence.
+Buyer and seller roles configure trusted payment origin, Ed25519 receipt identity,
+fee policy, an optional CA bundle path and the API key under
+`[Settlement.arkhai_payments]`. A storefront states its key as `api_key` in its
+secret overlay, which a deployment supplies from a Secret; a buyer names the
+environment variable its provider reads with `api_key_env`. One key resolution
+serves the client, readiness and the payments check, and the CA bundle is trusted
+by the payments client alone, never by replacing the process's trust store. Ordered
+root `[[Dispute]]` preferences and separate full-identity `[[DisputeCredential]]`
+bindings configure dispute participation; a storefront's credential entries, token
+included, live in its secret overlay, and the mediation client receives the token
+the entry resolved rather than reading the environment itself. Because readiness
+never contacts the payments service, each storefront CLI's `check-payments` reads
+the seller's own balance from the storefront's container, proving its CA mount,
+key and service URL together; the storefront charts render it as a Helm test.
+Signed registry descriptors may recommend authorities; buyers explicitly opt in,
+local identity vetoes prevail and recommendations stay registry-specific. WorkOS user-scoped API keys reach only the owning process, separately from marketplace signer Secrets. HTTPS is required outside loopback. Generated public config and images contain no resolved API key, provider object, or payment-service persistence.
 
 Storefront-owned migrations persist exact Agreement bytes and opaque settlement data together in negotiation threads; domain receipt and physical/grant progress remain separately role-owned. VM and bare-metal trust the accepted selected-site provisioner independently of payment trust. API-credit deployments retain a separate credits authority and gated application. Payment-only Ed25519 buyers and sellers require no wallet or chain configuration.
 
 Legacy Stripe consumer settings are rejected, not mapped to Arkhai accounts, mandates, or transaction IDs. Accepted Arkhai recovery uses its original Agreement, mandate, transaction identity, and domain progress rather than a priority fallback.
+
+## Lifecycle state and coordinated rollout
+
+Seller evidence, end/admission/effect journals and cursors live in the storefront's
+own database and ordered migrations. Buyer exact-byte evidence and retry plans
+live under a composition-supplied profile-adjacent root, not in replay caches.
+Site event/outbox records live in provisioning persistence, independently of
+capacity-release acknowledgements. These stores contain evidence or physical
+progress, never a copy of authority ledger/case state to decide money from.
+
+The option envelope is a forward-only wire boundary: coordinate registries,
+storefronts and buyer clients, republish every mechanism's listings and discard
+incompatible disposable accepted state only with explicit operator ownership.
+No old-key reader or priority failover reinterprets an accepted deal. Site/report
+receiver and buyer/end endpoint pairs upgrade together; there is no legacy
+teardown fallback. Unsupported report pushes park for the original peer and
+remain recoverable by authenticated pull until explicit resumption after upgrade.
+
+Payment receipt pins support bounded current/retiring identity windows. Dispute
+origin/record-key pins do not: accepted deals remain bound to the old origin/key,
+including unbounded case life. Public renderings contain public trust projections,
+not credential references or resolved secrets. See
+[operator authority configuration](../../../docs/development/DEPLOYMENT_AND_CONFIG.md#dispute-authority-preferences).
 
 ## Current limits
 

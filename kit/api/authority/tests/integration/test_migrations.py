@@ -71,7 +71,9 @@ class TestRunMigrationsFreshBootstrap:
             ("20260922_004_pool_advertisement_and_backing",),
             ("20261005_005_reservation_release_requested_at",),
             ("20261028_006_retired_reservation_states",),
-            ("20261030_007_grant_terms",),
+            ("20261106_007_reservation_activated_at",),
+            ("20261106_008_reservation_placement_key",),
+            ("20261109_009_grant_terms",),
         ]
 
     def test_a_reservation_table_from_before_release_timing_gains_the_column(self):
@@ -102,6 +104,175 @@ class TestRunMigrationsFreshBootstrap:
         assert "release_requested_at" in columns
 
 
+_ACTIVATION_MIGRATION_ID = "20261106_007_reservation_activated_at"
+
+_RESERVATION_COLUMNS = (
+    "capacity_reservation_id, units, state, offering_mode, hold_expires_at, "
+    "executor_target, lease_start_utc, lease_end_utc, release_requested_at, "
+    "released_at"
+)
+
+# Quota grants are open-ended holds, so no row carries a lease end.
+_RESERVATIONS_BEFORE_ACTIVATION = (
+    ("r-leased", 1, "leased", "api_credits", None, "grant-leased",
+     "2026-11-01T00:00:00+00:00", None, None, None),
+    ("r-releasing", 2, "releasing", "api_credits", None, "grant-releasing",
+     "2026-10-01T00:00:00+00:00", None, "2026-11-01T00:00:05+00:00", None),
+    ("r-released", 1, "released", "api_credits", "2026-08-31T00:05:00+00:00",
+     None, "2026-09-01T00:00:00+00:00", None,
+     "2026-10-01T00:00:05+00:00", "2026-10-01T00:10:00+00:00"),
+)
+
+
+def _database_before_activation():
+    """A migrated database as it stood before the activation column, holding
+    leased, releasing and released reservations."""
+    engine = _sqlite_memory_engine()
+    run_migrations(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE capacity_reservations DROP COLUMN activated_at_utc")
+        )
+        connection.execute(
+            text("DELETE FROM schema_migrations WHERE id = :id"),
+            {"id": _ACTIVATION_MIGRATION_ID},
+        )
+        for row in _RESERVATIONS_BEFORE_ACTIVATION:
+            connection.execute(
+                text(
+                    f"INSERT INTO capacity_reservations ({_RESERVATION_COLUMNS}) "
+                    "VALUES (:id, :units, :state, :mode, :hold, :target, "
+                    ":start, :end, :requested, :released)"
+                ),
+                dict(zip(
+                    ("id", "units", "state", "mode", "hold", "target", "start",
+                     "end", "requested", "released"),
+                    row,
+                )),
+            )
+    return engine
+
+
+def _reservation_rows(engine) -> set[tuple]:
+    with engine.connect() as connection:
+        return {
+            tuple(row)
+            for row in connection.execute(text(
+                f"SELECT {_RESERVATION_COLUMNS}, activated_at_utc "
+                "FROM capacity_reservations"
+            ))
+        }
+
+
+class TestTheActivationColumn:
+    """The site ledger this service hosts maps a lease's activation instant on
+    the reservation row it shares with every quota grant."""
+
+    def test_existing_reservations_migrate_with_no_activation_recorded(self):
+        engine = _database_before_activation()
+
+        run_migrations(engine)
+
+        expected = {row + (None,) for row in _RESERVATIONS_BEFORE_ACTIVATION}
+        assert _reservation_rows(engine) == expected
+        check_schema_version(engine)
+
+        run_migrations(engine)
+
+        assert _reservation_rows(engine) == expected
+
+    def test_a_database_already_carrying_the_column_migrates_unchanged(self):
+        engine = _database_before_activation()
+        with engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE capacity_reservations ADD COLUMN activated_at_utc VARCHAR"
+            ))
+            connection.execute(text(
+                "UPDATE capacity_reservations "
+                "SET activated_at_utc = '2026-11-01T00:07:00+00:00' "
+                "WHERE capacity_reservation_id = 'r-leased'"
+            ))
+        before = _reservation_rows(engine)
+
+        run_migrations(engine)
+
+        assert _reservation_rows(engine) == before
+        columns = [
+            column["name"]
+            for column in inspect(engine).get_columns("capacity_reservations")
+        ]
+        assert columns.count("activated_at_utc") == 1
+
+
+_PLACEMENT_MIGRATION_ID = "20261106_008_reservation_placement_key"
+
+
+def _database_before_placement_keys():
+    """A migrated database as it stood before reserve took a placement key,
+    holding leased, releasing and released reservations."""
+    engine = _sqlite_memory_engine()
+    run_migrations(engine)
+    with engine.begin() as connection:
+        connection.execute(text("DROP INDEX ix_capacity_reservations_placement_key"))
+        connection.execute(
+            text("ALTER TABLE capacity_reservations DROP COLUMN placement_key")
+        )
+        connection.execute(
+            text("ALTER TABLE capacity_reservations DROP COLUMN placement_request")
+        )
+        connection.execute(
+            text("DELETE FROM schema_migrations WHERE id = :id"),
+            {"id": _PLACEMENT_MIGRATION_ID},
+        )
+        for row in _RESERVATIONS_BEFORE_ACTIVATION:
+            connection.execute(
+                text(
+                    f"INSERT INTO capacity_reservations ({_RESERVATION_COLUMNS}) "
+                    "VALUES (:id, :units, :state, :mode, :hold, :target, "
+                    ":start, :end, :requested, :released)"
+                ),
+                dict(zip(
+                    ("id", "units", "state", "mode", "hold", "target", "start",
+                     "end", "requested", "released"),
+                    row,
+                )),
+            )
+    return engine
+
+
+class TestThePlacementKey:
+    """The site ledger this service hosts maps a reserve's placement key, under
+    a unique index, on the row it shares with every quota grant."""
+
+    def test_existing_reservations_migrate_with_no_placement_key(self):
+        engine = _database_before_placement_keys()
+        expected = {row + (None, None) for row in _RESERVATIONS_BEFORE_ACTIVATION}
+
+        def rows() -> set[tuple]:
+            with engine.connect() as connection:
+                return {
+                    tuple(row)
+                    for row in connection.execute(text(
+                        f"SELECT {_RESERVATION_COLUMNS}, placement_key, "
+                        "placement_request FROM capacity_reservations"
+                    ))
+                }
+
+        run_migrations(engine)
+
+        assert rows() == expected
+        check_schema_version(engine)
+        indexes = {
+            index["name"]: index
+            for index in inspect(engine).get_indexes("capacity_reservations")
+        }
+        assert indexes["ix_capacity_reservations_placement_key"]["unique"]
+
+        run_migrations(engine)
+
+        assert rows() == expected
+
+
 class TestRunMigrationsIsIdempotent:
     def test_running_twice_does_not_error_or_duplicate_bookkeeping(self):
         engine = _sqlite_memory_engine()
@@ -112,7 +283,7 @@ class TestRunMigrationsIsIdempotent:
             count = connection.execute(
                 text("SELECT COUNT(*) FROM schema_migrations")
             ).scalar()
-        assert count == 7
+        assert count == 9
 
 
 class TestAdoptingAPreCreateAllOnlyDatabase:
@@ -320,7 +491,7 @@ class TestGrantTermsUpgrade:
 
     def _previous_head(self, monkeypatch):
         engine = _sqlite_memory_engine()
-        previous = tuple(m for m in migrations_module._MIGRATIONS if m.id != "20261030_007_grant_terms")
+        previous = tuple(m for m in migrations_module._MIGRATIONS if m.id != "20261109_009_grant_terms")
         Base.metadata.create_all(
             bind=engine, tables=[t for t in Base.metadata.sorted_tables if t.name != "grant_terms"]
         )

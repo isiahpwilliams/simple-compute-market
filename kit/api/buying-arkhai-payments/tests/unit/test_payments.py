@@ -26,11 +26,12 @@ def test_payment_selection_attaches_buyer_account_without_alkahest_resources() -
     class Policy:
         config = Config()
 
-        def compatible_options(self, advertised):
+        def compatible_options(self, advertised, *, listing):
+            assert listing["settlement_options"] == list(advertised)
             assert tuple(advertised) == ({"option_id": option_id},)
             registration = SimpleNamespace(mechanism_id=ARKHAI_PAYMENTS_MECHANISM)
             option = SimpleNamespace(
-                mechanism=ARKHAI_PAYMENTS_MECHANISM, option_id=option_id
+                settlement_schema=ARKHAI_PAYMENTS_MECHANISM, option_id=option_id
             )
             return ((registration, option),)
 
@@ -43,9 +44,9 @@ def test_payment_selection_attaches_buyer_account_without_alkahest_resources() -
     )
 
     assert selection is not None
-    assert selection.mechanism == ARKHAI_PAYMENTS_MECHANISM
+    assert selection.settlement_schema == ARKHAI_PAYMENTS_MECHANISM
     assert selection.option_id == option_id
-    assert selection.params == {"payer_account": account}
+    assert selection.settlement_params == {"payer_account": account}
 
 
 def test_the_payer_account_is_read_from_its_section() -> None:
@@ -87,6 +88,7 @@ def test_a_seller_error_body_never_reaches_the_settlement_events_or_reason(monke
     result = payments.settle_negotiation(
         negotiation=SimpleNamespace(outcome=outcome, match={"storefront_url": "http://seller"}, attempts=1),
         buyer=None, buy_config=None, settlement_config=None, payer_account="p",
+        dispute_interfaces=frozenset(),
         poll_interval=0, total_timeout=0, on_event=lambda event, fields: events.append((event, fields)),
     )
 

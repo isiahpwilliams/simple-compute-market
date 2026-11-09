@@ -42,11 +42,17 @@ recommendation written out. Do not use a multiple-choice selector, even where a
 skill names one: a list of buttons invites picking an option over thinking the
 problem through and writing the answer that fits it.
 
+### Amend a rule or comply
+
+When work conflicts with a written rule, amend the rule first or make the work
+comply; never record a private exception to it. The testing levels, for instance,
+change only by changing `docs/development/TESTING.md`.
+
 ## Documentation ownership
 
 - `docs/development/ARCHITECTURE.md` is the repository-wide architecture reference: system shape, dependency layers, authority boundaries, shared vocabulary, major flows, deployment topology, packaging rules, and testing philosophy.
 - `openspec/specs/<subsystem>/spec.md` contains authoritative current subsystem behavior, invariants, ownership, and lifecycle semantics.
-- `openspec/specs/<subsystem>/architecture.md` may contain durable current-state conceptual models, design motivation, trade-offs, relationships, and limitations. It does not replace normative requirements.
+- `openspec/specs/<subsystem>/architecture.md` may contain durable current-state conceptual models, design motivation, trade-offs, relationships, and limitations. It does not replace normative requirements. In a capability organized by an `index.md`, that companion is its `README.md`, the component's human-readable description with its diagrams, and it has no `architecture.md` (`openspec/README.md#a-capability-organized-by-an-index`).
 - `openspec/specs/README.md` is the canonical capability documentation index.
 - `docs/development/DEPLOYMENT_AND_CONFIG.md` holds configuration resolution and deployment conventions; `docs/operator-handbook.md` holds what an operator needs to run a deployment: document formats, procedures, and upgrade and recovery steps. Neither replaces a specification's normative requirements.
 - `openspec/changes/` contains proposed deltas, design exploration, migration notes, implementation tasks, and temporary compatibility concerns.
@@ -101,6 +107,17 @@ Avoid:
 ```
 
 A bare documentation pointer is not a substitute for a useful local explanation.
+
+## Diagrams
+
+A diagram is held to code only when it is generated deterministically from a
+well-structured source. Otherwise it is documentation, maintained by review like the
+prose around it: no check holds its boxes to the modules or files it draws, since
+nothing derives one from the other. A diagram drawing a structured source by hand,
+such as the change workflow's graph drawn from its graph table, may be compared with
+that source until a deterministic layout reads as well as the hand-laid one. Keep a
+diagram's `.drawio` source beside its `.svg` export, and embed the export in the
+document that explains it.
 
 ## Package and dependency discipline
 
@@ -205,21 +222,21 @@ change, the review files, and the intervention ledger.
 
 A change worked in its own clone keeps its records there until archive cleanup
 copies them into the owner's workspace, which holds the history of every
-cleaned-up change. A change's records are untracked: find them with `python3
-scripts/find_change.py --records <change>`, which looks in the current checkout,
-then in the owner's workspace.
+cleaned-up change. A change's records are untracked: find them with
+`scripts/change-workflow find --records <change>`, which looks in the current
+checkout, then in the owner's workspace.
 
-### Issue tracker
+### Deferred work
 
-GitHub Issues handle intake and triage through the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the five default triage labels. See `docs/agents/triage-labels.md`.
+Deferred work is recorded in the open change that owns its area, in a new change,
+or as an unowned gap in `openspec/changes/README.md` or
+`docs/development/ROADMAP.md`. This repository does not use GitHub Issues for its
+own work; the issue-discovery harness files its own issues
+(`docs/development/ISSUE_DISCOVERY.md`).
 
 ### Domain docs
 
-Multi-context: one platform context over `core/`, `kit/`, and `provisioning/`, plus a
-subcontext per market domain under `domains/`. ADRs are dated decision records and live in
-`docs/adr/`, separate from the current-state contracts in `openspec/specs/`. See
-`docs/agents/domain.md`.
+Terms have named homes: the market's cross-subsystem terms in
+`docs/development/ARCHITECTURE.md`, a subsystem's in its specification, and the
+change workflow's in its specification's "Terms". See `docs/agents/domain.md` for
+the homes and the rule for terms.

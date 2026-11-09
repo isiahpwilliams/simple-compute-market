@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any
 
+from market_storefront_kit.dispute_configuration import RegistryDisputePolicy
+from market_arkhai_mediation.contract import INTERFACE as MEDIATION_INTERFACE
+from market_core.schemas import settlement_option_schema
 from arkhai_vms import VmProvisionTerms, normalize_vm_provision_terms
 from core_storefront.domain_lifecycle import (
     StorefrontFulfillmentContext,
@@ -24,7 +28,8 @@ from market_alkahest import (
     ALKAHEST_CONFIG_KEY,
     ALKAHEST_MECHANISM_ID,
     AlkahestChainProbe,
-    configured_release_model,
+    RELEASE_MODELS,
+    require_deliverable_release_models,
 )
 from market_arkhai_payments import (
     PaymentSellerStage,
@@ -50,12 +55,11 @@ from market_settlement_runtime import (
     derive_obligation_ref,
 )
 
+from market_storefront.deal_lifecycle import VmDealLifecycle
+from market_storefront.delivery_lifecycle import request_delivery_end, VmPhysicalEnd
+from market_deal_servicing.end import EndService
 from market_storefront.payment_settlement import VmPaymentsCoordinator
 from market_storefront.settlement_registry import build_storefront_settlement_registry
-from market_storefront.services.capacity_client import (
-    build_capacity_runtime,
-    capacity_binding_for_listing,
-)
 from market_storefront.settlement_stages import resolve_proposal_stage
 from market_storefront.utils import config as storefront_config
 from market_storefront.utils import escrow_verification
@@ -91,6 +95,8 @@ class VmSettlementComposition:
     mechanism_resources: Mapping[str, Any] = field(repr=False)
     arkhai_payments_stage: PaymentSellerStage | None = None
     payments_coordinator: VmPaymentsCoordinator | None = None
+    lifecycle: VmDealLifecycle | None = None
+    disputes: RegistryDisputePolicy = field(default_factory=lambda: RegistryDisputePolicy.from_document({}), repr=False)
 
     @property
     def seller_stages(self):
@@ -146,7 +152,11 @@ class VmSettlementComposition:
     ) -> tuple[
         list[dict[str, Any]], list[dict[str, Any]], tuple[MechanismReadiness, ...]
     ]:
-        merged_resources = {**self.mechanism_resources, **resources}
+        merged_resources = {
+            **self.mechanism_resources, **resources,
+            "dispute_authorities": self.disputes.for_publication(),
+            "dispute_interfaces": frozenset({MEDIATION_INTERFACE}), "compute": True,
+        }
         compiled = (
             [
                 compile_settlement_publication_clause(
@@ -405,14 +415,8 @@ async def reserve_vm_settlement_start(
     await context.sqlite_client.save_vm_settlement_evidence(evidence)
     await context.sqlite_client.insert_vm_delivery(negotiation_id=negotiation_id)
     if inserted:
-        start_utc = (
-            evidence.evidence.get("delivery", {}).get("payload", {}).get("start_utc")
-        )
-        start = (
-            datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
-            if start_utc
-            else datetime.now(timezone.utc)
-        )
+        start_utc = evidence.evidence["delivery"]["payload"]["start_utc"]
+        start = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
         claimed = await context.sqlite_client.claim_vm_delivery(
             negotiation_id=negotiation_id,
             owner=context.convergence_owner,
@@ -440,9 +444,15 @@ async def fulfill_vm_settlement(
     prepared: PreparedSettlement,
     *,
     sqlite_client: Any,
-    mechanism_client: Any,
-    bind_fulfillment_fn: Any = None,
+    mechanism_client: Any = None,
 ) -> FulfillmentOutcome:
+    """Deliver a prepared Alkahest settlement through the VM fulfillment hook.
+
+    ``mechanism_client`` is the coordinator's; the delivery path's Alkahest
+    continuation reaches the chain through the settlement composition's
+    evidence clients instead, as the resume pass does.
+    """
+    del mechanism_client
     fulfillment_input = prepared.fulfillment_input
     if not isinstance(fulfillment_input, StorefrontSettlementFulfillmentInput):
         raise TypeError("storefront settlement fulfillment input is missing")
@@ -454,13 +464,6 @@ async def fulfill_vm_settlement(
         raise TypeError("VM settlement provision input is missing")
     if not isinstance(listing_id, str) or not isinstance(order, dict):
         raise TypeError("VM settlement listing input is missing")
-    # Peer settlement publishes its fulfillment evidence as a string
-    # obligation through the alkahest client's own codecs, so it takes the
-    # chain client the mechanism adapter resolves rather than the adapter --
-    # the same distinction escrow verification needs. Handing over the
-    # adapter fails with "no attribute 'string_obligation'" after the VM is
-    # already provisioned, which is the most expensive place to find out.
-    delivery_client = mechanism_client.chain_client(prepared.projection_context.chain_name)
     delivery_anchor = prepared.mechanism_ref
     if not delivery_anchor:
         raise ValueError("settlement fulfillment anchor is unavailable")
@@ -474,7 +477,7 @@ async def fulfill_vm_settlement(
         negotiation_id=evidence.negotiation_id
     )
     agreement = json.loads(thread["agreement_bytes"])
-    stage = domain.settlement.seller_stages[agreement["settlement"]["mechanism"]]
+    stage = domain.settlement.seller_stages[settlement_option_schema(agreement["settlement"])]
     lifecycle = await fulfill_domain(
         domain,
         StorefrontFulfillmentContext(
@@ -498,7 +501,11 @@ async def fulfill_vm_settlement(
         if isinstance(lifecycle.domain_result, Mapping)
         else {}
     )
-    if lifecycle.state == "deferred":
+    # The delivery path runs the stage's continuation once the deal is
+    # available, publishing the fulfillment evidence and binding the claim. An
+    # available deal whose continuation is pending has a running VM and no
+    # claim yet, so it is deferred to the resume pass, never failed.
+    if lifecycle.state == "deferred" or result.get("outcome") == "available":
         return FulfillmentOutcome(
             status="deferred",
             public_result={"status": "provisioning", "message": result.get("message")},
@@ -509,39 +516,13 @@ async def fulfill_vm_settlement(
         return FulfillmentOutcome(
             status="failed",
             public_result={
-                "status": result.get("status"),
+                "status": "error",
                 "message": result.get("message"),
             },
             private_result=result,
-            reason=result.get("message") or f"status={result.get('status')!r}",
+            reason=result.get("message") or "delivery ended",
         )
-    delivery = await sqlite_client.load_vm_delivery(
-        negotiation_id=evidence.negotiation_id
-    )
-    try:
-        fulfillment_uid = await stage.continue_delivery(
-            evidence=evidence,
-            db=sqlite_client,
-            delivery=delivery,
-            connection_json=result["connection_details"],
-            client=delivery_client,
-            bind=bind_fulfillment_fn,
-        )
-    except Exception as error:
-        # The VM is running: publishing its evidence is retried by the
-        # fulfillment resume pass, never answered by failing the deal.
-        logger.warning(
-            "[SETTLE_JOB] Negotiation %s deferred after provisioning: "
-            "fulfillment evidence publication did not complete (%s)",
-            evidence.negotiation_id,
-            error,
-        )
-        return FulfillmentOutcome(
-            status="deferred",
-            public_result={"status": "provisioning", "message": str(error)},
-            private_result=result,
-            reason=f"fulfillment evidence publication did not complete: {error}",
-        )
+    fulfillment_uid = result.get("fulfillment_uid")
     if not isinstance(fulfillment_uid, str) or not fulfillment_uid.strip():
         return FulfillmentOutcome(
             status="failed",
@@ -583,23 +564,14 @@ async def persist_vm_settlement_outcome(
         raise TypeError("VM settlement listing input is missing")
     private = outcome.private_result if isinstance(outcome.private_result, dict) else {}
     # A deferred delivery stays open for the fulfillment resume pass, which
-    # owns finishing it, so only a fulfilled or failed outcome is terminal.
-    await context.sqlite_client.update_vm_delivery(
-        negotiation_id=context.negotiation_id,
-        status=(
-            "ready"
-            if outcome.status == "fulfilled"
-            else None
-            if outcome.status == "deferred"
-            else "failed"
-        ),
-        fulfillment_uid=outcome.fulfillment_ref,
-        connection_details=private.get("connection_details"),
-        tenant_credentials=json.dumps(private["tenant_credentials"])
-        if private.get("tenant_credentials") is not None
-        else None,
-        reason=outcome.reason,
-    )
+    # owns finishing it, so only a fulfilled or failed outcome is terminal; the
+    # delivery path already recorded its own, which this leaves in place.
+    if outcome.status != "deferred":
+        await context.sqlite_client.record_vm_delivery_outcome(
+            negotiation_id=context.negotiation_id,
+            status="ready" if outcome.status == "fulfilled" else "failed",
+            reason=outcome.reason,
+        )
     await context.sqlite_client.release_vm_delivery(
         negotiation_id=context.negotiation_id, owner=context.convergence_owner
     )
@@ -609,11 +581,6 @@ async def persist_vm_settlement_outcome(
             status="ready",
             fulfillment_uid=outcome.fulfillment_ref,
             connection_details=private.get("connection_details"),
-            tenant_credentials=(
-                json.dumps(private.get("tenant_credentials"))
-                if private.get("tenant_credentials") is not None
-                else None
-            ),
         )
         stage_event(
             "claims",
@@ -651,7 +618,11 @@ async def persist_vm_settlement_outcome(
 
 
 def serialize_settlement_job(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Preserve the legacy settle route's public/private response projection."""
+    """The settle routes' projection of a settlement job.
+
+    It carries no credential: a settle route reads its access part live
+    through the delivery path's access check.
+    """
     out: dict[str, Any] = {
         "escrow_uid": row.get("escrow_uid"),
         "negotiation_id": row.get("negotiation_id"),
@@ -674,12 +645,6 @@ def serialize_settlement_job(row: Mapping[str, Any]) -> dict[str, Any]:
             out[key] = value
     if row.get("is_primary") is not None:
         out["is_primary"] = bool(row["is_primary"])
-    tenant_credentials = row.get("tenant_credentials")
-    if tenant_credentials:
-        try:
-            out["tenant_credentials"] = json.loads(tenant_credentials)
-        except Exception:
-            out["tenant_credentials"] = tenant_credentials
     return out
 
 
@@ -695,84 +660,18 @@ def _terminal_requires_lease_truncation(record: Any, outcome: str) -> bool:
 async def truncate_lease_for_terminal_settlement(
     *, agreement_ref: str | None, reason: str | None = None, sqlite_client: Any
 ) -> dict[str, Any] | None:
-    """End capacity service through the agreement's durable reservation binding.
-
-    Asks the site to release the reservation first: an uncommitted hold, or a
-    lease nothing was delivered against, is released at once. The site's
-    release guard refuses a lease fulfillment delivered, which is then
-    truncated to now so its lifecycle tears it down at expiry. A reservation
-    neither releasable nor leased (already releasing, say) is left to the
-    lifecycle that holds it.
-    """
+    """Journal terminal settlement before driving the VM's physical end."""
     if not agreement_ref:
         return None
-
-    try:
-        escrow = await sqlite_client.load_primary_escrow_for_negotiation(
-            negotiation_id=agreement_ref
-        )
-        reservation_id = (
-            str(escrow.get("capacity_reservation_id") or "") if escrow else ""
-        )
-        if not reservation_id:
-            logger.info(
-                "[SETTLEMENT] Agreement %s has no bound capacity reservation",
-                agreement_ref,
-            )
-            return None
-        thread = await sqlite_client.load_negotiation_thread_row(
-            negotiation_id=agreement_ref
-        )
-        listing_id = str((thread or {}).get("our_listing_id") or "")
-        if not listing_id:
-            raise RuntimeError("terminal settlement has no durable listing binding")
-        binding = await capacity_binding_for_listing(sqlite_client, listing_id)
-        capacity = build_capacity_runtime(lambda: sqlite_client)
-        released = await capacity.release(
-            binding,
-            capacity_reservation_id=reservation_id,
-            failure_reason=reason or "settlement_terminal",
-        )
-        if released is not None:
-            stage_event(
-                "claims",
-                "capacity_released_after_abandonment",
-                agreement_ref=agreement_ref,
-                capacity_reservation_id=reservation_id,
-                reason=reason,
-                site=released.get("site"),
-            )
-            return released
-        lease_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-        truncated = await capacity.truncate_lease(
-            binding,
-            capacity_reservation_id=reservation_id,
-            lease_end_utc=lease_end,
-        )
-        if truncated is None:
-            logger.info(
-                "[SETTLEMENT] Bound reservation %s for agreement %s "
-                "has no live lease to truncate",
-                reservation_id,
-                agreement_ref,
-            )
-            return None
-        stage_event(
-            "claims",
-            "lease_truncated_after_abandonment",
-            agreement_ref=agreement_ref,
-            capacity_reservation_id=reservation_id,
-            lease_end_utc=lease_end,
-            reason=reason,
-            site=truncated.get("site"),
-        )
-        return truncated
-    except Exception:
-        logger.exception(
-            "[SETTLEMENT] Could not end capacity service for agreement %s",
-            agreement_ref,
-        )
-        raise
+    await request_delivery_end(
+        sqlite_client, agreement_ref, source_ref="terminal:" + agreement_ref,
+        cause=reason or "settlement_terminal",
+    )
+    end = EndService(
+        sqlite_client.db_path, VmPhysicalEnd(sqlite_client), clock=lambda: int(time.time()),
+    )
+    results = await end.drive_physical(agreement_ref)
+    return results[-1].model_dump(mode="json") if results else None
 
 
 def _plain_mapping(value: Any) -> dict[str, Any]:
@@ -809,19 +708,14 @@ async def preflight_settlement_mechanisms(
 def require_coherent_release_model(
     settlement_config: SettlementConfig | None = None,
 ) -> None:
-    """Refuse a configured Alkahest section that selects contradictory models.
-
-    A section stating both the oracle-gated and the interruptible model names
-    two arbiters for one escrow, which is incoherent configuration rather than
-    an unusable mechanism, so it stops startup, enabled or not. A coherent model
-    the domain cannot deliver is a readiness blocker instead. With no
-    ``settlement_config``, the storefront's own configuration is resolved.
-    """
+    """Validate Alkahest release models before constructing runtime services."""
     if settlement_config is None:
         settlement_config = build_storefront_settlement_registry().resolve(
             storefront_config.settlement_config_mapping(), role="seller"
         )
-    configured_release_model(settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY))
+    require_deliverable_release_models(
+        settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY), RELEASE_MODELS
+    )
 
 
 def _alkahest_release_models(domain: MarketDomainContract) -> frozenset[str]:
@@ -860,9 +754,14 @@ def build_vm_settlement_composition(
         storefront_config.settlement_config_mapping(),
         role="seller",
     )
-    require_coherent_release_model(settlement_config)
+    require_deliverable_release_models(
+        settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY),
+        _alkahest_release_models(domain),
+    )
     alkahest_section = settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY)
+    disputes = RegistryDisputePolicy.from_document(storefront_config.settings.as_dict())
     mechanism_resources: dict[str, Any] = {
+        "disputes": disputes,
         "marketplace_signer": marketplace_signer,
         "clients": alkahest_clients,
         "get_client": lambda chain: alkahest_clients.get(chain or ""),
@@ -973,13 +872,6 @@ def build_vm_settlement_composition(
             await worker.wake(context.obligation_ref)
         return existing
 
-    async def bind_delivery_claim(*, obligation_ref: str, fulfillment_ref: str) -> None:
-        await runtime.bind_fulfillment(
-            obligation_ref,
-            fulfillment_ref,
-            local_principal=marketplace_signer.identity,
-        )
-
     coordinator = SettlementJobCoordinator(
         runtime,
         prepare=partial(
@@ -993,7 +885,6 @@ def build_vm_settlement_composition(
             fulfill_vm_settlement,
             domain,
             sqlite_client=sqlite_client,
-            bind_fulfillment_fn=bind_delivery_claim,
         ),
         persist_outcome=persist_vm_settlement_outcome,
         wake_servicing=wake_servicing,
@@ -1014,6 +905,7 @@ def build_vm_settlement_composition(
         settlement_config=settlement_config,
         configuration_registry=registry,
         mechanism_resources=mechanism_resources,
+        disputes=disputes,
         arkhai_payments_stage=payments_stage,
         payments_coordinator=VmPaymentsCoordinator(
             domain=domain, db=sqlite_client, stage=payments_stage
@@ -1021,4 +913,7 @@ def build_vm_settlement_composition(
         if payments_stage is not None
         else None,
     )
-    return composition
+    lifecycle = VmDealLifecycle(sqlite_client, marketplace_signer, composition.payments_coordinator, disputes)
+    if composition.payments_coordinator is not None:
+        composition.payments_coordinator.lifecycle = lifecycle
+    return replace(composition, lifecycle=lifecycle)

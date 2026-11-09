@@ -9,7 +9,11 @@ Bare metal's own stages are inserted in place:
 
   03a  Publication preview:  the dry run would publish the deal's machine
   03b  Publication step:     one pass publishes it
-  09a2 Publication closes:   the dry run then the step close the held machine's
+  08b1 Re-drive, dispatched: the recovery cycle adopts the dispatched
+                             fulfillment and reserves nothing more
+  09a1 Re-drive, ready:      the recovery cycle activates the lease on the
+                             deal's one reservation
+  09a2 Publication closes:  the dry run then the step close the held machine's
                              listing as unavailable
   09bb Evidence published:   one servicing step publishes the lease-ready
                              evidence's digest; the buyer resolves the evidence
@@ -19,10 +23,15 @@ Bare metal's own stages are inserted in place:
   12d  Teardown sent twice:  the buyer's repeated teardown is the same operation
   12e  Released once:        the site releases the machine once, and the
                              storefront records one release
+  13a  No capacity:          a third deal whose machine is taken before
+                             settlement ends as the seller's failure, with
+                             nothing reserved; a recovery step leaves it so
 
-Every transition is previewed where a preview exists, then advanced explicitly:
-the storefront's loops are held for the whole module, fulfillment convergence
-too, and the lease watchdog while a stage drives it. Wherever the site changes
+Every transition of the canonical deal is previewed where a preview exists,
+then advanced explicitly; the later deals, which repeat what the canonical deal
+previewed, are not previewed again. The storefront's loops are held for the
+whole module, fulfillment convergence too, and the lease watchdog while a stage
+drives it. Wherever the site changes
 -- the supply seeded, the machine leased, then released -- a stage steps the
 storefront's site-projection poller before publication, which reads what the
 poller holds.
@@ -30,10 +39,13 @@ poller holds.
 
 from __future__ import annotations
 
+import base64
 import logging
 import time
 
 import pytest
+from compute_provisioning_contracts.lease_ends import SignedLeaseEndedReport, verify_lease_end
+from tests.e2e.roles.scenarios.bare_metal.conftest import _pinned, lane_setting
 
 from tests.e2e.roles.helpers.compute_deal import (
     advance_fulfillment_to,
@@ -71,6 +83,7 @@ from tests.e2e.roles.helpers.compute_deal_stages import (
     Stage08c_EvaluateProvisioningJob,
     Stage09a_FulfillmentConvergesToActive,
     Stage09b_SettlementReadyAndCredentials,
+    Stage09c1_LateSettlementKeepsTheWindow,
     Stage09c2_ArmTeardownGate,
     Stage09c_LeaseRecorded,
     Stage10a_LeaseExpirySetup,
@@ -86,6 +99,10 @@ from tests.e2e.roles.scenarios.bare_metal.conftest import BareMetalDealState
 
 from tests.e2e.roles.scenarios.bare_metal.publication_stages import (
     BareMetalPublicationClosesListing, BareMetalEvidencePublished,
+)
+from tests.e2e.roles.scenarios.bare_metal.recovery_stages import (
+    BareMetalRecoveryActivatesTheReadyDelivery, BareMetalRecoveryBeforeReadiness,
+    BareMetalSettlementFindsNoCapacity,
 )
 
 log = logging.getLogger(__name__)
@@ -256,11 +273,19 @@ class TestStage08b_SettlementSubmittedAndJobQueued(Stage08b_SettlementSubmittedA
     pass
 
 
+class TestStage08b1_RecoveryBeforeReadiness(BareMetalRecoveryBeforeReadiness):
+    pass
+
+
 class TestStage08b2_ReleaseCreateGateAndDrain(Stage08b2_ReleaseCreateGateAndDrain):
     pass
 
 
 class TestStage09a_FulfillmentConvergesToActive(Stage09a_FulfillmentConvergesToActive):
+    pass
+
+
+class TestStage09a1_RecoveryActivatesTheReadyDelivery(BareMetalRecoveryActivatesTheReadyDelivery):
     pass
 
 
@@ -277,6 +302,10 @@ class TestStage09bb_EvidencePublishedForTheFulfilledEscrow(BareMetalEvidencePubl
 
 
 class TestStage09c_LeaseRecorded(Stage09c_LeaseRecorded):
+    pass
+
+
+class TestStage09c1_LateSettlementKeepsTheWindow(Stage09c1_LateSettlementKeepsTheWindow):
     pass
 
 
@@ -411,7 +440,7 @@ class TestStage12c_SecondDealActive:
 
 class TestStage12d_BuyerTeardownSentTwice:
     def test_12d_a_repeated_teardown_is_the_same_operation(
-        self, provisioning_client, buyer_fulfillment, deal_state: BareMetalDealState
+        self, provisioning_client, storefront_admin_client, buyer_fulfillment, deal_state: BareMetalDealState
     ):
         """The buyer's teardown, sent again, returns the operation it began.
 
@@ -420,15 +449,26 @@ class TestStage12d_BuyerTeardownSentTwice:
         """
         require_state(deal_state, "_second_deal_active")
         assert_lease_watchdog_held(provisioning_client)
-        first = buyer_fulfillment.teardown(deal_state.second_negotiation_id)
-        again = buyer_fulfillment.teardown(deal_state.second_negotiation_id)
-        assert first.get("state") == "terminating", first
-        # Termination can already have dispatched teardown when the retry
-        # observes it; its durable identities establish the same operation.
-        assert again.get("state") in {"terminating", "teardown_dispatch_pending"}, again
-        for name in ("negotiation_id", "capacity_reservation_id", "fulfillment_id"):
-            assert again.get(name) == first.get(name), (name, first, again)
-        deal_state.second_teardown = first
+        negotiation_id = deal_state.second_negotiation_id
+        reservation_id = buyer_fulfillment.status(negotiation_id)["capacity_reservation_id"]
+        first = buyer_fulfillment.teardown(negotiation_id)
+        again = buyer_fulfillment.teardown(negotiation_id)
+        assert first["delivery"]["progress"] == "tearing_down", first
+        assert again["delivery"]["progress"] == "tearing_down", again
+        for name in ("negotiation_id", "operation_key", "receipt_at", "selected_end"):
+            assert again[name] == first[name], (name, first, again)
+        advance_storefront(storefront_admin_client, "delivery-recovery")
+        delivery = buyer_fulfillment.delivery(negotiation_id)["delivery"]
+        assert delivery["progress"] == "tearing_down", delivery
+        assert delivery["site_reports"], delivery
+        for item in delivery["site_reports"]:
+            report = SignedLeaseEndedReport.model_validate_json(base64.b64decode(item["body"]))
+            event = verify_lease_end(report, capacity_reservation_id=reservation_id,
+                                     site_id=lane_setting("site_id"), expected_sites=_pinned("site_authority"))
+            assert event.cause == "termination"
+        assert provisioning_client.get_lease(reservation_id).status != "released"
+        deal_state.second_teardown = {"capacity_reservation_id": reservation_id, "receipt": first,
+                                      "site_reports": delivery["site_reports"]}
 
 
 class TestStage12e_CapacityReleasedOnce:
@@ -459,3 +499,15 @@ class TestStage12e_CapacityReleasedOnce:
             == deal_state.second_teardown.get("capacity_reservation_id")
         ), released
         assert buyer_fulfillment.status(negotiation_id).get("state") == "released"
+        delivery = buyer_fulfillment.delivery(negotiation_id)["delivery"]
+        assert delivery["progress"] == "released"
+        assert delivery["site_reports"] == deal_state.second_teardown["site_reports"]
+        deal_state._second_deal_released = True
+
+
+# ===========================================================================
+# Phase 13 — a deal whose machine is taken before settlement
+# ===========================================================================
+
+class TestStage13a_SettlementFindsNoCapacity(BareMetalSettlementFindsNoCapacity):
+    pass

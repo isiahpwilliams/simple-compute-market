@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
+from market_core.schemas import derive_settlement_option_id
 
 from market_arkhai_payments import (
     MandatePolicyError,
@@ -29,11 +30,13 @@ def _wire(mandate):
 def test_hold_rounds_the_start_interval_up_and_keeps_the_agreement_unchanged():
     terms, mandate = _derived()
     before = dict(terms)
-    # ceil(10.25 s to start) + 3600 s service + 7 days window
-    assert [
-        {key: part[key] for key in ("kind", "asset", "amount", "hold")}
-        for part in _wire(mandate)["parts"]
-    ] == [{"kind": "once", "asset": "USD/2", "amount": "10000", "hold": {"for": "P7DT1H11S"}}]
+    # Absolute term end rounds up; delayed approval cannot shift it.
+    assert _wire(mandate)["parts"] == [
+        {"kind": "once", "asset": "USD/2", "amount": "10000",
+         "end": {"at": 1791378011, "partialPeriod": "returned"},
+         "hold": {"afterStop": "P7D"}, "maxHoldExtension": None,
+         "authorities": {"stop": [], "reverse": [PAYEE, DISPUTE], "extend": [DISPUTE]}}
+    ]
     assert terms == before
     assert _wire(mandate)["deal"] == agreement_hash(terms)
 
@@ -44,20 +47,27 @@ def test_approval_expiry_rounds_acceptance_down():
     assert _wire(mandate)["expires"] == int(accepted) + 7 * 86_400
 
 
+def test_short_authority_policy_preserves_the_full_accepted_hold():
+    terms = agreement()
+    option = terms["settlement"]
+    lifecycle = option["lifecycle"]
+    lifecycle["adjudication"]["dispute_window_seconds"] = 660
+    lifecycle["delivery_deadline_seconds"] = 600
+    option["option_id"] = derive_settlement_option_id(
+        price=option["price"], settlement=option["settlement"], lifecycle=lifecycle,
+    )
+    _, mandate = _derived(terms)
+    assert _wire(mandate)["parts"][0]["hold"] == {"afterStop": "PT11M"}
+    assert _wire(mandate)["deal"] == agreement_hash(terms)
+
+
 def test_authorities_nonce_and_fee_follow_policy():
     _, mandate = _derived()
     wire = _wire(mandate)
-    (part,) = wire["parts"]
-    assert part["authorities"] == {
-        "stop": [
-            {"account": BUYER, "notice": "P0D", "partialPeriod": "charged"},
-            {"account": PAYEE, "notice": "P0D", "partialPeriod": "charged"},
-        ],
-        "reverse": [PAYEE, DISPUTE],
-        "extend": [],
+    assert wire["parts"][0]["authorities"] == {
+        "stop": [], "reverse": [PAYEE, DISPUTE], "extend": [DISPUTE],
     }
-    assert part["maxHoldExtension"] == "P0D"
-    assert BUYER not in part["authorities"]["reverse"]
+    assert BUYER not in wire["parts"][0]["authorities"]["reverse"]
     assert "authorities" not in wire
     assert wire["nonce"] == "arkhai.payments.v1"
     assert wire["fee"] == {"bps": 250}

@@ -32,7 +32,7 @@ def test_an_enabled_session_reads_the_configured_section():
         reads.append("read")
         return {"example": {"payer_account": ACCOUNT}}
 
-    session = PaymentBuyerStage("example", load_config=config).open_buy(_request(True))
+    session = PaymentBuyerStage("example", dispute_interfaces=frozenset(), load_config=config).open_buy(_request(True))
     session.prepare()
     assert session.available and reads == ["read"]
     assert session.missing() == ()
@@ -44,18 +44,18 @@ def test_a_disabled_session_reads_no_account():
     def config():
         raise AssertionError("payer account read")
 
-    session = PaymentBuyerStage("example", load_config=config).open_buy(_request(False))
+    session = PaymentBuyerStage("example", dispute_interfaces=frozenset(), load_config=config).open_buy(_request(False))
     assert not session.available
 
 
 def test_an_invalid_account_refuses_the_buy():
-    stage = PaymentBuyerStage("example", load_config=lambda: {"example": {"payer_account": "nope"}})
+    stage = PaymentBuyerStage("example", dispute_interfaces=frozenset(), load_config=lambda: {"example": {"payer_account": "nope"}})
     with pytest.raises(ValueError):
         stage.open_buy(_request(True))
 
 
 def test_acceptance_needs_the_agreement_and_its_mandate():
-    stage = PaymentBuyerStage("example")
+    stage = PaymentBuyerStage("example", dispute_interfaces=frozenset())
     with pytest.raises(ValueError, match="exact Agreement"):
         stage.validate_acceptance(SimpleNamespace(agreement=None, agreement_bytes=None))
     with pytest.raises(ValueError, match="mandate"):

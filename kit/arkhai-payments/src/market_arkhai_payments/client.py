@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
+import ssl
 import time
 from collections.abc import Mapping
 from typing import Any, TypeVar
@@ -22,6 +24,7 @@ from market_arkhai_payments.mandates import PaymentsOptionParams
 from market_arkhai_payments.models import (
     ApiError,
     ApprovalRequest,
+    Balance,
     DealAttachment,
     EventCommand,
     Mandate,
@@ -42,6 +45,10 @@ class PaymentsClient:
     Use a WorkOS user-scoped API key for normal service calls. The explicit
     ``development_account`` mode sends the service's development-only account
     header and is intended for local integration runs.
+
+    ``ca_bundle`` names a PEM file the client verifies the service against,
+    instead of the default trust store; the bundle is loaded here, so one that is
+    missing, unreadable or malformed raises ``OSError`` before any request.
     """
 
     def __init__(
@@ -52,6 +59,7 @@ class PaymentsClient:
         development_account: str | None = None,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
+        ca_bundle: str | None = None,
     ) -> None:
         if (api_key is None) == (development_account is None):
             raise ValueError("provide exactly one of api_key or development_account")
@@ -78,6 +86,17 @@ class PaymentsClient:
         else:
             parsed_account = AccountId.model_validate(development_account).root
             headers["X-Account-ID"] = parsed_account
+        # A context built from the bundle alone is this client's verification.
+        # httpx consults SSL_CERT_FILE only when verification is left at its
+        # default, so environment proxies still apply off loopback while the
+        # process's trust store, and every other client's, stays as it is.
+        verify: ssl.SSLContext | bool = True
+        if ca_bundle is not None:
+            # The ssl module reads an empty cafile as none given and would load
+            # the default trust store instead of this bundle alone.
+            if not ca_bundle.strip():
+                raise ValueError("ca_bundle must name a file")
+            verify = ssl.create_default_context(cafile=ca_bundle)
         self._http = httpx.Client(
             base_url=url,
             headers=headers,
@@ -85,6 +104,7 @@ class PaymentsClient:
             follow_redirects=False,
             trust_env=not _is_loopback(url.host),
             transport=transport,
+            verify=verify,
         )
 
     def close(self) -> None:
@@ -121,6 +141,12 @@ class PaymentsClient:
         identifier = _transaction_id(transaction)
         payload = self._request("GET", f"/transactions/{identifier}")
         return _validated(SignedTransactionSnapshot, payload)
+
+    def get_balance(self, account: str) -> Balance:
+        """Read one account's balance; the service answers only for the caller's own."""
+
+        identifier = AccountId.model_validate(account).root
+        return _validated(Balance, self._request("GET", f"/balances/{identifier}"))
 
     def poll(
         self,
@@ -190,6 +216,19 @@ class PaymentsClient:
             return existing
         return self.attach_agreement(identifier, agreement_json)
 
+    def submit_event(
+        self, transaction: str, event: EventCommand | Mapping[str, Any], *, request_id: str,
+    ) -> StoredEvent:
+        """Submit one authenticated per-part command under a stable retry identity."""
+
+        identifier = _transaction_id(transaction)
+        parsed = EventCommand.model_validate(event)
+        payload = self._request(
+            "POST", f"/transactions/{identifier}/events",
+            headers={"Idempotency-Key": request_id}, json=_json(parsed),
+        )
+        return _validated(StoredEvent, payload)
+
     def reverse(self, transaction: str) -> StoredEvent:
         """Reverse all still-held parts with a stable transaction-scoped retry ID."""
 
@@ -225,6 +264,10 @@ class PaymentsClient:
 
 def _validated(model: type[_ModelT], value: Any) -> _ModelT:
     try:
+        if model is SignedTransactionSnapshot:
+            # Signed state must not be normalized (for example text into a
+            # number) before the verifier reconstructs its exact signature frame.
+            return model.model_validate_json(json.dumps(value), strict=True)
         return model.model_validate(value)
     except ValidationError as exc:
         raise PaymentsProtocolError("payments service response violates the published schema") from exc

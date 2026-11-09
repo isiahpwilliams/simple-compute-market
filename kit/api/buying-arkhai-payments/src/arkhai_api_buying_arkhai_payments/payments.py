@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from arkhai_api_buying.credentials import error_text
+from arkhai_api_buying.disputes import buyer_dispute_authorities
 from core_buyer.buyer_config import ResolvedBuyerIdentity
 from core_buyer.orchestration import (
     make_publisher_trust_resolver,
@@ -22,6 +23,7 @@ from market_arkhai_payments import (
     PaymentApprovalDeclined,
 )
 from market_arkhai_payments.models import AccountId
+from market_arkhai_payments.settlement_config import validate_payment_lifecycle
 from market_config.config_loader import load_user_config
 from market_core.schemas import Agreement, SettlementOption, SettlementSelection
 from market_settlement_runtime import SettlementConfig
@@ -58,7 +60,7 @@ def payment_selection_for_listing(
             (
                 option
                 for registration, option in policy.compatible_options(
-                    listing.get("settlement_options") or ()
+                    listing.get("settlement_options") or (), listing=listing,
                 )
                 if registration.mechanism_id == ARKHAI_PAYMENTS_MECHANISM
             ),
@@ -66,22 +68,24 @@ def payment_selection_for_listing(
         )
         if candidate is None:
             return None
-        mechanism = candidate.mechanism
+        mechanism = candidate.settlement_schema
         option_id = candidate.option_id
     else:
         selected = policy.select(listing, expiration_unix=expiration_unix)
         if (
             selected is None
-            or selected.selection.mechanism != ARKHAI_PAYMENTS_MECHANISM
+            or selected.selection.settlement_schema != ARKHAI_PAYMENTS_MECHANISM
         ):
             return None
-        mechanism = selected.selection.mechanism
+        mechanism = selected.selection.settlement_schema
         option_id = selected.selection.option_id
     return SettlementSelection(
-        mechanism=mechanism,
         option_id=option_id,
+        settlement={
+            "schema": mechanism,
+            "payer_account": validate_payer_account(payer_account),
+        },
         expiration_unix=expiration_unix,
-        params={"payer_account": validate_payer_account(payer_account)},
     )
 
 
@@ -108,6 +112,7 @@ def settle_payment(
     buy_config: BuyConfig,
     settlement_config: SettlementConfig,
     payer_account: str,
+    dispute_interfaces: frozenset[str],
     agreement: Mapping[str, Any],
     agreement_bytes: str,
     settlement_selection: Mapping[str, Any] | SettlementSelection | None,
@@ -123,7 +128,7 @@ def settle_payment(
     selected = None
     if settlement_selection is not None:
         selected = SettlementSelection.model_validate(settlement_selection)
-        if selected.mechanism != ARKHAI_PAYMENTS_MECHANISM:
+        if selected.settlement_schema != ARKHAI_PAYMENTS_MECHANISM:
             raise ValueError("accepted settlement selection is not an Arkhai payment")
     if not agreement_bytes:
         raise ValueError("accepted Agreement bytes are required for payment settlement")
@@ -165,10 +170,10 @@ def settle_payment(
     advertised = SettlementOption.model_validate(advertised_value)
     if (
         parsed_agreement.settlement != advertised
-        or selected.mechanism != advertised.mechanism
+        or selected.settlement_schema != advertised.settlement_schema
     ):
         raise ValueError("accepted Agreement differs from the selected listing option")
-    if selected is not None and dict(selected.params or {}) != dict(
+    if selected is not None and dict(selected.settlement_params or {}) != dict(
         parsed_agreement.settlement_params or {}
     ):
         raise ValueError(
@@ -176,6 +181,12 @@ def settle_payment(
         )
 
     config = serviceable_payments_config(settlement_config)
+    registry = str(listing.get("source_registry_url") or "").rstrip("/")
+    by_registry = buyer_dispute_authorities(load_user_config(), buyer, (registry,) if registry else ())
+    validate_payment_lifecycle(
+        advertised, authorities=by_registry.get(registry, by_registry.get("", ())),
+        dispute_interfaces=dispute_interfaces,
+    )
     # The kit re-derives the mandate under this buyer's policy, checks the
     # seller's transaction ID, attaches only under the buyer's own
     # attach_agreement, and verifies every receipt. Acceptance already bound
@@ -241,6 +252,7 @@ def settle_negotiation(
     buy_config: BuyConfig,
     settlement_config: SettlementConfig,
     payer_account: str,
+    dispute_interfaces: frozenset[str],
     poll_interval: float,
     total_timeout: float,
     on_event: Callable[[str, dict[str, Any]], None],
@@ -269,6 +281,7 @@ def settle_negotiation(
             buy_config=buy_config,
             settlement_config=settlement_config,
             payer_account=payer_account,
+            dispute_interfaces=dispute_interfaces,
             agreement=outcome.agreement.model_dump(mode="json", exclude_none=True),
             agreement_bytes=outcome.agreement_bytes or "",
             settlement_selection=outcome.settlement_selection,

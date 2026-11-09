@@ -52,18 +52,19 @@ class _Recording(httpx.AsyncBaseTransport):
         return httpx.Response(response.status_code, headers=response.headers, content=body)
 
 
+def _payment_option(rates: list[RateValue]) -> SettlementOption:
+    price = {"asset": "USD/2", "rates": rates}
+    settlement = {"schema": ARKHAI_PAYMENTS_MECHANISM, "payee_account": PAYEE_ACCOUNT}
+    return SettlementOption(
+        option_id=derive_settlement_option_id(price=price, settlement=settlement),
+        price=price,
+        settlement=settlement,
+    )
+
+
 def _hourly_payment_option() -> SettlementOption:
     rates = [RateValue(field="amount", per="hour", value=100)]
-    params = {"payee_account": PAYEE_ACCOUNT, "asset": "USD/2"}
-    return SettlementOption(
-        option_id=derive_settlement_option_id(
-            mechanism=ARKHAI_PAYMENTS_MECHANISM, asset="USD/2", rates=rates, params=params
-        ),
-        mechanism=ARKHAI_PAYMENTS_MECHANISM,
-        asset="USD/2",
-        rates=rates,
-        params=params,
-    )
+    return _payment_option(rates)
 
 
 @pytest.fixture
@@ -107,8 +108,8 @@ async def test_a_quota_refusal_body_is_unchanged(served, db, fake_capacity):
         initial_amount=300,
         provision_terms=terms(3).model_dump(mode="json"),
         settlement_selection={
-            "mechanism": option.mechanism,
             "option_id": option.option_id,
+            "settlement": {"schema": option.settlement_schema},
             "expiration_unix": 1_900_000_000,
         },
         selection_only=True,
@@ -137,8 +138,8 @@ async def test_a_pricing_refusal_body_is_unchanged(served, db):
         initial_amount=300,
         provision_terms=terms(3).model_dump(mode="json"),
         settlement_selection={
-            "mechanism": option.mechanism,
             "option_id": option.option_id,
+            "settlement": {"schema": option.settlement_schema},
             "expiration_unix": 1_900_000_000,
         },
         selection_only=True,
@@ -149,16 +150,7 @@ async def test_a_pricing_refusal_body_is_unchanged(served, db):
 
 def _rateless_payment_option() -> SettlementOption:
     """An option advertising no rate, so the seller negotiates from its configured floor."""
-    params = {"payee_account": PAYEE_ACCOUNT, "asset": "USD/2"}
-    return SettlementOption(
-        option_id=derive_settlement_option_id(
-            mechanism=ARKHAI_PAYMENTS_MECHANISM, asset="USD/2", rates=[], params=params
-        ),
-        mechanism=ARKHAI_PAYMENTS_MECHANISM,
-        asset="USD/2",
-        rates=[],
-        params=params,
-    )
+    return _payment_option([])
 
 
 @pytest.mark.parametrize(
@@ -191,10 +183,9 @@ async def test_a_floor_refusal_names_the_storefronts_own_setting(served, db, fak
     option = _rateless_payment_option()
     await db.update_listing(listing_id=LISTING_ID, settlement_options=[option.model_dump(mode="json")])
     selection = {
-        "mechanism": option.mechanism,
         "option_id": option.option_id,
+        "settlement": {"schema": option.settlement_schema, "payer_account": PAYER_ACCOUNT},
         "expiration_unix": 1_900_000_000,
-        "params": {"payer_account": PAYER_ACCOUNT},
     }
     client = StorefrontClient(
         "http://seller",

@@ -50,7 +50,7 @@ from market_negotiation_runtime import (
     OfferUnfulfillableError,
     StorefrontPausedError,
 )
-from market_settlement_runtime import SettlementAdminRouteService
+from market_settlement_runtime import SettlementAdminRouteService, SettlementLookup
 from market_storefront_kit import (
     LifecycleRouteError,
     NegotiationControlRouteService,
@@ -531,7 +531,7 @@ class SettleRoutes:
             agreement, _raw = accepted_agreement(thread or {})
         except (KeyError, TypeError, ValueError) as exc:
             raise RouteRefusal(409, "accepted Agreement is unavailable or invalid") from exc
-        stage = composition.stages.get(agreement.settlement.mechanism)
+        stage = composition.stages.get(agreement.settlement.settlement_schema)
         if stage is None:
             raise RouteRefusal(400, "unsupported accepted settlement mechanism")
         return agreement, stage
@@ -553,7 +553,7 @@ class SettleRoutes:
             raise RouteRefusal(403, "settlement parties differ from accepted Agreement")
         if (
             body.settlement_mechanism is not None
-            and body.settlement_mechanism != agreement.settlement.mechanism
+            and body.settlement_mechanism != agreement.settlement.settlement_schema
         ):
             raise RouteRefusal(400, "settlement mechanism conflicts with accepted Agreement")
         return stage, {
@@ -628,12 +628,23 @@ class SettleRoutes:
         """Long-poll until the settlement reaches a terminal state."""
         db = _required(self._repository())
 
-        async def settle_status(uid: str):
-            return await db.load_issuance_progress(reference=uid)
+        async def by_reference(settlement_ref: str):
+            return await db.load_settlement_evidence_by_ref(settlement_ref=settlement_ref)
+
+        async def by_negotiation(negotiation_id: str):
+            return await db.load_settlement_evidence(negotiation_id=negotiation_id)
+
+        async def delivery_status(evidence):
+            # Delivery is credit issuance; a settlement whose issuance has not
+            # begun reports its evidence's own status. Pending, verified and
+            # refund statuses keep the wait polling; failed evidence ends it,
+            # since that settlement will never be delivered.
+            progress = await db.load_issuance_progress(reference=evidence.negotiation_id)
+            return progress if progress is not None else {"status": evidence.status}
 
         waited = await SettlementAdminRouteService(
-            settle_status=settle_status,
-            is_terminal=lambda status: status.get("status") in {"ready", "failed"},
+            settlements=SettlementLookup(by_reference=by_reference, by_negotiation=by_negotiation),
+            delivery_status=delivery_status,
         ).wait(escrow_uid, timeout=timeout)
         return SettleWaitResponse(
             ready=waited["ready"],

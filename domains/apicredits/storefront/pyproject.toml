@@ -1,10 +1,11 @@
 [project]
 name = "arkhai-apicredits-storefront"
-version = "0.19.0"
+version = "0.21.0"
 license = "MIT"
 description = "Seller-side storefront for the API-credits domain: quota-backed listings, sync negotiation with ownership/quota guards, issuance-backed settlement."
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "arkhai-kit-arkhai-mediation>=0.1.0",
     "arkhai-core>=0.4.0",
     "arkhai-api-client>=0.1.0",
     "arkhai-api-selling>=0.6.0",
@@ -13,9 +14,10 @@ dependencies = [
     "arkhai-apicredits-domain>=0.11.0",
     "arkhai-core-storefront>=0.18.0",
     "arkhai-kit-alkahest>=0.11.0",
+    "arkhai-kit-arkhai-payments>=0.6.0",
     "arkhai-kit-config>=0.5.0",
     "arkhai-kit-identity==0.4.0",
-    "arkhai-kit-settlement-runtime>=0.6.0",
+    "arkhai-kit-settlement-runtime>=0.7.0",
     "arkhai-kit-storefront==0.10.0",
     "arkhai-kit-negotiation-runtime==0.7.0",
     "alkahest-py==1.1.2",

@@ -19,21 +19,33 @@ import asyncio
 import base64
 import hashlib
 import json
+import sqlite3
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from arkhai_bare_metal.fixtures.listing import LISTING_HARDWARE
 from buyer_commands import BuyerCommands
+from compute_provisioning_contracts import (
+    FulfillmentAcceptanceResponse,
+    FulfillmentScheduleResponse,
+    FulfillmentStatusResponse,
+)
 from held_loops import held_loop_controller
 from loopback import serving
 from market_arkhai_payments import PaymentSettlementData
-from market_arkhai_payments.fixtures import FakePaymentsClient, build_signed_receipt
+from market_arkhai_payments.fixtures import FakePaymentsClient, build_signed_receipt, dispute_lifecycle
 from market_core.schemas import RateValue, SettlementOption, derive_settlement_option_id
+from market_deal_servicing.journal import stable_ref
 from market_identity import Ed25519Signer, TrustedIdentitySet
 from source_sites import SourceSite, listing_source_projection, source_projections
 from storefront_client import StorefrontClient, StorefrontClientError
 
+from arkhai_bare_metal_storefront.delivery_ports import (
+    BareMetalDeliveryProgress,
+    BareMetalDeliveryRefused,
+)
 from arkhai_bare_metal_storefront.domain_runtime import get_market_domain_contract
 from arkhai_bare_metal_storefront.fulfillment_service import BareMetalFulfillmentError
 from arkhai_bare_metal_storefront.runtime import BareMetalStorefrontRuntime
@@ -45,6 +57,7 @@ from arkhai_bare_metal_storefront.settlement_composition import (
     BareMetalStorefrontSettlementComposition,
 )
 from arkhai_bare_metal_storefront.sqlite_client import SQLiteClient
+from arkhai_bare_metal_buyer.evidence import evidence_store
 
 PAYER = "11111111-1111-4111-8111-111111111111"
 PAYEE = "22222222-2222-4222-8222-222222222222"
@@ -96,6 +109,17 @@ class Capacity:
             "site": request["site_id"],
         }
 
+    async def activate_lease(self, **request):
+        """Write-once, as the site's: the first activation's instant is kept."""
+        self.activated_at = getattr(self, "activated_at", None) or (
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        )
+        return {
+            "capacity_reservation_id": request["capacity_reservation_id"],
+            "activated_at_utc": self.activated_at,
+            "site": request["site_id"],
+        }
+
 
 class Provisioning:
     def __init__(self) -> None:
@@ -106,7 +130,7 @@ class Provisioning:
         self.release: asyncio.Event | None = None
 
     async def schedule_resource(self, request):
-        return SimpleNamespace(
+        return FulfillmentScheduleResponse(
             settlement_resource_id=RESOURCE,
             pool_id=POOL,
             resource_kind="compute.bare-metal",
@@ -120,7 +144,7 @@ class Provisioning:
         if self.started is not None and self.release is not None:
             self.started.set()
             await self.release.wait()
-        return SimpleNamespace(
+        return FulfillmentAcceptanceResponse(
             fulfillment_id="fulfillment-pay",
             capacity_reservation_id="reservation-pay",
             state="dispatch_pending",
@@ -128,8 +152,10 @@ class Provisioning:
 
     async def get_fulfillment_status(self, fulfillment_id, *, capacity_reservation_id):
         """The dispatched create has not settled yet."""
-        return SimpleNamespace(
-            state="dispatch_pending", failure_reason=None, failure_message=None
+        return FulfillmentStatusResponse(
+            fulfillment_id=fulfillment_id,
+            capacity_reservation_id=capacity_reservation_id,
+            state="dispatch_pending",
         )
 
     async def terminate_lease(self, capacity_reservation_id, *, reason):
@@ -137,16 +163,20 @@ class Provisioning:
 
 
 def _option() -> SettlementOption:
-    params = {"payee_account": PAYEE, "asset": "USD/2", "window": "P7D", "deposit_agreement": False}
+    params = {"payee_account": PAYEE, "window": "P7D", "deposit_agreement": False}
     rates = [RateValue(field="amount", per="hour", value=100)]
+    lifecycle = dispute_lifecycle(DISPUTE)
+    lifecycle["adjudication"]["dispute"]["interface"] = "arkhai.mediation.v1"
+    lifecycle["delivery_deadline_seconds"] = 3600
     return SettlementOption(
         option_id=derive_settlement_option_id(
-            mechanism="arkhai.payments.v1", asset="USD/2", rates=rates, params=params
+            price={"asset": "USD/2", "rates": rates},
+            settlement={"schema": "arkhai.payments.v1", **(params or {})},
+            lifecycle=lifecycle,
         ),
-        mechanism="arkhai.payments.v1",
-        asset="USD/2",
-        rates=rates,
-        params=params,
+        price={"asset": "USD/2", "rates": rates},
+        settlement={"schema": "arkhai.payments.v1", **(params or {})},
+        lifecycle=lifecycle,
     )
 
 
@@ -163,7 +193,6 @@ def _composition(
                 "service_url": "http://127.0.0.1:9",
                 "service_identity": SERVICE.identity.model_dump(mode="json"),
                 "fee_bps": 250,
-                "dispute_authority": DISPUTE,
                 "development_auth": True,
             },
         },
@@ -211,10 +240,12 @@ async def _open(buyer: StorefrontClient) -> dict:
             },
         },
         settlement_selection={
-            "mechanism": option.mechanism,
             "option_id": option.option_id,
+            "settlement": {
+                "schema": option.settlement_schema,
+                **({"payer_account": PAYER} or {}),
+            },
             "expiration_unix": 1_900_000_000,
-            "params": {"payer_account": PAYER},
         },
         selection_only=True,
     )
@@ -408,34 +439,27 @@ async def test_an_accepted_deal_settles_and_refunds_after_payments_is_disabled(h
 
 @pytest.mark.asyncio
 async def test_a_refund_recorded_before_delivery_start_stops_delivery(harness):
+    """Delivery starts by creating its lifecycle row in the transaction that
+    reads the settlement record, so refund intent committed first refuses the
+    start and leaves no row. Library integration of the progress port over the
+    storefront's database; the settle route's refusal of a refunded deal is
+    ``test_a_refund_before_delivery_blocks_fulfillment``."""
     db = harness.runtime.db
-    gate = asyncio.Event()
-    entered = asyncio.Event()
-    start = db.ensure_bare_metal_fulfillment_lifecycle
-
-    async def gated_start(**kwargs):
-        entered.set()
-        await gate.wait()
-        return await start(**kwargs)
-
-    db.ensure_bare_metal_fulfillment_lifecycle = gated_start
-    harness.serve()
-    settling = asyncio.create_task(harness.settle())
-    try:
-        await asyncio.wait_for(entered.wait(), timeout=10)
-        assert (await harness.refund()).status == "refunded"
-        gate.set()
-        with pytest.raises(StorefrontClientError):
-            await settling
-        assert harness.provisioning.begin_calls == []
-        assert await db.load_bare_metal_fulfillment_lifecycle(
-            negotiation_id=harness.negotiation_id
-        ) is None
-    finally:
-        gate.set()
-        if not settling.done():
-            settling.cancel()
-        await asyncio.gather(settling, return_exceptions=True)
+    record = await db.load_bare_metal_settlement_record(negotiation_id=harness.negotiation_id)
+    assert record["status"] == "accepted"
+    with sqlite3.connect(db.db_path) as conn:
+        conn.execute(
+            "UPDATE bare_metal_settlement_records SET status='refunding', settlement_ref=? "
+            "WHERE negotiation_id=?",
+            (harness.data.transaction_id, harness.negotiation_id),
+        )
+    with sqlite3.connect(db.db_path) as conn, pytest.raises(
+        BareMetalDeliveryRefused, match="refunded"
+    ):
+        BareMetalDeliveryProgress().create(conn, harness.negotiation_id)
+    assert await db.load_bare_metal_fulfillment_lifecycle(
+        negotiation_id=harness.negotiation_id
+    ) is None
 
 
 @pytest.mark.asyncio
@@ -615,6 +639,7 @@ async def test_the_buy_command_settles_over_a_run_log_a_later_command_reloads(
     runtime, provisioning = _runtime(tmp_path, payments)
     await _publish(runtime)
     service = SERVICE.identity.model_dump(mode="json")
+    dispute = _option().lifecycle["adjudication"]["dispute"]
     buyer = BuyerCommands(
         monkeypatch,
         tmp_path,
@@ -628,7 +653,15 @@ async def test_the_buy_command_settles_over_a_run_log_a_later_command_reloads(
             f'service_identity = {{scheme = "{service["scheme"]}", '
             f'identifier = "{service["identifier"]}"}}\n'
             "fee_bps = 250\n"
-            f'dispute_authority = "{DISPUTE}"\n'
+            "[[Dispute]]\n"
+            f'interface = "{dispute["interface"]}"\n'
+            f'origin = "{dispute["origin"]}"\n'
+            f'account = "{dispute["account"]}"\n'
+            f'record_key = "{dispute["record_key"]}"\n'
+            "params = {}\n"
+            "[Dispute.advertisement]\n"
+            'mechanisms = ["arkhai.payments.v1"]\n'
+            "minimum_dispute_window_seconds = 60\n"
         ),
     )
     buyer.pay_through(payments)
@@ -650,8 +683,15 @@ async def test_the_buy_command_settles_over_a_run_log_a_later_command_reloads(
             "buy", LISTING, "--option-id", option.option_id, "--ssh-public-key", SSH_KEY
         )
         teardown = buyer.run("teardown", "--run-id", bought["run_id"])
+        retried = buyer.run("teardown", "--run-id", bought["run_id"])
+        assert retried["observed_at"] == teardown["observed_at"]
+        assert retried["acknowledgement"]["receipt_at"] == teardown["acknowledgement"]["receipt_at"]
+        kept = await evidence_store().read(teardown["negotiation_id"])
+        assert {"end_delivery_observation", "end_delivery_receipt"} <= {item.kind for item in kept.items}
 
     assert payments.count("approve") == 1
     assert len(provisioning.begin_calls) == 1
-    assert teardown["state"] == "terminating"
-    assert provisioning.terminated == [("reservation-pay", "buyer_teardown")]
+    assert teardown["delivery"]["status"] == "accepted"
+    assert teardown["acknowledgement"]["delivery"]["progress"] == "tearing_down"
+    assert teardown["payment"]["status"] == "rejected"
+    assert provisioning.terminated == [("reservation-pay", stable_ref(teardown["negotiation_id"], "terminate", "terminate"))]

@@ -79,6 +79,7 @@ from market_fulfillment import (
     PhysicalSettlementScheduler,
     SettlementRepository,
     SqlAlchemyFulfillmentUnitOfWork,
+    SqlAlchemySchedulingUnitOfWork,
 )
 from market_fulfillment.db import Base as FulfillmentBase
 from market_resource_pools.db import Base as PoolsBase
@@ -125,6 +126,7 @@ from compute_provisioning_service.identity import ProvisioningIdentityContext
 from compute_provisioning_service.middleware.auth import (
     SqlAlchemyProvisioningReplayStore,
 )
+from compute_provisioning_service.services.lease_end_reports import LeaseEndReports
 from compute_provisioning_service.services.capacity_reservation_watchdog import (
     CapacityReservationWatchdog,
 )
@@ -660,7 +662,8 @@ async def client_and_queue(
         lease_watchdog_enabled=False,
         relay_grant_expiry_grace_seconds=3600,
         relay_port_reuse_margin_seconds=300,
-        storefront_url="http://test-storefront:8001",
+        # A closed loopback port keeps this refusal boundary off ambient proxies.
+        storefront_url="http://127.0.0.1:0",
         storefront_site_id="default",
         resolved_bare_metal_playbook_path=Path(
             "/fake/bare-metal-node-access.yml"
@@ -687,16 +690,9 @@ async def client_and_queue(
     # it, filled and frozen by composing the bundles below and run by the
     # ledger whenever it releases capacity.
     release_effects = _container_module._make_release_effects()
-    capacity_ledger_service = CapacityLedgerService(
-        session_factory=session_factory,
-        unit_claim_keys=("units", "gpu_count"), mirror_dimension="gpu_count",
-        host_requirement=host_requirement,
-        # The release guard exactly as the production container composes it,
-        # so capacity is freed here only on the proof it needs there.
-        release_guard=FulfillmentReleaseGuard(SettlementRepository()),
-        release_effect=release_effects,
+    lease_end_reports = LeaseEndReports(
+        session_factory, signer=identity_context.signer, peer=str(mock_settings.storefront_url),
     )
-
     connection_codecs = ConnectionCodecs([SshConnectionCodec(TEST_CONNECTION_KEY)])
     host_authority = HostAuthority(
         session_factory,
@@ -708,6 +704,21 @@ async def client_and_queue(
         connection_change_hooks=_container_module.host_connection_change_hooks(
             connection_codecs
         ),
+    )
+    capacity_ledger_service = CapacityLedgerService(
+        session_factory=session_factory,
+        site_id=identity_context.storefront_site_id,
+        lease_end_effect=lease_end_reports.record,
+        unit_claim_keys=("units", "gpu_count"), mirror_dimension="gpu_count",
+        host_requirement=host_requirement,
+        # The hosts taking new delivery, reported by the host authority as the
+        # production container wires it, so a declaration naming a disabled or
+        # unregistered host is refused and not offered here as it is there.
+        deliverable_hosts=host_authority,
+        # The release guard exactly as the production container composes it,
+        # so capacity is freed here only on the proof it needs there.
+        release_guard=FulfillmentReleaseGuard(SettlementRepository()),
+        release_effect=release_effects,
     )
 
     from market_resource_pools import ResourcePoolService
@@ -758,6 +769,14 @@ async def client_and_queue(
         session_factory=session_factory,
         default_resource_kind="compute.gpu",
         host_requirement=host_requirement,
+        # The same report the ledger reads, as the production container wires
+        # the scheduling unit of work.
+        unit_of_work=SqlAlchemySchedulingUnitOfWork(
+            session_factory,
+            resource_pool_service,
+            capacity_ledger_service,
+            deliverable_hosts=host_authority,
+        ),
     )
 
     capacity_reservation_watchdog = CapacityReservationWatchdog(
@@ -899,7 +918,8 @@ async def client_and_queue(
         capacity_ledger=capacity_ledger_service,
     )
     # Status composed as production composes it: the composed executor table,
-    # the lease lifecycle, and the readiness components the container builds.
+    # the lease lifecycle, and the readiness components the container builds,
+    # over the harness's own host authority and connection codecs.
     system_status_service = SystemStatusService(
         settings=mock_settings,
         session_factory=session_factory,
@@ -907,7 +927,7 @@ async def client_and_queue(
         lease_lifecycle=lease_lifecycle_service,
         job_executors=job_executor_table,
         components=_container_module._make_status_components(
-            job_executor_table, host_authority
+            job_executor_table, host_authority, connection_codecs
         ),
         identity_resolver=lambda: identity_context,
     )
@@ -968,7 +988,7 @@ async def client_and_queue(
     executor_lease_service = ExecutorLeaseService(site_authority)
     _container_module.resolved_executor_lease_service = executor_lease_service
     _container_module.resolved_lease_route_service = LeaseRouteService(
-        executor_lease_service, lease_lifecycle_service
+        executor_lease_service, lease_lifecycle_service, reports=lease_end_reports.read
     )
     _container_module.resolved_host_operations_service = app.container.host_operations_service()
 

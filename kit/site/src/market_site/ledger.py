@@ -38,6 +38,7 @@ feed is always consistent with a snapshot.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable, Iterator
@@ -51,11 +52,15 @@ from typing import Any, Mapping, Optional, Protocol, Sequence
 
 from sqlalchemy.orm import Session, sessionmaker
 from market_resource_pools import (
+    DeliverableHosts,
     HostRequirement,
     ResourcePool,
-    pool_needs_host,
+    declaration_has_usable_host,
 )
-from market_resource_pools_contracts import pool_delivers_offering_mode
+from market_resource_pools_contracts import (
+    declared_deliverable_modes,
+    pool_delivers_offering_mode,
+)
 
 from .declarations import CapacityDeclaration
 from .db import (
@@ -65,6 +70,7 @@ from .db import (
     CapacityBucket,
     CapacityReservation,
     CapacityReservationDebit,
+    LeaseEndedEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +80,30 @@ ALLOCATION_MODE_EXCLUSIVE = "exclusive"
 ALLOCATION_MODE_SHAREABLE = "shareable"
 PHYSICAL_HOST_ID_ATTR = "physical_host_id"
 OFFERING_MODE_CLAIM_KEY = "offering_mode"
+
+
+def _begin_decision_transaction(db: Session) -> None:
+    """Reserve SQLite's writer slot before reading what a decision rests on.
+
+    The SQLite driver begins a transaction only at the first write, so the
+    reads a decision makes before it would otherwise each stand alone, and a
+    write through another session can commit between them and the decision:
+    a host disabled after admission judged it usable, say. The ledger's lock
+    serializes only the ledger's own callers; ``BEGIN IMMEDIATE`` holds every
+    other writer off until this session ends. Where the driver's connection is
+    already in a transaction — another session sharing an in-memory
+    database's one connection, or a write already made — that transaction has
+    written and so holds the writer slot, and a second ``BEGIN`` would be
+    refused, so it is kept. Run it after
+    :meth:`CapacityLedgerService._expire_stale_holds`, which commits what it
+    lapses and so ends any transaction begun before it.
+    """
+    connection = db.connection()
+    if connection.dialect.name != "sqlite":
+        return
+    if connection.connection.driver_connection.in_transaction:
+        return
+    connection.exec_driver_sql("BEGIN IMMEDIATE")
 
 
 def _executor_ref_for_resource(resource: CapacityBucket) -> dict[str, Any] | None:
@@ -206,6 +236,55 @@ def _requested_offering_mode(
         )
     return raw
 
+
+def _placement_key(deal_ref: Mapping[str, Any]) -> str | None:
+    """The placement key a reserve's ``deal_ref`` carries, if any.
+
+    The key is opaque to the site: it names a deal and the purpose of one
+    placement for it, and the site uses it only to find the reservation that
+    placement recorded.
+    """
+    raw = deal_ref.get("placement_key")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("deal_ref.placement_key must be a non-empty string")
+    return raw
+
+
+def _placement_request(
+    *,
+    resource_kind: str | None,
+    claim_attributes: Mapping[str, Any],
+    requested: Mapping[str, Decimal],
+    requested_mode: str | None,
+    lease_start_utc: str | None,
+    lease_duration_seconds: int | None,
+) -> dict[str, Any]:
+    """The reserve request a placement key records, as stored JSON.
+
+    The window is recorded as asked — its start, normalized, and its
+    duration — so a request whose start the site's clock supplied replays
+    equal to itself. The hold's TTL is not part of it: a replay returns the
+    recorded hold, whose expiry was fixed when it was admitted.
+    """
+    start = parse_utc(lease_start_utc)
+    return json.loads(
+        json.dumps(
+            {
+                "resource_type": resource_kind,
+                "attributes": dict(claim_attributes),
+                "offering_mode": requested_mode,
+                "dimensions": _serialize_dimensions(requested),
+                "lease_start_utc": start.isoformat() if start else None,
+                "lease_duration_seconds": (
+                    int(lease_duration_seconds)
+                    if lease_duration_seconds is not None
+                    else None
+                ),
+            }
+        )
+    )
 
 
 def _requested_units(
@@ -634,7 +713,10 @@ class CapacityLedgerService:
         mirror_dimension: str = _DEFAULT_MIRROR_DIMENSION,
         release_guard: CapacityReleaseGuard | None = None,
         release_effect: Callable[[Any, str, str], None] | None = None,
+        site_id: str = "local-site",
+        lease_end_effect: Callable[[Session, dict[str, Any]], None] | None = None,
         host_requirement: HostRequirement | None = None,
+        deliverable_hosts: DeliverableHosts | None = None,
     ) -> None:
         """``required_attributes`` is an optional coarse local eligibility
         invariant: a resource matches only when its attributes give each
@@ -670,21 +752,37 @@ class CapacityLedgerService:
         separately, so a crash cannot leave one returned and not the other. It
         writes in the session and never commits; raising aborts the reclaim.
 
+        ``site_id`` is the configured logical site identity in immutable lease-end
+        events. ``lease_end_effect`` borrows the ending transaction to sign and
+        reserve an independent event-keyed outbox; it never commits, and raising
+        rolls back the transition. Intended-end evidence does not free capacity.
+
         ``host_requirement`` maps each fulfillment provider identity to whether
-        its delivery needs a host. When supplied, a declaration that names no
+        its delivery needs a host. When supplied, a declaration with no usable
         host is not an admission candidate in a pool whose provider needs one,
-        or whose provider the requirement does not name; see
-        ``market_resource_pools.pool_needs_host``. A composition that executes
-        nothing against hosts supplies none, and admission is then
-        host-agnostic.
+        or whose provider the requirement does not name, and is not offered by
+        :meth:`list_offered_resources`; see
+        ``market_resource_pools.declaration_has_usable_host``. A composition
+        that executes nothing against hosts supplies none, and admission is
+        then host-agnostic.
+
+        ``deliverable_hosts`` reports the hosts taking new delivery, the
+        registered and enabled ones, and is read in the session each decision
+        is made in, so a declaration naming a host absent
+        from it has no usable host. The ledger learns only host identifiers
+        from it and owns no host record. With a requirement but no report,
+        every named host is usable.
         """
         self._session_factory = session_factory
         self._host_requirement = host_requirement
+        self._deliverable_hosts = deliverable_hosts
         self._required_attributes = tuple(required_attributes)
         self._unit_claim_keys = tuple(unit_claim_keys)
         self._mirror_dimension = mirror_dimension
         self._release_guard = release_guard
         self._release_effect = release_effect
+        self._site_id = site_id
+        self._lease_end_effect = lease_end_effect
         # Re-entrant and held across READS too: the service's SQLite
         # engine is a StaticPool — every session shares one connection,
         # so an unserialized read interleaving with a write transaction
@@ -1019,6 +1117,12 @@ class CapacityLedgerService:
             )
 
     def list_resources(self) -> list[dict[str, Any]]:
+        """Every declaration with availability and its own stored ``enabled``.
+
+        The operator's view: it reports what was declared, so a declaration
+        that is not offered for want of a usable host still reads as enabled
+        here. Projections are built from :meth:`list_offered_resources`.
+        """
         with self.serialized(), self._session_factory() as db:
             self._expire_stale_holds(db)
             rows = (
@@ -1026,13 +1130,62 @@ class CapacityLedgerService:
             )
             return [self._resource_payload(db, row) for row in rows]
 
+    def list_offered_resources(self) -> list[dict[str, Any]]:
+        """Every declaration as :meth:`list_resources` gives it, with ``enabled``
+        replaced by whether the site offers it.
+
+        A declaration is offered when it is itself enabled and has a usable
+        host, judged with its pool's provider and deliverable offering modes
+        against the host requirement and the hosts taking new delivery, all
+        read in this one transaction. Every projection and the snapshot are
+        built from this read, so a storefront is never shown as sellable what
+        admission refuses. Nothing here records a capacity event or advances
+        the capacity version: a change of host state reaches storefronts when
+        they next read a projection.
+        """
+        with self.serialized(), self._session_factory() as db:
+            self._expire_stale_holds(db)
+            _begin_decision_transaction(db)
+            rows = (
+                db.query(CapacityBucket).order_by(CapacityBucket.updated_at.asc()).all()
+            )
+            payloads = [self._resource_payload(db, row) for row in rows]
+            if self._host_requirement is None:
+                return payloads
+            deliverable = self._deliverable_host_ids(db)
+            pools: dict[str, tuple[str | None, bool]] = {}
+            for row, payload in zip(rows, payloads):
+                if not payload["enabled"]:
+                    continue
+                pool_id = row.pool_id or ""
+                if pool_id not in pools:
+                    pools[pool_id] = (
+                        self._pool_provider(db, pool_id),
+                        self._pool_delivers(db, pool_id),
+                    )
+                provider, delivers = pools[pool_id]
+                # The host rule bounds only supply an admission authority
+                # stands behind. The site reads no pool's backing: an unbacked
+                # pool must deliver nothing, as its declarations' resolution
+                # enforces, so a pool delivering no offering mode is judged
+                # unbacked, as admission judges it, and its declarations keep
+                # their own ``enabled`` whatever host they name.
+                payload["enabled"] = declaration_has_usable_host(
+                    row.host_id,
+                    provider,
+                    delivers,
+                    self._host_requirement,
+                    deliverable,
+                )
+            return payloads
+
     # ------------------------------------------------------------------
     # SiteCapacityAuthority verbs
     # ------------------------------------------------------------------
 
     def snapshot(self) -> list[dict[str, Any]]:
-        """Advisory availability view (enabled resources only)."""
-        return [r for r in self.list_resources() if r.get("enabled")]
+        """Advisory availability view: the declarations the site offers."""
+        return [r for r in self.list_offered_resources() if r.get("enabled")]
 
     def probe(
         self,
@@ -1054,6 +1207,7 @@ class CapacityLedgerService:
         )
         with self.serialized(), self._session_factory() as db:
             self._expire_stale_holds(db)
+            _begin_decision_transaction(db)
             match = self._find_candidate(db, claim, requested, window_start, window_end)
             if match is None:
                 return None
@@ -1071,7 +1225,20 @@ class CapacityLedgerService:
     ) -> dict[str, Any] | None:
         """Atomically check-and-reserve capacity matching ``claim``.
 
-        Idempotent by ``deal_ref["escrow_uid"]`` when present: a repeat
+        Idempotent by ``deal_ref["placement_key"]`` when present: a replay
+        under a recorded key returns that reservation in whatever state it
+        has reached -- held, committed, released, or lapsed -- and admits
+        nothing, and a replay that asks for anything the recorded
+        reservation was not admitted for is refused with
+        :class:`CapacityConflictError` and nothing written. Unlike the
+        escrow lookup below, a released reservation still answers its key:
+        a caller whose acknowledgement was lost must learn that its own
+        placement lapsed, not receive a fresh hold in its place, and a new
+        placement for the same deal names a new key. A keyed reserve whose
+        escrow already holds a reservation placed without a key adopts that
+        reservation under its key; one held under another key is refused.
+
+        Otherwise idempotent by ``deal_ref["escrow_uid"]`` when present: a repeat
         call for the same escrow_uid returns the existing held reservation
         (``reserved``/``provisioning``/``leased``/etc. -- anything in
         ``HELD_RESERVATION_STATES``) rather than minting a second one. This
@@ -1100,17 +1267,44 @@ class CapacityLedgerService:
         # normalizes `resource_id` into the matched attribute mapping, so a
         # listing that named one resource is carried here as an ordinary
         # categorical constraint rather than needing a second mechanism.
-        _, claim_attributes = _split_claim_requirement(
+        resource_kind, claim_attributes = _split_claim_requirement(
             claim, unit_claim_keys=self._unit_claim_keys
         )
         deal = dict(deal_ref or {})
         escrow_uid = deal.get("escrow_uid")
+        placement_key = _placement_key(deal)
+        placement_request = (
+            _placement_request(
+                resource_kind=resource_kind,
+                claim_attributes=claim_attributes,
+                requested=requested,
+                requested_mode=requested_mode,
+                lease_start_utc=lease_start_utc,
+                lease_duration_seconds=lease_duration_seconds,
+            )
+            if placement_key is not None
+            else None
+        )
         window_start, window_end = _lease_window(
             lease_start_utc=lease_start_utc,
             lease_duration_seconds=lease_duration_seconds,
         )
         with self.serialized(), self._session_factory() as db:
             self._expire_stale_holds(db)
+            _begin_decision_transaction(db)
+            if placement_key is not None:
+                recorded = (
+                    db.query(CapacityReservation)
+                    .filter(CapacityReservation.placement_key == placement_key)
+                    .one_or_none()
+                )
+                if recorded is not None:
+                    if recorded.placement_request != placement_request:
+                        raise CapacityConflictError(
+                            f"placement {placement_key!r} was reserved for a "
+                            "different claim, offering mode or lease window"
+                        )
+                    return self._reservation_payload_for_reserve(db, recorded)
             if escrow_uid:
                 existing = self._find_reservation(db, escrow_uid=escrow_uid)
                 if existing is not None:
@@ -1118,6 +1312,20 @@ class CapacityLedgerService:
                         raise CapacityConflictError(
                             "offering_mode does not match the existing reservation"
                         )
+                    if placement_key is not None:
+                        # The escrow's held reservation belongs to another
+                        # placement, or to none. Another placement's row is not
+                        # this one's to answer with; a row placed without a key
+                        # is adopted under this one, so its replay finds the row
+                        # once it is released rather than admitting a fresh one.
+                        if existing.placement_key is not None:
+                            raise CapacityConflictError(
+                                f"escrow {escrow_uid!r} is held by placement "
+                                f"{existing.placement_key!r}, not {placement_key!r}"
+                            )
+                        existing.placement_key = placement_key
+                        existing.placement_request = placement_request
+                        db.commit()
                     return self._reservation_payload_for_reserve(db, existing)
             match = self._find_candidate(db, claim, requested, window_start, window_end)
             if match is None:
@@ -1137,6 +1345,8 @@ class CapacityLedgerService:
                 state=ReservationState.reserved.value,
                 deal_ref=deal,
                 escrow_uid=deal.get("escrow_uid"),
+                placement_key=placement_key,
+                placement_request=placement_request,
                 hold_expires_at=hold_expires_at,
                 executor_ref=_executor_ref_for_resource(resource),
                 offering_mode=requested_mode,
@@ -1186,6 +1396,7 @@ class CapacityLedgerService:
         """
         with self.serialized(), self._session_factory() as db:
             self._expire_stale_holds(db)
+            _begin_decision_transaction(db)
             result = self.assign_settlement_resource_in_session(
                 db,
                 capacity_reservation_id=capacity_reservation_id,
@@ -1241,10 +1452,27 @@ class CapacityLedgerService:
                 f"offering mode {requested_mode!r} is not declared by pool "
                 f"{destination.pool_id!r}"
             )
-        if not destination.host_id and self._pool_needs_host(db, destination.pool_id):
+        # The destination has passed the deliverable-mode check above, which an
+        # unbacked pool, delivering nothing, never passes; so it is judged as
+        # backed. The recheck refuses a destination with no usable host
+        # whatever its caller checked first.
+        if not declaration_has_usable_host(
+            destination.host_id,
+            self._pool_provider(db, destination.pool_id),
+            True,
+            self._host_requirement,
+            self._deliverable_host_ids(db),
+        ):
+            if not destination.host_id:
+                reason = "names no host"
+            else:
+                reason = (
+                    f"names host {destination.host_id!r}, which is not taking "
+                    "new delivery"
+                )
             raise CapacityConflictError(
-                f"settlement resource {settlement_resource_id!r} names no host, "
-                f"and pool {destination.pool_id!r} delivers through one"
+                f"settlement resource {settlement_resource_id!r} {reason}, "
+                f"and pool {destination.pool_id!r} delivers through a host"
             )
         if (
             self._backing_resource_id(db, reservation.capacity_reservation_id)
@@ -1510,6 +1738,7 @@ class CapacityLedgerService:
         forced: bool = False,
         failure_reason: str | None = None,
         failure_message: str | None = None,
+        end_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Return a held reservation's capacity to the pool, if the guard permits.
 
@@ -1555,6 +1784,11 @@ class CapacityLedgerService:
                 db, reservation.capacity_reservation_id
             ):
                 return None
+            self._record_lease_end(
+                db, reservation, transition_key="force_release" if forced else "end",
+                context=end_context, cause="force_release" if forced else "release",
+                reason=failure_message or failure_reason,
+            )
             reservation.state = state
             reservation.released_at = datetime.now(timezone.utc).isoformat()
             reservation.failure_reason = failure_reason
@@ -1637,6 +1871,7 @@ class CapacityLedgerService:
         )
         with self.serialized(), self._session_factory() as db:
             self._expire_stale_holds(db)
+            _begin_decision_transaction(db)
             old_reservation = db.get(
                 CapacityReservation, old_capacity_reservation_id, with_for_update=True
             )
@@ -1651,6 +1886,7 @@ class CapacityLedgerService:
                 db, old_capacity_reservation_id
             )
             old_dimensions = _reservation_dimensions(old_reservation, self._mirror_dimension)
+            self._record_lease_end(db, old_reservation, cause="superseded")
             old_reservation.state = ReservationState.released.value
             old_reservation.released_at = datetime.now(timezone.utc).isoformat()
             old_reservation.failure_reason = "superseded"
@@ -1696,6 +1932,9 @@ class CapacityLedgerService:
                 state=ReservationState.reserved.value,
                 deal_ref=deal,
                 escrow_uid=deal.get("escrow_uid"),
+                # No placement key: a key names the reserve that admitted a
+                # row, and stays on the superseded row, so a replay of that
+                # reserve answers with what it recorded, now released.
                 hold_expires_at=hold_expires_at,
                 executor_ref=_executor_ref_for_resource(resource),
                 offering_mode=requested_mode,
@@ -1770,6 +2009,45 @@ class CapacityLedgerService:
             db.commit()
             return self._reservation_payload(reservation)
 
+    def activate_lease(self, capacity_reservation_id: str) -> dict[str, Any] | None:
+        """Record, once, that a lease began running against a provisioned resource.
+
+        Admissible only on a lease: a ``leased`` reservation with a lease end.
+        The first activation writes ``activated_at_utc`` from the site's clock;
+        a retry returns the reservation unchanged, with the instant first
+        recorded. Activation is a fact of the lease's lifecycle, not evidence of
+        delivery, and it changes nothing else: not the state, not the window an
+        earlier truncation may have shortened, not the debit admission
+        accounts, and it records no capacity event, since availability does not
+        move.
+
+        Returns ``None`` for an unknown reservation. Any other state, and a
+        ``leased`` reservation committed with no end -- an open-ended hold,
+        which has no lease tail -- is refused with
+        :class:`CapacityConflictError`; nothing is written, so activation can
+        neither commit a hold nor undo a release that claimed the lease first.
+        """
+        with self.serialized(), self._session_factory() as db:
+            reservation = self._find_reservation(
+                db, capacity_reservation_id=capacity_reservation_id
+            )
+            if reservation is None:
+                return None
+            if reservation.state != ReservationState.leased.value:
+                raise CapacityConflictError(
+                    f"reservation {reservation.capacity_reservation_id} is "
+                    f"{reservation.state}; cannot activate"
+                )
+            if reservation.lease_end_utc is None:
+                raise CapacityConflictError(
+                    f"reservation {reservation.capacity_reservation_id} has no "
+                    "lease tail; cannot activate"
+                )
+            if reservation.activated_at_utc is None:
+                reservation.activated_at_utc = datetime.now(timezone.utc).isoformat()
+                db.commit()
+            return self._reservation_payload(reservation)
+
     # ------------------------------------------------------------------
     # Lease tail (the merged vm_leases half of the reservation row)
     # ------------------------------------------------------------------
@@ -1799,6 +2077,7 @@ class CapacityLedgerService:
         capacity_reservation_id: str,
         *,
         release_job_id: str | None = None,
+        end_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Move a reservation into ``releasing``, if its state still allows it.
 
@@ -1829,6 +2108,7 @@ class CapacityLedgerService:
                 return self._reservation_payload(reservation)
             if reservation.state not in _BEGIN_RELEASING_FROM:
                 return None
+            self._record_lease_end(db, reservation, context=end_context)
             reservation.release_requested_at = datetime.now(timezone.utc).isoformat()
             reservation.state = ReservationState.releasing.value
             self._set_release_job_id(reservation, release_job_id=release_job_id)
@@ -1842,6 +2122,7 @@ class CapacityLedgerService:
         reason: str,
         message: str | None = None,
         release_job_id: str | None = None,
+        end_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Record that a release failed, if the reservation is still releasable.
 
@@ -1862,6 +2143,10 @@ class CapacityLedgerService:
                 and reservation.release_job_id != release_job_id
             ):
                 return None
+            self._record_lease_end(
+                db, reservation, transition_key="release_failure", context=end_context,
+                cause="release_failed", reason=message or reason,
+            )
             reservation.state = ReservationState.release_failed.value
             reservation.failure_reason = reason
             reservation.failure_message = message
@@ -2059,6 +2344,43 @@ class CapacityLedgerService:
         )
 
 
+    def _record_lease_end(
+        self, db: Session, reservation: CapacityReservation, *,
+        transition_key: str = "end", context: Mapping[str, Any] | None = None,
+        cause: str = "release", reason: str | None = None,
+    ) -> None:
+        if db.query(LeaseEndedEvent).filter_by(
+            capacity_reservation_id=reservation.capacity_reservation_id, transition_key=transition_key,
+        ).first() is not None:
+            return
+        context = dict(context or {})
+        event_id = str(uuid.uuid4())
+        payload = {
+            "version": 1, "kind": "lease_ended", "event_id": event_id,
+            "capacity_reservation_id": reservation.capacity_reservation_id,
+            "site_id": self._site_id,
+            "effective_at": context.get("effective_at", int(datetime.now(timezone.utc).timestamp())),
+            "source_state": reservation.state, "cause": context.get("cause", cause),
+            "reason": context.get("reason", reason), "caller": context.get("caller"),
+            "claimed_deadline": context.get("claimed_deadline"), "deadline_phase": context.get("deadline_phase"),
+        }
+        db.add(LeaseEndedEvent(
+            event_id=event_id, capacity_reservation_id=reservation.capacity_reservation_id,
+            transition_key=transition_key, payload=payload,
+        ))
+        # Flush before the effect so duplicate transition checks in this session
+        # see the immutable event. The effect may sign and reserve its outbox,
+        # but never commits: a failed reservation must roll back the end too.
+        db.flush()
+        if self._lease_end_effect is not None:
+            self._lease_end_effect(db, dict(payload))
+
+    def lease_end_events(self, capacity_reservation_id: str) -> list[dict[str, Any]]:
+        with self.serialized(), self._session_factory() as db:
+            return [dict(row.payload) for row in db.query(LeaseEndedEvent).filter_by(
+                capacity_reservation_id=capacity_reservation_id,
+            ).order_by(LeaseEndedEvent.event_id)]
+
     def _run_release_effect(self, db: Any, capacity_reservation_id: str, state: str) -> None:
         if self._release_effect is not None:
             self._release_effect(db, capacity_reservation_id, state)
@@ -2111,6 +2433,10 @@ class CapacityLedgerService:
                 continue
             if not self._release_permitted(db, reservation.capacity_reservation_id):
                 continue
+            self._record_lease_end(db, reservation, cause="hold_expired", context={
+                "effective_at": int(expires.timestamp()), "claimed_deadline": int(expires.timestamp()),
+                "deadline_phase": "reservation",
+            })
             reservation.state = ReservationState.released.value
             reservation.released_at = now.isoformat()
             reservation.failure_reason = "hold_expired"
@@ -2217,12 +2543,37 @@ class CapacityLedgerService:
         )
 
 
-    def _pool_needs_host(self, db: Session, pool_id: str) -> bool:
-        pool = db.get(ResourcePool, pool_id)
-        return pool_needs_host(
-            pool.provider if pool is not None else None,
-            self._host_requirement,
-        )
+    @staticmethod
+    def _pool_provider(db: Session, pool_id: str | None) -> str | None:
+        """A pool's provider; ``None`` for a missing pool.
+
+        A supplied host requirement reads a missing provider as needing a host.
+        """
+        pool = db.get(ResourcePool, pool_id) if pool_id else None
+        return pool.provider if pool is not None else None
+
+    @staticmethod
+    def _pool_delivers(db: Session, pool_id: str | None) -> bool:
+        """Whether a pool declares an offering mode it delivers.
+
+        A missing pool, or one whose deliverable modes do not parse (which
+        startup and every write refuse), is judged to deliver, so the host
+        rule fails closed for it rather than offering what admission would
+        refuse.
+        """
+        pool = db.get(ResourcePool, pool_id) if pool_id else None
+        if pool is None:
+            return True
+        try:
+            return bool(declared_deliverable_modes(pool.policy_tags or {}))
+        except ValueError:
+            return True
+
+    def _deliverable_host_ids(self, db: Session) -> frozenset[str] | None:
+        """The hosts taking new delivery, read in ``db``; ``None`` with no report."""
+        if self._deliverable_hosts is None:
+            return None
+        return self._deliverable_hosts.deliverable_host_ids(db)
 
     def _find_candidate(
         self,
@@ -2244,7 +2595,8 @@ class CapacityLedgerService:
         requested_mode = _requested_offering_mode(claim, required=False)
         undeclared_pools: set[str] = set()
         pool_mode_decisions: dict[str, bool] = {}
-        pool_host_decisions: dict[str, bool] = {}
+        pool_providers: dict[str, str | None] = {}
+        deliverable = self._deliverable_host_ids(db)
         for resource in rows:
             pool_id = resource.pool_id
             if not pool_id:
@@ -2276,17 +2628,24 @@ class CapacityLedgerService:
                 if not pool_mode_decisions[pool_id]:
                     undeclared_pools.add(pool_id)
                     continue
-            # A declaration naming no host can be neither placed nor executed
-            # in a pool whose provider delivers through one, so it is not a
-            # candidate at all: the claim falls through to another declaration
-            # or to the ordinary no-capacity answer, never to a hold that
-            # scheduling would then have to refuse. Whether the named host is
-            # registered is checked at dispatch, where the connection is used.
-            if not resource.host_id:
-                if pool_id not in pool_host_decisions:
-                    pool_host_decisions[pool_id] = self._pool_needs_host(db, pool_id)
-                if pool_host_decisions[pool_id]:
-                    continue
+            # A declaration with no usable host — naming none, or naming one
+            # that is disabled or unregistered — cannot be delivered in a pool
+            # whose provider delivers through a host, so it is not a candidate
+            # at all: the claim falls through to another declaration or to the
+            # ordinary no-capacity answer, never to a hold that scheduling and
+            # dispatch would then have to refuse. A candidate is judged as
+            # backed: an unbacked pool delivers nothing, so its declarations
+            # never pass the deliverable-mode check above.
+            if pool_id not in pool_providers:
+                pool_providers[pool_id] = self._pool_provider(db, pool_id)
+            if not declaration_has_usable_host(
+                resource.host_id,
+                pool_providers[pool_id],
+                True,
+                self._host_requirement,
+                deliverable,
+            ):
+                continue
             held = self._held_dimensions(
                 db, resource.backing_resource_id, lease_start, lease_end
             )
@@ -2558,6 +2917,7 @@ class CapacityLedgerService:
             "failure_message": reservation.failure_message,
             "released_at": reservation.released_at,
             "release_requested_at": reservation.release_requested_at,
+            "activated_at_utc": reservation.activated_at_utc,
         }
 
     def _reservation_payload_for_reserve(
@@ -2568,9 +2928,8 @@ class CapacityLedgerService:
         """``_reservation_payload`` plus ``resource_id``, matching the shape
         ``reserve()``'s fresh-reservation path returns (via
         ``_match_payload``), so an idempotent-hit return is byte-compatible
-        with a fresh one for callers that read ``resource_id`` (for
-        example ``vm_fulfillment_service.py``'s
-        ``reserved.get("resource_id")``). ``resource_id`` is resolved via
+        with a fresh one for callers that read ``resource_id`` from
+        either. ``resource_id`` is resolved via
         the same backing-resource lookup ``get_reservation_backing_resource_id``
         already exposes, not duplicated here.
         """

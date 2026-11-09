@@ -164,7 +164,7 @@ class PaymentSettlementService:
             try:
                 existing.validate_identity(
                     negotiation_id=negotiation_id,
-                    mechanism=agreement.settlement.mechanism,
+                    mechanism=agreement.settlement.settlement_schema,
                     settlement_ref=data.transaction_id,
                 )
                 proven = (

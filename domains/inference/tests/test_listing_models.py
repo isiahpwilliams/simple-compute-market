@@ -29,12 +29,10 @@ def _option(value=1, per="credit", asset=_ASSET):
     rates = [RateValue(field="amount", per=per, value=value)]
     return {
         "option_id": derive_settlement_option_id(
-            mechanism="alkahest.v1", asset=asset, rates=rates, params={}
+            price={"asset": asset, "rates": rates}, settlement={"schema": "alkahest.v1"}
         ),
-        "mechanism": "alkahest.v1",
-        "asset": asset,
-        "rates": [rate.model_dump(mode="json") for rate in rates],
-        "params": {},
+        "price": {"asset": asset, "rates": [rate.model_dump(mode="json") for rate in rates]},
+        "settlement": {"schema": "alkahest.v1"},
     }
 
 
@@ -286,12 +284,10 @@ def test_duplicate_settlement_option_ids_are_rejected():
 def _option_with_rates(rates):
     return {
         "option_id": derive_settlement_option_id(
-            mechanism="alkahest.v1", asset=_ASSET, rates=rates, params={}
+            price={"asset": _ASSET, "rates": rates}, settlement={"schema": "alkahest.v1"}
         ),
-        "mechanism": "alkahest.v1",
-        "asset": _ASSET,
-        "rates": [rate.model_dump(mode="json") for rate in rates],
-        "params": {},
+        "price": {"asset": _ASSET, "rates": [rate.model_dump(mode="json") for rate in rates]},
+        "settlement": {"schema": "alkahest.v1"},
     }
 
 

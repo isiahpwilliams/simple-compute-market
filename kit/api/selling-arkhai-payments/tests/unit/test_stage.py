@@ -24,7 +24,6 @@ from arkhai_api_selling_arkhai_payments.validators import (
 SERVICE = Ed25519Signer(bytes(range(32)))
 PAYER = "11111111-1111-4111-8111-111111111111"
 PAYEE = "22222222-2222-4222-8222-222222222222"
-DISPUTE = "33333333-3333-4333-8333-333333333333"
 
 
 class _Listing(BaseModel):
@@ -63,7 +62,7 @@ def _config(*, enabled: bool, servicing: bool = True):
         enabled=enabled,
         service_url="http://127.0.0.1:9" if servicing else None,
         service_identity=SERVICE.identity if servicing else None,
-        fee_bps=250, dispute_authority=DISPUTE, development_auth=True,
+        fee_bps=250, development_auth=True,
     )
     return SimpleNamespace(mechanism_config=lambda _key: section)
 
@@ -85,12 +84,12 @@ def test_a_publication_clause_states_an_integer_rate_per_credit():
 
 def test_a_selection_states_exactly_a_valid_payer_account():
     stage = _stage()
-    stage.validate_selection(SimpleNamespace(params={"payer_account": PAYER}))
+    stage.validate_selection(SimpleNamespace(settlement_params={"payer_account": PAYER}))
 
     with pytest.raises(OfferUnfulfillableError, match="payments_payer_account_missing"):
-        stage.validate_selection(SimpleNamespace(params={}))
+        stage.validate_selection(SimpleNamespace(settlement_params={}))
     with pytest.raises(OfferUnfulfillableError, match="payments_payer_account_invalid"):
-        stage.validate_selection(SimpleNamespace(params={"payer_account": "nope"}))
+        stage.validate_selection(SimpleNamespace(settlement_params={"payer_account": "nope"}))
 
 
 @pytest.mark.parametrize("enabled", [True, False])

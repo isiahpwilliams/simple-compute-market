@@ -25,7 +25,7 @@ branch may have moved, and follow every step below for the new work.
 Run interactively, as most runs are, this section does not apply but for the
 outcome it describes, which an interactive run records itself ("Running
 interactively"); nothing else in the skill changes.
-When this skill runs through `scripts/run_change_step.py` —
+When this skill runs through `scripts/change-workflow start --unattended` —
 `make implement UNATTENDED=1`, or the orchestrating session — nobody can answer in
 the session, and every turn ends with an outcome matching
 `.agents/change-outcome.schema.json`, whose `message` the owner reads as written:
@@ -67,9 +67,11 @@ the session, and every turn ends with an outcome matching
   wrapper logs that turn's report as the run's end, and what the work later finds
   reaches nobody. Run the fresh-context check's subagent in the foreground, never
   with `run_in_background`. Wait for a background command inside one Bash call,
-  with a blocking `tail -f … | grep -m1` on its output matching the line it prints
-  when it ends, repeated when the call times out — never with Monitor, a wake-up,
-  or a shell loop.
+  with `scripts/change-workflow wait <output-file> '<pattern>'` matching the line it
+  prints when it ends, repeated when the wait gives up; when it says the command
+  ended with no line matching, read the output rather than waiting again — never
+  with `tail -f`, which hangs when that line is the last, Monitor, a wake-up, or a
+  shell loop.
 - **The end is an outcome.** When the sections you were given are committed and
   pushed, end with `finished`, `next` naming implementation's exit, the round's
   triage, `{"step": "triage", "kind": "implementation"}`, and what the round needs
@@ -92,7 +94,7 @@ slash command — no wrapper records the run, so its last act records the outcom
 it would end with unattended, as "Running unattended" gives it:
 
 ```text
-python3 scripts/run_change_step.py record <change> implement --outcome '<the outcome, as JSON>'
+scripts/change-workflow record <change> implement --outcome '<the outcome, as JSON>'
 ```
 
 `record` checks the outcome against `.agents/change-outcome.schema.json` and
@@ -109,10 +111,10 @@ proposed: the computation reads a round's progress from the task list and the
 records, not from its outcome, and names what they say comes next.
 
 The round's join reads the round from its line in the log, which the orchestrating
-session writes as a round starts. Interactively you write it: when `python3
-scripts/change_next_step.py <change>` names `round`, record that round, as it
-names it, before implementing — `python3 scripts/run_change_step.py note <change>
-round --sections '<its sessions, as 1,2;3>' --by <its by>` — and implement its
+session writes as a round starts. Interactively you write it: when
+`scripts/change-workflow next <change>` names `round`, record that round, as it
+names it, before implementing — `scripts/change-workflow note <change> round
+--sections '<its sessions, as 1,2;3>' --by <its by>` — and implement its
 first session. When it names `implement`, the round is recorded already.
 
 ## Resolving a merge's conflicts
@@ -138,19 +140,22 @@ and it checks no task.
    decision: ask the owner, with the options and your recommendation. Then `git
    add` each resolved file.
 4. **Test.** Run the suites the verification tasks of the sections owning the
-   conflicted files name, and `make test`; `make lock` and `make check-packaging`
-   when a lock or a `pyproject.toml` conflicted. Fix what the merge broke, adding
-   each fix to the merge.
+   conflicted files name, then `scripts/change-workflow run pre-commit <change>`
+   (step 5): a resolution outside the inert paths is a functional change, so it
+   runs every hook of a functional commit. A conflicted derived file, such as a
+   lock, is resolved by taking one side before it runs, and the hook that rebuilds
+   it settles the rest. Fix what the merge broke, adding each fix, and what the
+   hooks rebuilt, to the merge.
 5. **Conclude.** `git commit -m "<Git's merge subject>" -m "<resolutions>"`
    concludes the merge without opening an editor: the subject is the one Git
    wrote for it (`Merge branch 'dev' into <branch>`), and the paragraph names each
-   conflicted file and how it was resolved. Push it with `make push-branch`; if it refuses, stop and report its
-   reasons. Report each file's resolution, and end `finished`. A merge is the
+   conflicted file and how it was resolved. Push it with `scripts/change-workflow
+   push`; if it refuses, stop and report its reasons. Report each file's resolution, and end `finished`. A merge is the
    owner's intervention, so where the change goes after it is theirs, not this
    run's: `next` is `{"step": "round"}`, an exit implementation does not declare,
    which the computation brings to the owner rather than taking, and `message`
-   says where the change stood — what `python3 scripts/change_next_step.py
-   <change>` names once the merge is concluded — for the owner to direct it.
+   says where the change stood — what `scripts/change-workflow next <change>`
+   names once the merge is concluded — for the owner to direct it.
 
 ## 1. Check that this section may start
 
@@ -159,7 +164,7 @@ and it checks no task.
   change's latest planning commits, or its name belongs to another change, stop and
   ask the owner — unless the change's log holds the owner's decision that it runs
   on this branch: run `git branch --show-current`, then
-  `python3 scripts/run_change_step.py log <change> --branch <that branch>`; a line
+  `scripts/change-workflow log <change> --branch <that branch>`; a line
   it prints is that decision, and the branch is accepted.
 - **Status.** The change's row in `openspec/changes/README.md` is
   `ready for implementation` or `in implementation`, and no dependency in its
@@ -167,7 +172,8 @@ and it checks no task.
   return to implementation the owner has confirmed is set `in implementation`.
 - **Worktree.** It is clean, or holds only changes the owner confirms are this
   section's, or the edit under `.claude/` that a task of this section gives the
-  orchestrator (section 3). `make round-view-closed` passes: while the owner reads a round
+  orchestrator (section 3). `scripts/change-workflow check round-view` passes:
+  while the owner reads a round
   (`make round-view`), the branch points at the round's base and its changes are
   uncommitted, so committing a section then would squash the round into it.
 - **Task list.** `make check-tasks CHANGE=<change>` passes. A task numbered for
@@ -184,9 +190,8 @@ If any check fails, stop and say why.
 
 Read in full, even if you believe you know it:
 
-- `AGENTS.md` and every document it requires: `docs/development/ARCHITECTURE.md`,
-  `docs/development/TESTING.md`, `docs/development/DEPLOYMENT_AND_CONFIG.md`, and
-  `openspec/README.md`;
+- the documents `scripts/change-workflow config load implement` prints: the
+  repository's guidance, which its configuration names;
 - the change's `proposal.md`, `design.md`, `specs/`, and all of `tasks.md` —
   especially earlier sections' notes, which carry the previous session's handoff;
 - the triage of the latest implementation review in `reviews/`, if any: accepted
@@ -204,7 +209,13 @@ When this is the change's first section, set its status to `in implementation`.
 Work through the section's tasks in order. For each:
 
 - Make the change the task and its cited decision call for, and no more. Work that
-  belongs to a later section stays there.
+  belongs to a later section stays there. A defect you find on the way is fixed
+  here when its fix is understood and small beside the change, even outside the
+  change's stated scope, and recorded in the section's notes as outside the plan,
+  so the round's review and the owner's reading see it; one that is large, or not
+  understood well enough to fix without a design of its own, is recorded where
+  `AGENTS.md`'s "Deferred work" says
+  (`openspec/README.md#defects-found-during-a-change`).
 - A task the plan gives the orchestrator — an edit under `.claude/`, which every
   step is denied — is never attempted: check that its edit is in the worktree and
   commit it with the section. When it is missing, stop and name the edit.
@@ -258,11 +269,11 @@ the design does not make, do not guess and do not work around it:
 2. For a return to design or planning, commit what the section has — its code,
    tests, and notes — as one work-in-progress commit, checking no task for it: the
    message names the change and the section, says the work is in progress, and why
-   the change returns. No check need pass first: only `dev` is protected, and a
-   commit known not to work harms nothing on the change's branch, while no session
-   is left to commit the work, and a dirty checkout blocks every later step's
-   guarded push. Push it with `make push-branch`; if it refuses, stop and report
-   its reasons, leaving the commit as it is.
+   the change returns. No check need pass first: the change's branch is not
+   protected — only `main` and `dev` are — and a commit known not to work harms
+   nothing on it, while no session is left to commit the work, and a dirty
+   checkout blocks every later step's guarded push. Push it with `scripts/change-workflow push`; if it refuses, stop
+   and report its reasons, leaving the commit as it is.
 3. Tell the owner, and recommend the way back: a design question returns the change
    to design (`change-design`); a plan defect goes to planning (`change-plan`); an
    external input the change cannot supply makes it `blocked in implementation`,
@@ -282,26 +293,33 @@ planning defect, not a reason to let the session compact.
 
 Run each of these, and fix what it reports:
 
-- `make lock` when the section changed a dependency, then `make check-packaging`;
 - the focused suites the section's verification point names, and every suite that
   covers code the section changed;
-- `make test`, whatever the section touched: a change to a shared package, a
-  dependency, or a lock reaches projects no focused suite covers, and the full
-  suite is cheap beside a review round spent finding that;
-- `make check-change CHANGE=<change>`: comment hygiene, the agent skills, the
-  change's documentation citations and task list, the change index, and the
-  pinned strict OpenSpec validation, in one call that prints only what fails.
-  Before closeout its citations check may report only the permanent documents the
-  change's tasks create at closeout — the promotion destinations its plan names;
-  list those in the report and fix anything else. A change with no spec deltas
-  fails the validation every time, since the validator rejects a change with
-  none; say so in the report and take that one failure as expected.
+- `scripts/change-workflow run pre-commit <change>`, the repository's checks
+  before a commit. The paths the worktree changes decide what it runs: when any
+  lies outside the repository's inert paths, it runs `after-functional-change`,
+  such as a relock, then `pre-commit-functional`, such as the packaging check
+  and every suite, then `pre-commit`; otherwise `pre-commit` alone. `pre-commit`
+  runs the workflow's default checks — the change index, the task list, the
+  skills, and the strict OpenSpec validation of the change — then the
+  repository's own closing checks. Each hook ends with the engine's closing line,
+  naming every command that failed with its exit status. Stage what the hooks
+  rebuilt, such as a lock, with the section's edits. Before closeout the
+  citations check may report only the permanent documents the change's tasks
+  create at closeout — the promotion destinations its plan names; list those in
+  the report and fix anything else. A change with no spec deltas fails the
+  validation every time, since the validator rejects a change with none; say so
+  in the report and take that one failure as expected. A change whose clone
+  recorded no landing branch, or that has no clone, needs `--base <branch>` where
+  the configuration names `{base}`, and the run refuses without it, naming it:
+  give the branch the change's log or its plan says it lands on.
 
 Then have the section's diff checked in a fresh context. Start a subagent that has
 seen none of this session, and give it only: the change name, the section, the
 command to see the diff (`git diff` against the section's starting commit, plus any
-untracked files), and this instruction — read `AGENTS.md` and every document it
-requires, plus the specs and architecture companions of the capabilities the diff
+untracked files), and this instruction — read the documents
+`scripts/change-workflow config load implement` prints and every document they
+require, plus the specs and architecture companions of the capabilities the diff
 touches; then report every place the diff breaks that guidance — layering,
 comments, test level, documentation placement, packaging — with file and line, and
 every evidence claim in the section's task notes that overstates what its tests
@@ -320,8 +338,8 @@ each other.
 
 Commit the section's work, `tasks.md` included, as one commit, unreviewed: review
 findings land as later commits. The message names the change and the section and
-says what it delivers. Then push it with `make push-branch`, the guarded push of
-exactly `HEAD`; if it refuses, stop and report its reasons. A pushed branch starts
+says what it delivers. Then push it with `scripts/change-workflow push`, the
+guarded push of exactly `HEAD`; if it refuses, stop and report its reasons. A pushed branch starts
 nothing: validation dispatches the pipeline itself.
 
 ## 8. Continue or stop

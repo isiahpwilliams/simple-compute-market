@@ -709,7 +709,7 @@ A capacity-backed listing with a durable site mapping MUST route all capacity cl
 
 ### Requirement: Payment publication discloses mandate policy
 
-VM, bare-metal, and API-credit storefronts supporting `arkhai.payments.v1` MUST publish ready payment clauses as independent `settlement_options` beside supported Alkahest alternatives. Every option MUST bind asset, rates, payee account, hold window, and agreement-deposit setting. No Stripe funding profile or provider object MAY enter an option.
+VM, bare-metal, and API-credit storefronts supporting `arkhai.payments.v1` MUST publish ready payment clauses as independent `settlement_options` beside supported Alkahest alternatives. Every option MUST bind asset, rates, payee account, approval window, `adjudication` with its dispute window, and agreement-deposit setting. No Stripe funding profile or provider object MAY enter an option.
 
 #### Scenario: A payment clause is ready
 
@@ -718,7 +718,7 @@ VM, bare-metal, and API-credit storefronts supporting `arkhai.payments.v1` MUST 
 
 #### Scenario: Payment policy is incomplete
 
-- **WHEN** a clause lacks required payee, asset, window, or deposit policy
+- **WHEN** a clause lacks required payee, asset, approval window, dispute window, or deposit policy
 - **THEN** publication rejects it without inferring values from an Alkahest price or mutating accepted deals
 
 ### Requirement: Domain payment publication respects domain capacity
@@ -745,13 +745,13 @@ than classified by a default.
 
 Publication provenance MUST separate common listing identity — origin site,
 offering mode, and source declaration identity — from admission provenance. Every
-storefront operation that reserves, commits, releases, or truncates capacity, or
-schedules or dispatches against it, MUST pass through the listing's binding and be
-refused by the binding's backing delegate before any site call unless an admission
-authority stands behind the listing; no such operation MAY reach a site without that
-guard. A refused admission MUST be reported as a conflict, distinct from an identity
-fault such as an unknown site or a changed binding. Operations that compare, copy, or
-carry listing identity MUST accept a binding of either backing.
+storefront operation that reserves, commits, activates, releases, or truncates
+capacity, or schedules or dispatches against it, MUST pass through the listing's
+binding and be refused by the binding's backing delegate before any site call unless
+an admission authority stands behind the listing; no such operation MAY reach a site
+without that guard. A refused admission MUST be reported as a conflict, distinct from
+an identity fault such as an unknown site or a changed binding. Operations that
+compare, copy, or carry listing identity MUST accept a binding of either backing.
 
 #### Scenario: An unbacked listing binds
 
@@ -777,7 +777,7 @@ carry listing identity MUST accept a binding of either backing.
 
 #### Scenario: A capacity operation receives an unbacked listing
 
-- **WHEN** a reservation, commit, release, scheduling, or dispatch operation is attempted for an unbacked listing
+- **WHEN** a reservation, commit, lease activation, release, scheduling, or dispatch operation is attempted for an unbacked listing
 - **THEN** the operation is refused before any effect, so no reservation record is created with no authority behind it
 
 #### Scenario: Recovery reserves for an accepted deal
@@ -1987,6 +1987,15 @@ The claimed attributes MUST come from the storefront's trusted record of the acc
 listing, never from buyer input. A trusted record that carries no claimed attributes at all,
 rather than an empty set of them, MUST refuse the claim.
 
+An administrator's reservation of a capacity-backed bare-metal listing MUST construct the
+same claim, pinned to the listing's Physical Resource. Each attribute the administrator
+requires MUST equal the value that claim carries under the same name, its `resource_id`
+and its `dimensions` included: scalar values in the string form the claim holds them in,
+structured values exactly, in type as well as value. A reservation requiring anything the
+claim does not carry MUST be refused as a conflict without asking the site, and MUST NOT
+change the claim the site receives. A reservation requiring no attribute reserves the
+listing's claim as constructed.
+
 #### Scenario: A declaration changes model after acceptance
 
 - **WHEN** a buyer accepts a capacity-backed bare-metal listing published with
@@ -2005,6 +2014,20 @@ rather than an empty set of them, MUST refuse the claim.
 
 - **WHEN** a buyer accepts an unbacked bare-metal listing
 - **THEN** no capacity claim is constructed
+
+#### Scenario: An administrator re-reserves a released machine by its resource
+
+- **WHEN** an administrator reserves a capacity-backed bare-metal listing whose Physical
+  Resource has been released, requiring that listing's `resource_id` and
+  `dimensions: {units: 1}`
+- **THEN** the site receives the listing's claim pinned to that Physical Resource and
+  returns a reservation
+
+#### Scenario: An administrator requires what the claim does not carry
+
+- **WHEN** an administrator reserves a capacity-backed bare-metal listing requiring another
+  `resource_id`, `dimensions: {units: 2}`, or `dimensions: {units: true}`
+- **THEN** the reservation is refused as a conflict and the site is not asked
 
 ### Requirement: Bare-metal opening rechecks its listing against its source
 
@@ -2762,9 +2785,9 @@ publishes on, the release condition its escrow will use: the arbiter and its dem
 derived by the Alkahest mechanism from the seller's `[Settlement.alkahest]` policy, the
 seller wallet, and the chain's address book, identically for every domain that composes
 Alkahest. Release conditions MUST be derived only for Alkahest clauses whose mechanism is
-ready. A domain MUST declare which release models it can deliver, and a configured release
-model its domain cannot deliver MUST make Alkahest unready with a configuration blocker
-naming the model, rather than refusing startup.
+ready. A domain MUST declare which release models it can deliver, and a storefront whose
+Alkahest section, enabled or not, lists a release model its domain cannot deliver MUST
+refuse to start, naming the model.
 
 #### Scenario: A bare-metal listing offers Alkahest settlement
 
@@ -2777,8 +2800,7 @@ naming the model, rather than refusing startup.
 
 - **WHEN** a bare-metal storefront starts with `[Settlement.alkahest]` configured as
   interruptible
-- **THEN** it starts, Alkahest is reported unready naming the release model, and no
-  listing advertises an Alkahest option
+- **THEN** startup is refused naming the release model, and no listing is published
 
 #### Scenario: Alkahest is unready on a VM storefront
 
@@ -3135,6 +3157,15 @@ declaration's publication settings to repeat them.
 - **WHEN** the schedule response for a bare-metal deal names no host
 - **THEN** fulfillment does not begin, and the deal reports the conflict
 
+### Requirement: Lifecycle terms are published per option
+
+A listing MUST publish lifecycle terms, including the dispute window, only inside its settlement options. The VM admin interrupt route MUST identify an Alkahest interruptible deal by its accepted option's release condition, not by a listing field.
+
+#### Scenario: An administrator interrupts an Alkahest deal
+
+- **WHEN** an administrator interrupts a deal whose accepted Alkahest option uses the splitter release condition
+- **THEN** the route accepts it, without reading a listing-level marker
+
 ### Requirement: Bare-metal evidence retains its proof representation
 
 The bare-metal domain MUST provide an immutable evidence document containing
@@ -3239,11 +3270,11 @@ declare its new minimum version.
 - Global pause state: `domains/vms/storefront/tests/unit/test_order_pause_state.py` and `tests/integration/test_admin_api.py`.
 - Status reports per-site projection state and no resource count: `domains/vms/storefront/tests/unit/services/test_system_service.py`, `domains/vms/storefront/tests/integration/test_admin_api.py`, `domains/bare_metal/storefront/tests/test_http_system.py`, and `e2e-tests/tests/smoke/test_storefront_smoke.py`.
 - Site-scoped derivation keys and collision resistance (VM and bare-metal): `domains/vms/storefront/tests/unit/test_reconciler.py`; a bare-metal listing is keyed by the common binding's derivation key, whose source identity includes the pool: `domains/bare_metal/tests/test_storefront_publication.py` and `domains/bare_metal/storefront/tests/test_publication_cycle.py`.
-- Site-pinned claim routing, including the collision case placement policy would otherwise choose wrongly: `core/storefront/tests/unit/test_aggregation.py`. Mapped-listing routing reached through the real admin, negotiation-hold, and settlement/fulfillment entry points: `domains/vms/storefront/tests/integration/test_admin_api.py`, `domains/vms/storefront/tests/unit/test_two_phase_reserve.py`, and `domains/vms/storefront/tests/unit/test_settlement_jobs.py`.
+- Site-pinned claim routing, including the collision case placement policy would otherwise choose wrongly: `core/storefront/tests/unit/test_aggregation.py`. Mapped-listing routing reached through the real admin, negotiation-hold, and settlement/fulfillment entry points: `domains/vms/storefront/tests/integration/test_admin_api.py`, `domains/vms/storefront/tests/integration/test_negotiate_controller.py`, `domains/vms/storefront/tests/integration/test_vm_delivery_path.py`, and `domains/vms/storefront/tests/unit/test_settlement_jobs.py`.
 - Domain-owned listing-cardinality resolution, bucket-sourced fungible candidates, multi-member specific-resource derivation, the resource-keyed derivation-key collision fix, and the live (never persisted) hold-preference cap: `domains/vms/storefront/tests/unit/test_reconciler.py`, `domains/vms/storefront/tests/unit/test_listing_cardinality_mode.py`, `domains/vms/storefront/tests/unit/test_sync_negotiation_hold_cap.py`, `domains/vms/storefront/tests/unit/test_remote_capacity_client.py`, and `domains/bare_metal/storefront/tests/test_publication_cycle.py`.
 - Region/SLA hint resolution (including SLA's storefront-wide trust gate) and negotiation-floor pricing-policy precedence: `domains/vms/storefront/tests/unit/test_pool_descriptors.py`, `domains/vms/storefront/tests/unit/test_pricing_resolution.py`, `domains/vms/storefront/tests/unit/test_reconciler.py`, and `domains/vms/storefront/tests/unit/test_cli_publish_helpers.py::TestPoolHintResolutionSettings`.
 - Structured publication defaults and preview-first, typed, backed-up atomic migration with ambiguity refusal: `domains/vms/storefront/tests/unit/test_config_loader.py` and `test_publication_migration.py`.
-- Complete bare-metal seller composition, immutable listing/thread binding, selected-site lifecycle, result redaction, restart, and contribution wiring: `domains/bare_metal/storefront/tests/test_http_negotiation.py`, `test_persistence.py`, `test_fulfillment_service.py`, `test_site_clients.py`, `test_domain_runtime.py`, and `test_app_composition.py`.
+- Complete bare-metal seller composition, immutable listing/thread binding, selected-site lifecycle, result redaction, restart, and contribution wiring: `domains/bare_metal/storefront/tests/test_http_negotiation.py`, `test_persistence.py`, `integration/test_delivery_path.py`, `test_site_clients.py`, `test_domain_runtime.py`, and `test_app_composition.py`.
 - Every VM listing is a listing shape — the override, hint, and default-generator sources, per-model default shapes, and publishing exactly the declared quantities: `domains/vms/storefront/tests/unit/test_reconciler.py` (`TestListingShapes`, `TestStorefrontOverrideTier`), `domains/vms/domain/tests/test_shape_generation.py`, `test_storefront_adapter.py`, and `domains/vms/storefront/tests/integration/test_publication_loop.py`. A shape's declared quantities, not pool defaults, size the VM: `domains/vms/provisioning/adapter/tests/unit/test_vm_fulfillment_plan.py` (`TestSizingPrecedence`).
 - Shape feasibility agrees with the site ledger on declared and available capacity, members, and buckets: `domains/vms/storefront/tests/integration/test_shape_feasibility.py`.
 - Shape-bearing derivation identity and the seller-state carry-over across it, reported through system status: `domains/vms/storefront/tests/integration/test_listing_identity_carryover.py` and `test_publication_loop.py`.
@@ -3269,7 +3300,7 @@ declare its new minimum version.
 - Loop controls from either client variant: `domains/vms/storefront/tests/unit/test_lifecycle_client_parity.py`.
 - Bare-metal shape derivation and its holds: `domains/bare_metal/tests/test_shapes.py`, `test_storefront_publication.py`, and `test_publication.py`; the published flat fields against the compute schema, `test_schema.py`.
 - Bare-metal publication with shape-bearing identity, successors, region holds, and reports: `domains/bare_metal/storefront/tests/test_publication_cycle.py` and `test_persistence.py`; system evidence in `e2e-tests/tests/e2e/roles/scenarios/bare_metal/test_bare_metal_publication.py`, stages 03b and 06.
-- The whole-unit claim and its admission by the site's own matcher: `domains/bare_metal/storefront/tests/test_claims.py`, `test_fulfillment_service.py`, and `test_http_settlement.py`.
+- The whole-unit claim and its admission by the site's own matcher: `domains/bare_metal/storefront/tests/test_claims.py`, `integration/test_site_reservation.py`, and `test_http_settlement.py`.
 - The bare-metal opening recheck: `domains/bare_metal/tests/test_inventory_guard.py` and `domains/bare_metal/storefront/tests/test_http_negotiation.py`, through the canonical client.
 - A settlement request restates no negotiated term: `domains/vms/storefront/tests/unit/test_settlement_start_authority.py`, `domains/vms/buyer/tests/test_vm_settlement_helpers.py`, `core/storefront-client/tests/test_negotiate_new_payload.py`, and `domains/bare_metal/storefront/tests/test_http_settlement.py`.
 

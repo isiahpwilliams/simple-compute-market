@@ -2175,13 +2175,13 @@ part that would need a code edit returns the change to implementation.
       notes to final behaviour, material validation evidence, unresolved or
       deferred work, and destinations; move any alternative or debugging
       narrative they hold into `design.md` first.
-- [ ] 12.5 **Roadmap currency.** `docs/development/ROADMAP.md`, Goal 8: the
+- [ ] 12.5 **Roadmap currency.** `docs/development/ROADMAP.md`, Goal 9: the
       current-state prose now says the four roles exist and complete one deal
       at a flat charge per request, and the gap table's "No inference roles"
       row is removed, leaving metering, packaging, and qualification; name the
       update in the promotion record.
 - [ ] 12.6 **Campaign index currency.** `openspec/changes/README.md`: this
-      change's row and the Goal 8 campaign graph; every link resolves; `make
+      change's row and the Goal 9 campaign graph; every link resolves; `make
       check-change-index` passes. Other rows' `Depends on` are left as they
       are: `meter-inference-usage` and `package-inference-seller` are released
       at archive cleanup, not here.
@@ -2260,4 +2260,4 @@ part that would need a code edit returns the change to implementation.
 | plan review 06 F1 — the gateway discovers the listing it fronts by resource and served model, retrying until published | the `inference` capability's `spec.md` — "The gateway admits only paid requests for listed models"; its `architecture.md` — "Role composition over the family kit" |
 | plan review 06 F3 — the request charge is positive and ledger-bounded | the `inference` capability's `spec.md` — "Only request-priced rate cards are publishable without metered consumption"; the `api-family` capability's `spec.md` — "The issuance subject may carry accepted terms" |
 | review 01 F2 — a top-up is admitted after the gate's verification TTL | the `inference` capability's `spec.md` — "The gateway admits only paid requests for listed models"; its `architecture.md` — "Current limits" |
-| Roadmap and index currency (closeout parts 5 and 6) | `docs/development/ROADMAP.md` — Goal 8 current state and gap table; `openspec/changes/README.md` — this change's row and the Goal 8 campaign graph |
+| Roadmap and index currency (closeout parts 5 and 6) | `docs/development/ROADMAP.md` — Goal 9 current state and gap table; `openspec/changes/README.md` — this change's row and the Goal 9 campaign graph |

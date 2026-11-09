@@ -30,6 +30,7 @@ CHANGE = "pilot"
 NAMESPACE = "validate-pilot"
 RELEASE = "arkhai-node-operator"
 POD = f"{RELEASE}-e2e-tests-e2e-scenarios"
+PAYMENTS_POD = f"{RELEASE}-storefront-bob-payments-check"
 GIB = 2**30
 NOW = datetime(2026, 10, 22, 7, 0, tzinfo=timezone.utc)
 
@@ -50,8 +51,13 @@ class Fake:
                  head_after: str | None = None, exit_code: str = "0",
                  memory: Sequence[str] = ("500Mi",), restarts: int = 0,
                  samples_during_scenarios: int = 0, test_volume_lingers: int = 0,
-                 broken_read: str | None = None, failing_read: str | None = None) -> None:
+                 broken_read: str | None = None, failing_read: str | None = None,
+                 payments_pods: Sequence[str] = (PAYMENTS_POD,),
+                 payments_exit: str = "0") -> None:
         self.fail = set(fail)
+        # The payments-check pods the release's hooks render, and their exit status.
+        self.payments_pods = list(payments_pods)
+        self.payments_exit = payments_exit
         self.output = output or {}
         self.dirty_after = dirty_after
         # The step after which HEAD moves, as a commit or branch switch would.
@@ -187,7 +193,11 @@ class Fake:
         if command[:3] == ["kubectl", "get", "pods"]:
             return f"{RELEASE}-registry-1 {self.restarts}\n{POD} 0\n"
         if command[:3] == ["kubectl", "get", "pod"]:
+            if command[3].endswith(validator.PAYMENTS_CHECK_SUFFIX):
+                return self.payments_exit
             return self.exit_code
+        if command[:3] == ["helm", "get", "hooks"]:
+            return _hooks(POD, *self.payments_pods)
         if command[:2] == ["make", "-s"]:
             name = command[command.index("--eval") + 2].removeprefix("print-")
             settings = {"RELEASE": RELEASE, "TEST_VOLUMES": "arkhai-buyer-profiles"}
@@ -231,6 +241,17 @@ class Fake:
 
     def ran(self) -> list[str]:
         return [" ".join(command) for command in self.commands]
+
+
+def _hooks(*pods: str) -> str:
+    """A release's hooks as `helm get hooks` prints them: a test ConfigMap, then a
+    test pod per name, each with a container whose own name ends like a pod's."""
+    documents = ["---\n# Source: arkhai/templates/tests/test-config.yaml\napiVersion: v1\n"
+                 "kind: ConfigMap\nmetadata:\n  name: arkhai-test-config-payments-check\n"]
+    documents += [f"---\n# Source: tests/{pod}.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n"
+                  f"  name: {pod}\nspec:\n  containers:\n    - name: x-payments-check\n"
+                  for pod in pods]
+    return "".join(documents)
 
 
 def _selected(command: list[str], workload: str) -> bool:
@@ -402,6 +423,8 @@ def test_helm_runs_every_step_for_a_change_in_its_namespace(tmp_path: Path) -> N
         f"deployment/{RELEASE}-storefront-bob --timeout=600s",
         f"helm test {RELEASE} --namespace {NAMESPACE} --filter name={POD} --timeout 30m",
         f"kubectl logs --namespace {NAMESPACE} {POD}",
+        f"helm test {RELEASE} --namespace {NAMESPACE} --filter name={PAYMENTS_POD} --timeout 5m",
+        f"kubectl logs --namespace {NAMESPACE} {PAYMENTS_POD}",
         f"kubectl logs --namespace {NAMESPACE} {RELEASE}-registry-1 --all-containers --prefix",
         f"kubectl logs --namespace {NAMESPACE} {POD} --all-containers --prefix",
         f"kubectl get pods --namespace {NAMESPACE} --selector "
@@ -640,6 +663,85 @@ def test_a_passed_scenario_run_with_no_exit_status_fails(tmp_path: Path) -> None
     assert not summary.passed
     assert _step(summary, "e2e").detail == (
         f"{POD} has no exit status, so its scenarios are not shown to have run")
+
+
+def test_each_payments_check_pod_runs_and_keeps_its_log_and_exit_status(tmp_path: Path) -> None:
+    other = f"{RELEASE}-storefront-alice-payments-check"
+    fake = Fake(payments_pods=(PAYMENTS_POD, other),
+                output={PAYMENTS_POD: '{"check": "payments", "outcome": "ok"}\n'})
+    summary = _helm(tmp_path, fake)
+
+    logs = _attempt(tmp_path)
+    assert summary.passed, validator.render(summary)
+    assert _results(summary)[f"payments check {PAYMENTS_POD}"] == "passed"
+    assert _results(summary)[f"payments check {other}"] == "passed"
+    assert summary.evidence["payments_checks"] == [
+        {"pod": pod, "log": str((logs / f"{pod}.log").relative_to(tmp_path)), "exit_code": 0}
+        for pod in sorted((PAYMENTS_POD, other))]
+    assert (logs / f"{PAYMENTS_POD}.log").read_text("utf-8").endswith('"outcome": "ok"}\n')
+    assert f"payments check pod {PAYMENTS_POD}: exit 0" in validator.render(summary)
+
+
+def test_a_payments_check_that_exited_non_zero_fails_the_part(tmp_path: Path) -> None:
+    fake = Fake(payments_exit="1")
+    summary = _helm(tmp_path, fake)
+
+    assert not summary.passed
+    assert _step(summary, f"payments check {PAYMENTS_POD}").detail == f"{PAYMENTS_POD} exited 1"
+    assert set(fake.workloads[NAMESPACE].values()) == {0}
+
+
+def test_a_passed_payments_check_with_no_exit_status_fails_and_is_stopped(tmp_path: Path) -> None:
+    # `helm test` passes when its filter matches no test pod.
+    fake = Fake(payments_exit="")
+    summary = _helm(tmp_path, fake)
+
+    assert not summary.passed
+    assert _step(summary, f"payments check {PAYMENTS_POD}").detail == (
+        f"{PAYMENTS_POD} has no exit status, so its check is not shown to have run")
+    assert (f"kubectl delete pod {PAYMENTS_POD} --namespace {NAMESPACE} --ignore-not-found "
+            "--wait=false") in fake.ran()
+
+
+def test_a_commit_during_a_payments_check_stops_its_pod_and_keeps_no_evidence(
+        tmp_path: Path) -> None:
+    fake = Fake(head_after=f"payments check {PAYMENTS_POD}")
+    summary = _helm(tmp_path, fake)
+
+    assert not summary.passed
+    assert summary.evidence["payments_checks"] == [
+        {"pod": PAYMENTS_POD, "log": None, "exit_code": None}]
+    assert (f"kubectl delete pod {PAYMENTS_POD} --namespace {NAMESPACE} --ignore-not-found "
+            "--wait=false") in fake.ran()
+    assert f"kubectl logs --namespace {NAMESPACE} {PAYMENTS_POD}" not in fake.ran()
+
+
+def test_a_release_rendering_no_payments_check_is_warned_not_passed(tmp_path: Path) -> None:
+    summary = _helm(tmp_path, Fake(payments_pods=()))
+
+    assert summary.passed
+    assert _results(summary)["payments check"] == "warning"
+    assert summary.evidence["payments_checks"] == []
+
+
+def test_hooks_that_cannot_be_read_fail_the_payments_check(tmp_path: Path) -> None:
+    fake = Fake(failing_read="get hooks")
+    summary = _helm(tmp_path, fake)
+
+    assert not summary.passed
+    assert "could not read the release's test hooks" in _step(summary, "payments check").detail
+    assert set(fake.workloads[NAMESPACE].values()) == {0}
+
+
+def test_only_payments_check_pods_are_read_from_the_hooks() -> None:
+    assert validator.payments_check_pods(_hooks(POD, PAYMENTS_POD)) == [PAYMENTS_POD]
+
+
+def test_the_payments_check_suffix_is_the_one_both_storefront_charts_render() -> None:
+    root = Path(__file__).resolve().parents[2]
+    for chart in ("storefront", "bare-metal-storefront"):
+        template = (root / "helm/charts" / chart / "templates/tests/payments-check-test.yaml")
+        assert f"}}}}{validator.PAYMENTS_CHECK_SUFFIX}\n" in template.read_text("utf-8")
 
 
 def test_a_failed_read_of_one_piece_of_evidence_keeps_the_others(tmp_path: Path) -> None:
@@ -981,7 +1083,15 @@ ARCHIVED_REVIEWS = Path("openspec/changes/archive/2026-10-22-pilot/reviews")
 OLDER = "fedcba9876543210fedcba9876543210fedcba98"
 
 
+def _checkout(root: Path) -> None:
+    """Make `root` a Git repository, as the workflow's command finds a change only in
+    one."""
+    if not (root / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+
+
 def _validated(root: Path, number: int, commit: str, *attempts: dict) -> None:
+    _checkout(root)
     reviews = root / ARCHIVED_REVIEWS
     reviews.mkdir(parents=True, exist_ok=True)
     (reviews / f"{number:02d}-validation.md").write_text(
@@ -993,6 +1103,7 @@ def _validated(root: Path, number: int, commit: str, *attempts: dict) -> None:
 
 
 def _figure_file(root: Path) -> Path:
+    _checkout(root)
     path = root / validator.CAPACITY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     validator.write_capacity(path, validator.CapacityFigure(
@@ -1533,8 +1644,32 @@ def test_make_targets_delegate_to_the_script() -> None:
     assert 'scripts/validate_slice.py helm --context "$(HELM_CONTEXT)"' in makefile
     assert '$(if $(CHANGE),--change "$(CHANGE)")' in makefile
     assert "--all-scenarios" in makefile
-    # The instruction travels with the invocation into the validation session.
-    assert "/change-validate $(CHANGE)$(if $(filter 1,$(HELM_ALL_SCENARIOS))" in makefile
+
+
+def _make_n(target: str, *variables: str, environment: dict[str, str] | None = None) -> str:
+    """What `make -n <target>` of the root Makefile runs, with no step variable
+    inherited from the caller, a make that ran these tests among them."""
+    env = {key: value for key, value in os.environ.items()
+           if key not in ("HELM_ALL_SCENARIOS", "UNATTENDED", "ARGUMENTS", "ALLOW",
+                          "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL")}
+    return subprocess.run(
+        ["make", "-n", "--no-print-directory", "-C", str(REPO_ROOT), target, "CHANGE=x",
+         *variables], capture_output=True, text=True, check=True,
+        env={**env, **(environment or {})}).stdout.strip()
+
+
+@pytest.mark.parametrize("unattended", [[], ["UNATTENDED=1"]])
+def test_all_scenarios_reach_the_helm_part_through_the_environment(
+        unattended: list[str]) -> None:
+    """A value of the owner's machine is no argument the validation skill reads: `make
+    validate` passes none, and the Helm part's own make reads the value from the
+    environment it inherits."""
+    assert _make_n("validate", "HELM_ALL_SCENARIOS=1", *unattended) == (
+        'scripts/change-workflow start validate "x"'
+        + (" --unattended" if unattended else ""))
+    assert "--all-scenarios" in _make_n("validate-helm",
+                                        environment={"HELM_ALL_SCENARIOS": "1"})
+    assert "--all-scenarios" not in _make_n("validate-helm")
 
 
 def test_the_command_line_refuses_a_name_that_is_not_a_change(

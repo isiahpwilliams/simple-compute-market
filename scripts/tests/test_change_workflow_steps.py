@@ -8,9 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from change_workflow.common import ROOT, STEPS, StepError
-from change_workflow.steps import STEP_TABLE, Model, load_steps
+from change_workflow import config, steps
+from change_workflow.common import StepError
+from change_workflow.graph import HOOK_STEPS, STEPS
+from change_workflow.steps import Model, load_steps
 from change_workflow_fixtures import CHANGE, OPUS, SONNET
+
+ROOT = Path(__file__).resolve().parents[2]
+STEP_TABLE = ROOT / steps.STEP_TABLE
 
 MODELS = 'models = [{ harness = "claude", model = "claude-opus-5-5", effort = "high" }]\n'
 
@@ -57,10 +62,11 @@ def test_the_step_table_names_each_step() -> None:
 
 
 def test_each_step_runs_on_the_models_its_work_needs() -> None:
-    """Design, triage, implementation, the merge, and closeout on Opus at high effort;
-    validation and archive cleanup on Sonnet at medium; the review on Codex, then
-    Claude."""
-    models = {name: rules.models for name, rules in load_steps().items()}
+    """This repository's configuration: design, triage, implementation, the merge, and
+    closeout on Opus at high effort; validation and archive cleanup on Sonnet at
+    medium; the review on Codex, then Claude."""
+    configuration = config.load(ROOT)
+    models = {name: configuration.step_models(name) for name in STEPS}
 
     assert models == {"design": (OPUS,), "plan": (OPUS,), "triage": (OPUS,),
                       "implement": (OPUS,), "merge": (OPUS,), "closeout": (OPUS,),
@@ -88,57 +94,146 @@ def test_no_step_writes_through_the_diff_familys_output(reading: str, writing: s
         assert _allows(rules, reading) and not _allows(rules, writing), name
 
 
-def test_every_step_may_run_the_cost_report() -> None:
-    assert all(_allows(rules, f"make change-cost CHANGE={CHANGE}")
-               for rules in load_steps().values())
+def test_no_rule_names_a_make_target_the_command_stands_behind() -> None:
+    """The fragment's targets carry no promise and a step reaches the workflow through
+    the command, so no step's rules name the targets the command stands behind."""
+    for name, rules in load_steps().items():
+        for command in (f"make change-cost CHANGE={CHANGE}", "make round-view-closed",
+                        "make push-branch", f"make change-history CHANGE={CHANGE}"):
+            assert not _allows(rules, command), (name, command)
 
 
 @pytest.mark.parametrize("models,problem", [
-    ("", "needs a skill and models"),
-    ("models = []\n", "a list of one or more models"),
-    ('models = [{ harness = "claude", model = "claude-fable-5-1" }]\n', "never runs on"),
-    ('models = [{ harness = "claude", model = "astra-2" }]\n', "never runs on"),
-    ('models = [{ harness = "claude", model = "claude-opus-5-5" }, '
-     '{ harness = "claude", model = "claude-sonnet-5-5" }]\n', "two models of one vendor"),
-    ('models = [{ harness = "claude", effort = "high" }]\n', "without a model"),
-    ('models = [{ harness = "codex", model = "gpt-6-sol" }]\n', "Codex runs only the review"),
-    ('models = [{ harness = "gemini", model = "g" }]\n', "harness 'gemini'"),
-    ('models = [{ harness = "claude", model = "m", speed = "fast" }]\n', "a key other than"),
+    ("[]", "must be a list of one or more models"),
+    ('[{ harness = "claude", model = "claude-opus-5-5" }, '
+     '{ harness = "claude", model = "claude-sonnet-5-5" }]', "two models of one vendor"),
+    ('[{ harness = "claude", effort = "high" }]', r"models.triage\[0\].model must be"),
+    ('[{ harness = "codex", model = "gpt-6-sol" }]', "Codex runs only the review"),
+    ('[{ harness = "gemini", model = "g" }]', r"harness must be one of claude, codex"),
+    ('[{ harness = "claude", model = "m", speed = "fast" }]', "speed is no field"),
 ])
-def test_a_row_naming_models_the_policy_forbids_is_refused(
-        tmp_path: Path, models: str, problem: str) -> None:
-    table = tmp_path / "steps.toml"
-    table.write_text(f'[steps.triage]\nskill = "change-triage"\n{models}', "utf-8")
-
+def test_models_the_policy_forbids_are_refused_naming_the_step(models: str,
+                                                                problem: str) -> None:
+    """CW-zq4h: the configuration's models are held to the policy as it is read."""
     with pytest.raises(StepError, match=problem) as refused:
-        load_steps(table)
+        config.check(f"[models]\ntriage = {models}\n", Path("workflow.toml"))
 
-    assert "triage row" in str(refused.value)
+    assert "models.triage" in str(refused.value)
 
 
-PUSHES = ["git push origin HEAD", "make push-branch", "uv run git push",
+def test_a_row_names_two_models_of_one_vendor() -> None:
+    """CW-zq4h's scenario: the engine refuses the configuration, naming the step."""
+    with pytest.raises(StepError, match="for the review step"):
+        config.check('[models]\nreview = [{ harness = "codex", model = "gpt-6-sol" }, '
+                     '{ harness = "codex", model = "gpt-6-luna" }]\n', Path("workflow.toml"))
+
+
+def test_the_step_table_holds_no_models() -> None:
+    """The step table names each step's skill and rules; models are the
+    configuration's."""
+    assert not hasattr(load_steps()["design"], "models")
+
+
+@pytest.mark.parametrize("table,field", [
+    (f'[steps.design]\nskill = "change-design"\n{MODELS}', "models.design"),
+    ('[orchestrator]\nmodel = "claude-opus-5-5"\neffort = "medium"\n'
+     '[steps.design]\nskill = "change-design"\n', "models.orchestrator"),
+])
+def test_models_in_the_step_table_are_refused_naming_the_configurations_field(
+        tmp_path: Path, table: str, field: str) -> None:
+    """A model left in the step table is a value nothing reads, so the loader refuses
+    it, naming where the configuration holds it."""
+    path = tmp_path / "steps.toml"
+    path.write_text(table, "utf-8")
+
+    with pytest.raises(StepError, match=re.escape(field)):
+        load_steps(path)
+
+
+PUSHES = ["git push origin HEAD", "scripts/change-workflow push", "uv run git push",
           "uv run bash -c 'git push'", "make run-e2e", "docker push registry/image",
-          "helm push chart.tgz oci://registry", "make push-branch FORCE=1",
+          "helm push chart.tgz oci://registry", "scripts/change-workflow push --force",
           "git -C ../workspace push"]
 COMMITTING = {"design", "plan", "implement", "triage", "merge", "closeout", "archive-cleanup"}
 
 
 def test_each_committing_step_pushes_only_through_the_guarded_push() -> None:
-    """Validation pushes the commit it validates and dispatches the pipeline; every
-    step that commits work pushes it; the review pushes nothing."""
+    """Validation pushes the commit it validates; every step that commits work pushes
+    it; the review pushes nothing. The pipeline's dispatch is a validation part, run
+    through the command, so no step names its make target."""
     for name, rules in load_steps().items():
         assert "Bash(git push*)" in rules.deny
         allowed = [command for command in PUSHES if _allows(rules, command)]
-        assert allowed == (["make push-branch", "make run-e2e"] if name == "validate"
-                           else ["make push-branch"] if name in COMMITTING
-                           else []), name
+        assert allowed == (["scripts/change-workflow push"]
+                           if name in COMMITTING | {"validate"} else []), name
 
 
 def test_only_validation_dispatches_a_ci_workflow() -> None:
-    """The dispatch itself refuses a workflow off its list; the table keeps every
-    other step from dispatching at all."""
+    """No step's rules name a dispatch's make target: validation dispatches through
+    `run`, which the engine's hook table holds to the validate step (CW-u4pc)."""
     for name, rules in load_steps().items():
-        assert _allows(rules, "make run-ci WORKFLOW=tests.yml") == (name == "validate"), name
+        assert not _allows(rules, "make run-ci WORKFLOW=tests.yml"), name
+    assert _allows(load_steps()["validate"],
+                   f"scripts/change-workflow run validation {CHANGE} ci start --owed tests.yml")
+    assert HOOK_STEPS["validation"] == {"validate"}
+
+
+HOOK_COMMANDS = {
+    "validate": [f"validation {CHANGE} preflight", f"validation {CHANGE} local run",
+                 f"validation {CHANGE} pipeline start", f"validation {CHANGE} pipeline collect"],
+    "archive-cleanup": [f"cleanup {CHANGE}", f"pre-commit {CHANGE}"],
+    "closeout": [f"pre-archive {CHANGE}", f"pre-commit {CHANGE}"],
+    "implement": [f"pre-commit {CHANGE}", f"after-functional-change {CHANGE}"],
+}
+
+
+def test_every_step_runs_the_repositorys_hooks_through_the_command() -> None:
+    """Each step reaches a hook through `run`, which holds it to the engine's table;
+    the rules that ran a hook's commands directly are gone, while the grants for
+    engineering work stay (CW-u4pc)."""
+    steps = load_steps()
+    for name, rules in steps.items():
+        for command in HOOK_COMMANDS.get(name, [f"pre-commit {CHANGE}"]):
+            assert _allows(rules, f"scripts/change-workflow run {command}"), (name, command)
+    for command in ("make validate-local", f"make validate-helm CHANGE={CHANGE}", "make run-e2e",
+                    "make fetch-e2e-logs E2E_AFTER_RUN=1", "make dist-clean",
+                    "make check-uv-version", "make validate-ci WORKFLOW=tests.yml"):
+        assert not _allows(steps["validate"], command), command
+    for command in (f"make record-capacity CHANGE={CHANGE}",
+                    f"make -C helm teardown CHANGE={CHANGE}"):
+        assert not _allows(steps["archive-cleanup"], command), command
+    for name in ("implement", "triage", "merge"):
+        for command in ("make test", "make lock", "make check-packaging",
+                        "uv run pytest -q scripts/tests"):
+            assert _allows(steps[name], command), (name, command)
+
+
+def test_openspec_runs_through_the_configured_command() -> None:
+    """The steps that validate or archive a change run OpenSpec through the command,
+    which runs the configured `openspec.command` (CW-i2we); no rule pins a version."""
+    for name, rules in load_steps().items():
+        runs = name in ("design", "plan", "triage", "closeout")
+        assert _allows(rules, f"scripts/change-workflow openspec validate {CHANGE} --strict") \
+            == runs, name
+        for pinned in (f"bunx @fission-ai/openspec@1.14.0 validate {CHANGE} --strict",
+                       f"npx --yes @fission-ai/openspec@1.14.0 validate {CHANGE} --strict"):
+            assert not _allows(rules, pinned), (name, pinned)
+
+
+def test_every_step_may_read_the_configurations_resolution() -> None:
+    for name, rules in load_steps().items():
+        for command in ("config load design", f"config parts {CHANGE}", "config --json"):
+            assert _allows(rules, f"scripts/change-workflow {command}"), (name, command)
+
+
+def test_no_step_may_edit_the_configuration() -> None:
+    """CW-z5me: no step changes what its own hooks run, while a workflow change may
+    still edit the skills beside the configuration."""
+    for name, rules in load_steps().items():
+        assert {"Edit(.agents/workflow.toml)", "Write(.agents/workflow.toml)"} <= set(rules.deny)
+        assert not any(_allows_edit(rules, tool, ".agents/workflow.toml")
+                       for tool in ("Edit", "Write")), name
+    assert _allows_edit(load_steps()["implement"], "Edit", ".agents/skills/change-plan/SKILL.md")
 
 
 def test_every_step_that_commits_its_work_may_commit_and_no_other() -> None:
@@ -165,10 +260,8 @@ def test_no_step_runs_git_in_another_checkout() -> None:
         assert not _allows(rules, "git -C ../workspace log --oneline"), name
 
 
-def test_every_step_may_check_that_no_round_view_is_open() -> None:
+def test_no_step_may_open_or_close_a_round_view_by_its_make_target() -> None:
     for name, rules in load_steps().items():
-        assert _allows(rules, "make round-view-closed"), name
-        assert _allows(rules, "make round-view-closed CHANGE=x"), name
         assert not _allows(rules, "make round-view CHANGE=x"), name
         assert not _allows(rules, "make round-done"), name
 
@@ -189,9 +282,9 @@ def test_every_step_may_run_the_read_only_utilities_but_not_a_find_that_writes()
 
 def test_validation_may_run_its_skills_commands_one_per_call_or_chained() -> None:
     rules = load_steps()["validate"]
-    chained = ("make round-view-closed; echo rc=$?; git status --porcelain "
+    chained = ("scripts/change-workflow check round-view; echo rc=$?; git status --porcelain "
                "--untracked-files=all; git rev-parse HEAD; git branch --show-current; "
-               f"python3 scripts/find_change.py {CHANGE}; gh auth status 2>&1 | head -5")
+               f"scripts/change-workflow find {CHANGE}; gh auth status 2>&1 | head -5")
 
     assert _allows_chain(rules, chained)
     assert _allows(rules, "gh run view 38723279321 --json headSha,conclusion,jobs")
@@ -223,8 +316,8 @@ def test_validation_may_write_only_its_own_record() -> None:
     assert _allows_edit(rules, "Write", record)
     assert _allows_edit(rules, "Edit", record)
     assert not _allows_edit(rules, "Write", "openspec/changes/shape-bounds/reviews/08-closeout.md")
-    assert not _allows_edit(rules, "Write", "scripts/run_change_step.py")
-    assert not _allows_edit(rules, "Edit", "scripts/run_change_step.py")
+    assert not _allows_edit(rules, "Write", "scripts/change-workflow")
+    assert not _allows_edit(rules, "Edit", "scripts/change-workflow")
     assert "Edit" not in rules.deny
     assert not any(rule.startswith("Write(") for rule in rules.allow)
 
@@ -258,10 +351,45 @@ def test_the_merge_merges_a_fetched_branch_and_never_abandons_a_merge() -> None:
         assert not _allows(rules, command), command
 
 
-def test_every_step_may_compute_the_next_step_and_read_the_log() -> None:
+def test_every_step_may_reach_the_workflow_through_its_command() -> None:
+    """Every step computes the next step, reads the log, finds a change's records,
+    records an interactive outcome, and checks the index and the round view, through
+    the command; none opens or closes a round view, which is the owner's."""
     for name, rules in load_steps().items():
-        assert _allows(rules, f"python3 scripts/change_next_step.py {CHANGE}"), name
-        assert _allows(rules, f"python3 scripts/run_change_step.py log {CHANGE} --last 3"), name
+        for command in (f"next {CHANGE}", f"log {CHANGE} --last 3",
+                        f"log {CHANGE} --branch feat/x", f"find --records {CHANGE}",
+                        f"find --json {CHANGE}", f"cost {CHANGE}",
+                        f"record {CHANGE} plan --outcome '{{}}'", "check index",
+                        "check round-view"):
+            assert _allows(rules, f"scripts/change-workflow {command}"), (name, command)
+        assert {"Bash(scripts/change-workflow round-view*)",
+                "Bash(scripts/change-workflow round-done*)"} <= set(rules.deny), name
+        for command in (f"round-view {CHANGE}", "round-done"):
+            assert not _allows(rules, f"scripts/change-workflow {command}"), (name, command)
+
+
+def test_every_step_that_pushes_may_push_through_the_command() -> None:
+    for name, rules in load_steps().items():
+        assert _allows(rules, "scripts/change-workflow push") == (name != "review"), name
+
+
+def test_a_steps_own_workflow_commands_are_the_ones_its_skill_runs() -> None:
+    steps = load_steps()
+    assert _allows(steps["validate"], "scripts/change-workflow check push")
+    # Closeout runs any of the workflow's checks.
+    assert _allows(steps["closeout"], f"scripts/change-workflow check tasks {CHANGE}")
+    assert _allows(steps["closeout"], "scripts/change-workflow check push")
+    assert _allows(steps["archive-cleanup"], f"scripts/change-workflow history {CHANGE}")
+    # Planning checks the task list it writes.
+    assert _allows(steps["plan"], f"scripts/change-workflow check tasks {CHANGE}")
+    for name in ("design", "plan", "implement", "triage", "merge", "archive-cleanup",
+                 "review"):
+        assert not _allows(steps[name], "scripts/change-workflow check push"), name
+    for name in ("design", "implement", "triage", "merge", "archive-cleanup", "review"):
+        assert not _allows(steps[name], f"scripts/change-workflow check tasks {CHANGE}"), name
+    for name in ("design", "plan", "implement", "triage", "merge", "validate", "closeout",
+                 "review"):
+        assert not _allows(steps[name], f"scripts/change-workflow history {CHANGE}"), name
 
 
 def test_no_step_may_edit_its_own_permissions() -> None:
@@ -272,13 +400,13 @@ def test_no_step_may_edit_its_own_permissions() -> None:
 
 
 @pytest.mark.parametrize("table,problem", [
-    (f'[steps.design]\nskill = "change-design"\n{MODELS}deny = "Bash(git push*)"\n',
+    ('[steps.design]\nskill = "change-design"\ndeny = "Bash(git push*)"\n',
      "list of rules"),
-    (f'[steps.design]\nskill = "change-design"\n{MODELS}allowed = []\n', "takes only"),
-    (f'[steps.deploy]\nskill = "change-deploy"\n{MODELS}', "unknown step"),
+    ('[steps.design]\nskill = "change-design"\nallowed = []\n', "takes only"),
+    ('[steps.deploy]\nskill = "change-deploy"\n', "unknown step"),
     ('[commons]\nallow = []\n', "unknown tables"),
     ('[common]\nskill = "x"\n', "common row takes only"),
-    (f'[steps.plan]\nskill = "change-plan"\n{MODELS}resume_from = "design"\n', "has no row"),
+    ('[steps.plan]\nskill = "change-plan"\nresume_from = "design"\n', "has no row"),
 ])
 def test_a_malformed_step_table_is_refused(tmp_path: Path, table: str, problem: str) -> None:
     path = tmp_path / "steps.toml"

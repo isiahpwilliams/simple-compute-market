@@ -18,8 +18,7 @@ from `CHANGE=`; `--image-overlay <path>` also writes the change's overlay there.
 `--images` prints instead every image a change's validation build tags, which
 `make -C helm teardown` removes.
 
-Contract: openspec/specs/change-workflow/spec.md, "Each Helm validation is isolated
-in its change's namespace".
+Contract: openspec/specs/market-change-workflow/spec.md, MCW-fnuh and MCW-7ts3.
 """
 
 from __future__ import annotations
@@ -48,7 +47,8 @@ BUILT_HERE = "arkhai"
 BUILT_IMAGES = ("apicredits-sample-app", "apicredits-service", "apicredits-storefront",
                 "bare-metal-storefront", "compute-provisioning", "dev-env", "e2e-tests",
                 "frp-grant-admission", "inference-gateway", "inference-model-stub",
-                "inference-service", "inference-storefront", "registry", "storefront")
+                "inference-service", "inference-storefront", "payments-lane-double",
+                "registry", "storefront")
 _CHANGE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _KEY = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z0-9_.-]+):(?P<value>.*)$")
 

@@ -59,7 +59,45 @@ Core tests own contribution discovery, frozen registry invariants, exact-object 
 
 SCM's credential-free suites exercise generated payment models, shared JCS vectors, mandate policy, signed receipts, accepted-state persistence, and domain composition through deterministic collaborators. A controlled VM smoke can prove pending → provisioning → ready with one delivery, but cannot prove a live ledger or hardware effect.
 
-The payments service owns ledger accounting, fee collection, hold release, disputes, and cash-provider behavior. Consumer tests do not inherit Stripe claims or a signed hosted-release profile matrix. Complete-deal qualification that needs the payments service's internals (local ledger, development-mode auth, operator test funds, ledger reads) is owned by the payments service's own end-to-end tests, which import this repository's published packages; this repository does not import the private service to test it. This repository's live payment scenario targets a public payments test deployment through its public API, runs only when such a target is configured, and otherwise reports the unmet prerequisite. A live payment run records the actual service target, consumer revision, authentication method, seed state, and observed readiness. An absent or unready payments target, or a missing physical target, is reported as an unmet prerequisite before scenario mutations, not converted into local acceptance. Once a payments target is configured, the settings a scenario supplies itself — its parties' accounts and credentials and the service policy it pins — are configuration the run owes, so a missing one fails the scenario, naming it, rather than blocking it: a pipeline with no target stays a blocked skip, while a misconfigured payments run fails deterministically.
+The payments service owns ledger accounting, fees, hold release/extensions and
+cash providers; the dispute authority owns cases/rulings and applies their effects. Consumer tests do not inherit Stripe claims or a signed hosted-release profile matrix. Complete-deal qualification that needs the payments service's internals (local ledger, development-mode auth, operator test funds, ledger reads) is owned by the payments service's own end-to-end tests, which import this repository's published packages; this repository does not import the private service to test it. This repository's live payment scenario targets a public payments test deployment through its public API, runs only when such a target is configured, and otherwise reports the unmet prerequisite. A live payment run records the actual service target, consumer revision, authentication method, seed state, and observed readiness. An absent or unready external payments target, or a missing physical target, is reported as an unmet prerequisite before scenario mutations, not converted into local acceptance. Once a payments target is configured, the settings a scenario supplies itself — its parties' accounts and credentials and the service policy it pins — are configuration the run owes, so a missing one fails the scenario, naming it, rather than blocking it: a run with no target stays a blocked skip, while a misconfigured payments run fails deterministically.
+
+### The in-lane payments double
+
+The VM, bare-metal, and API-credit lanes each run a payments double, `tools/payments-lane-double`, so their once-only payment scenarios run rather than skip. It is an HTTPS service over the payments kit's `PaymentsAuthority` engine — the engine the in-process `FakePaymentsClient` uses, so there is no second ledger — and it mirrors the payments service's API: its routes, bearer authentication, approval admission in the service's order, read authorization, the idempotent repeat of an approved mandate whatever the clock or balance, and the published `ApiError` codes. It serves whatever its engine serves; its suite and documentation claim only the once-only surface: approval, Agreement attachment, signed receipts, transaction snapshots, seller reverse, and the account's own balance read. A double mirrors its producer unless there is a compelling reason to deviate ([`ARCHITECTURE.md`, "Testing strategy"](../../../docs/development/ARCHITECTURE.md#testing-strategy)), because a double that answers differently proves only that a client agrees with the double.
+
+Each lane's callers reach it at `https://payments-double:8443` under a committed lane CA they trust through their payments configuration's `ca_bundle_path`; its accounts, tokens, receipt-signing seed and certificates are labelled public development values. The lane marks the target its own (`PAYMENTS.LANE_OWNED`), so an unready double fails the run by name rather than turning every payment scenario into a skip, and lane setup runs each payment storefront's `check-payments` from its own container before any scenario. A result against the double establishes that SCM's roles compose through the payments service's published HTTP contract from committed configuration. It establishes nothing about the payments service's ledger, funding, availability, live receipts, or rate parts and holds at the HTTP boundary: the double always signs `livemode: false`, so a live-configured role refuses its receipts, and its state lives in one process's memory for the life of the lane.
+
+The lanes' registries recommend one pinned dispute authority nobody can answer: its origin is `https://dispute.invalid`, under a top-level domain that never resolves; its record key was generated with its private half discarded unrecorded; and its account has no bearer token at the double. A copied fixture is therefore refused by mode, unknown to a real service, or inert. The VM payment scenario's operator-end case and refund stages need an authority that accepts a filed case, a setting apart from the payments target (`MEDIATION.SERVICE_URL`, blank by default); without one they report a blocked skip naming it, while its commit, delivery, replay and servicing stages run against the double. The VM lane's storefront holds an identity-bound dispute credential for the pinned authority, so servicing reports the deal `running` while that authority cannot be reached rather than `repair_required`.
+
+## Lifecycle contract evidence
+
+The payments kit owns installed JSON Schema/generated models, JCS/signature and
+snapshot vectors, and one clock-injected per-part `PaymentsAuthority` fixture
+engine. Its in-process `FakePaymentsClient`, its consumer fixtures, and the lanes'
+HTTP payments double all use that engine; only the double can serve a buyer
+subprocess or a storefront container. Mediation owns its
+independently installed schema/models, both ed25519/eip191 claim vectors and
+ruling traces. These fixtures prove deterministic public-contract compatibility,
+not the internal implementation or deployed monetary execution of either service.
+SCM imports no authority service implementation.
+
+Unit/service suites own same-key retry, lost-response adoption, caller-session
+admission/end races, exact-envelope capture, pinned-authority verification,
+independent cursor floors, respondent answer journals and conservative retention.
+Site/provisioning producer integration tests own atomic event/outbox rollback,
+all ending causes, crash/ack recovery, exact signed push/pull after signer change,
+unsupported-peer parking and explicit resumption. Consumers do not replace that
+producer proof with a hand-built report.
+
+Deployed VM and mock-bare-metal scenarios distinguish receipt-time surrender,
+retrieval of the original signed site report before teardown, and later proven
+capacity return. Mock provisioning proves no physical access or revocation.
+Once-only payment/case encounters prove no rate stop, funding or monetary ruling
+execution. A configured real authority and, for physical claims, a disposable
+real host remain qualification prerequisites. Readiness failures and unrun lanes
+are named, not converted into fixture passes. See the
+[lifecycle limits](../deal-lifecycle/architecture.md#current-limits).
 
 ## Ordinary Arkhai purchase evidence
 
@@ -69,9 +107,15 @@ A completed payment proof correlates genuine TEST funding evidence with attribut
 
 The ordinary buyer method may replace a payment-specific scenario driver, but it does not make an old named test marker pass. Preserve unrun or unavailable observations explicitly, and do not equate a controlled local smoke, published vector, or component suite with external funding or physical access.
 
+The ordinary buyer method is also written as scenarios. Each compute lane runs a buyer purchase through the shipped CLI in `arkhai.payments.v1` against its payments double: VM's ends by a back-dated lease and a stepped watchdog cycle, bare metal's by the buyer's teardown before the seller's refund. The real-provisioning qualification modules make the runbook's observations 2, 4, 5 and 6 against a configured real-provisioning target and payments target: those of observations 2, 4 and 5 extend those purchases, adding only the real-host stages, and observation 6's makes no deal, reapplying registrations on the stack their purchases populated ([`TESTING.md`, "Locally verifiable and external-topology scenarios"](../../../docs/development/TESTING.md#locally-verifiable-and-external-topology-scenarios)). The scenarios are the method a candidate's qualification reaches for first; the operator-run method above remains accepted beside them.
+
+A purchase scenario checks each transaction against its records — bound to its Agreement, its receipt over that mandate, its snapshot naming the configured payer and payee with gross equal to the Agreement's price — and checks the payer's account by a balance sum: the drop in the payer's `available` balance, read through the payments kit's `get_balance` with the buyer's own token, from before its first purchase to after its last approval, equals the sum of its own transactions' debits. The sum proves the scenario's debits account for the drop, not that nothing else debited the account, so it rests on a precondition the scenario cannot check: the payer account is dedicated to the run, which is the deployment's guarantee, stated beside the result. Proving exclusivity would need a payer-scoped debit listing, which the payments service does not offer. Funding and its proof are the deployment's, joined to the run by transaction identifiers.
+
+An `arkhai.payments.v1` option is published only with an accepted dispute authority, and every mandate names that authority's account. A deployment running the qualification pins an authority identity whose account is real at its payments target, and nothing needs to answer at its origin: servicing records an unanswered authority and continues. The lanes' registries recommend one nobody answers, so the locally verifiable purchases exercise the same path on every run. The bare-metal buyer's teardown files a delivery-end case with it, which records `Unknown`; the scenarios neither fail on that filing nor read it as delivery, access-end or refund evidence.
+
 ## Current limits
 
-The e2e harness predominantly uses HTTP clients and explicit test seams, but it is not yet completely external to service packages and a few scenarios retain timing or private-client dependencies. The architecture therefore states the desired boundary only where current tests establish it and treats full harness extraction as separate work.
+The e2e harness predominantly uses HTTP clients and explicit test seams, but it is not yet completely external to service packages and a few scenarios retain private-client dependencies. Compute pipeline scenarios advance only by their own steps ([spec](spec.md#requirement-pipeline-scenarios-advance-only-by-their-own-steps)); the API-credit lane steps its storefront's chain probe and listing seed but holds none of its loops, so an unstepped timer can still run beside its stages; the real-host scenarios, which run outside every pipeline lane, still poll the hardware they drive. The architecture therefore states the desired boundary only where current tests establish it and treats full harness extraction as separate work.
 
 Repository-wide typed-client ownership, universal sync/async parity, and a closed list of raw-HTTP exceptions are not established baseline guarantees.
 

@@ -6,7 +6,9 @@
     "20260922_004_pool_advertisement_and_backing",
     "20261005_005_reservation_release_requested_at",
     "20261028_006_retired_reservation_states",
-    "20261030_007_grant_terms"
+    "20261106_007_reservation_activated_at",
+    "20261106_008_reservation_placement_key",
+    "20261109_009_grant_terms"
   ],
   "tables": {
     "api_keys": {
@@ -414,6 +416,20 @@
         },
         {
           "default": null,
+          "name": "placement_key",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "VARCHAR"
+        },
+        {
+          "default": null,
+          "name": "placement_request",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "JSON"
+        },
+        {
+          "default": null,
           "name": "hold_expires_at",
           "not_null": false,
           "primary_key": 0,
@@ -497,6 +513,13 @@
           "type": "VARCHAR"
         },
         {
+          "default": null,
+          "name": "activated_at_utc",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "VARCHAR"
+        },
+        {
           "default": "CURRENT_TIMESTAMP",
           "name": "created_at",
           "not_null": true,
@@ -521,6 +544,15 @@
           "origin": "c",
           "sql": "CREATE INDEX ix_capacity_reservations_escrow_uid ON capacity_reservations (escrow_uid)",
           "unique": false
+        },
+        {
+          "columns": [
+            "placement_key"
+          ],
+          "name": "ix_capacity_reservations_placement_key",
+          "origin": "c",
+          "sql": "CREATE UNIQUE INDEX ix_capacity_reservations_placement_key ON capacity_reservations (placement_key)",
+          "unique": true
         },
         {
           "columns": [
@@ -550,7 +582,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE capacity_reservations (\n\tcapacity_reservation_id VARCHAR NOT NULL, \n\tsettlement_resource_id VARCHAR, \n\tunits INTEGER NOT NULL, \n\tdimensions JSON, \n\tclaim_attributes JSON, \n\tstate VARCHAR NOT NULL, \n\tdeal_ref JSON, \n\tescrow_uid VARCHAR, \n\thold_expires_at VARCHAR, \n\toffering_mode VARCHAR, \n\texecutor_target VARCHAR, \n\trelease_job_id VARCHAR, \n\texecutor_ref JSON, \n\tlease_start_utc VARCHAR, \n\tlease_end_utc VARCHAR, \n\tcreate_job_id VARCHAR, \n\tfailure_reason VARCHAR, \n\tfailure_message TEXT, \n\treleased_at VARCHAR, \n\trelease_requested_at VARCHAR, \n\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tupdated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (capacity_reservation_id)\n)",
+      "sql": "CREATE TABLE capacity_reservations (\n\tcapacity_reservation_id VARCHAR NOT NULL, \n\tsettlement_resource_id VARCHAR, \n\tunits INTEGER NOT NULL, \n\tdimensions JSON, \n\tclaim_attributes JSON, \n\tstate VARCHAR NOT NULL, \n\tdeal_ref JSON, \n\tescrow_uid VARCHAR, \n\tplacement_key VARCHAR, \n\tplacement_request JSON, \n\thold_expires_at VARCHAR, \n\toffering_mode VARCHAR, \n\texecutor_target VARCHAR, \n\trelease_job_id VARCHAR, \n\texecutor_ref JSON, \n\tlease_start_utc VARCHAR, \n\tlease_end_utc VARCHAR, \n\tcreate_job_id VARCHAR, \n\tfailure_reason VARCHAR, \n\tfailure_message TEXT, \n\treleased_at VARCHAR, \n\trelease_requested_at VARCHAR, \n\tactivated_at_utc VARCHAR, \n\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tupdated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (capacity_reservation_id)\n)",
       "triggers": []
     },
     "consumption_events": {
@@ -915,6 +947,71 @@
         }
       ],
       "sql": "CREATE TABLE schema_migrations (\n                id VARCHAR PRIMARY KEY,\n                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n            )",
+      "triggers": []
+    },
+    "site_lease_ended_events": {
+      "columns": [
+        {
+          "default": null,
+          "name": "event_id",
+          "not_null": true,
+          "primary_key": 1,
+          "type": "VARCHAR"
+        },
+        {
+          "default": null,
+          "name": "capacity_reservation_id",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "VARCHAR"
+        },
+        {
+          "default": null,
+          "name": "transition_key",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "VARCHAR"
+        },
+        {
+          "default": null,
+          "name": "payload",
+          "not_null": true,
+          "primary_key": 0,
+          "type": "JSON"
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [
+        {
+          "columns": [
+            "capacity_reservation_id"
+          ],
+          "name": "ix_site_lease_ended_events_capacity_reservation_id",
+          "origin": "c",
+          "sql": "CREATE INDEX ix_site_lease_ended_events_capacity_reservation_id ON site_lease_ended_events (capacity_reservation_id)",
+          "unique": false
+        },
+        {
+          "columns": [
+            "event_id"
+          ],
+          "name": "sqlite_autoindex_site_lease_ended_events_1",
+          "origin": "pk",
+          "sql": null,
+          "unique": true
+        },
+        {
+          "columns": [
+            "capacity_reservation_id",
+            "transition_key"
+          ],
+          "name": "sqlite_autoindex_site_lease_ended_events_2",
+          "origin": "u",
+          "sql": null,
+          "unique": true
+        }
+      ],
+      "sql": "CREATE TABLE site_lease_ended_events (\n\tevent_id VARCHAR NOT NULL, \n\tcapacity_reservation_id VARCHAR NOT NULL, \n\ttransition_key VARCHAR NOT NULL, \n\tpayload JSON NOT NULL, \n\tPRIMARY KEY (event_id), \n\tUNIQUE (capacity_reservation_id, transition_key)\n)",
       "triggers": []
     }
   }

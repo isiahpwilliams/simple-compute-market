@@ -218,7 +218,15 @@ membership".
   included, and each apply reports it as registered and not named: in the
   startup log, and in the import response's `not_named`. Hosts are never
   deleted. To stop a host, state `enabled: false` in the document or through the
-  API. Disabling a host does not stop its capacity declarations selling.
+  API. Disabling a host keeps new deliveries off it: a capacity declaration
+  naming it, in a backed pool whose provider needs a host, is neither reserved
+  against nor scheduled onto, and is projected not enabled, so storefronts close
+  its listings. Work already placed on the host keeps it: its create waits until
+  the host is enabled, and teardown runs. Enabling the host reopens those
+  listings under their original identities. The capacity listing
+  (`GET /api/v1/capacity/resources`) still reports each declaration's own
+  `enabled`. A declaration naming a host that is not registered is treated the
+  same way, so register a host before declaring its capacity.
 - **The document names a key; it never carries one.** `key_path` is a file on
   the service's filesystem — under Helm a Secret volume you mount, under Compose
   the key file the stack mounts. An entry naming no `key_path` keeps the stored
@@ -230,6 +238,9 @@ membership".
   nothing until it is submitted again at version 2: through the host API's
   update (`PUT /api/v1/hosts/{host_id}`), restating every stored public field,
   `key_path` included where the host has one, or an import naming the same key.
+  Until then, once any Ansible executor is real, system status's `ansible`
+  component is not ready, its reasons naming the host and the version served,
+  and the host has no `ssh_keys` entry.
 - **A host record describes how to reach a machine, not its hardware.** No host
   write, from a document, an import route, or the host API, declares capacity;
   declare the machine in a capacity document or through the capacity API, naming
@@ -314,6 +325,43 @@ rejects its entry with a warning, while the other entries are imported. An
 entry's `gpus=` and `gpu_model=`, like every variable the parser does not read,
 are ignored without a warning.
 
+#### A host's protected key no longer decrypts
+
+A key registered with a host is protected under the service's
+`ssh_decryption_key` and decrypted only for the operation that uses it. Under
+another key — after the key is rotated, or the database is restored into a
+deployment holding a different one — or with none configured, it cannot be
+decrypted, and every surface names the host with one message, carrying no
+ciphertext or key material:
+
+```text
+host 'kvm1': its protected private key cannot be decrypted under the configured ssh_decryption_key; restore the ssh_decryption_key it was protected under, or submit the host's private key again
+```
+
+- **A job against the host fails and is not retried**, its error carrying the
+  message after `Internal error: `, since a retry meets the same configuration.
+  No playbook starts, and nothing the job wrote remains.
+- **Its connectivity check** (`GET /api/v1/hosts/{host_id}/connectivity`)
+  answers `reachable: false` with the message as its `detail`, and runs no
+  ping.
+- **System status** (`GET /api/v1/system/status`) reports the `ansible`
+  component's `ssh_keys` entry for the host, `<encrypted>`, with `exists:
+  false`. Once any Ansible executor is real, the message is among the
+  component's `not_ready_reasons` and the component is not ready; every other
+  host is reported as it would be without this one. Readiness decrypts each
+  enabled host's key in memory to say so, and writes nothing.
+
+To recover, restore the `ssh_decryption_key` the key was protected under, or
+submit the host's private key again under the configured key: update the host
+through `PUT /api/v1/hosts/{host_id}` with a connection carrying the key in its
+`secrets`, which replaces the whole connection, or import it through the INI
+import route's `embedded` mode. A host document cannot carry a key. With no
+`ssh_decryption_key` configured, the message says so. No private key can be
+submitted until a key is configured to protect it, but it need not be the
+original: configure the key the host's key was protected under, which recovers
+every host it protected, or configure a new one and submit each affected host's
+private key again.
+
 ### Capacity definitions
 
 A capacity document holds a top-level `resources` list. It is configured by
@@ -377,3 +425,140 @@ storefront publishes from a declaration is in the
   it, holds its listing, and reports it by name. The machine's pool must state
   a `region`. Do not put authoritative hardware in `bare_metal_publication`:
   publication-only data is never a source of the listing's shape.
+
+## Ansible configuration
+
+The provisioning service runs every playbook and connectivity check under the
+Ansible configuration it exports as `ANSIBLE_CONFIG` at startup: the file the
+profile's `ansible_cfg` names, used as it is, or, when `ansible_cfg` is empty,
+the configuration packaged with the service's Ansible distribution. The
+contract is the `physical-provisioning` requirement "Ansible output is kept only
+redacted unless an operator configures otherwise".
+
+- **The packaged configuration keeps no log file.** Ansible's output is kept
+  only where the service redacts it: a job's logs, and a connectivity check's
+  result.
+- **A job's logs are redacted** with the value of every `password` field and of
+  the secret fields the job's domain names, an SSH identity-file argument, and
+  an `sshpass` password replaced.
+- **A connectivity check's result is redacted** the same way, with the generic
+  fields only: its detail, whether Ansible's output or the text of an error
+  running it, carries no `password` value, identity-file path or `sshpass`
+  password. A probe runs no domain's playbook and names a key only by the path
+  of a transient file, so no other secret reaches it.
+- **To keep Ansible's own log, name a configuration of your own.** Point
+  `ansible_cfg` at an `ansible.cfg` stating `log_path`. The service exports it
+  unchanged and sets no `ANSIBLE_LOG_PATH`, so Ansible writes its log where
+  that file says. The log receives Ansible's unredacted output, including any
+  value a role prints, and it is written in the provisioning container, which
+  is the Ansible controller, never on a managed host: whoever can read that
+  container's filesystem can read it. Your file replaces the packaged one whole,
+  so restate any of its settings you rely on.
+
+## Payments access
+
+A storefront settling in `arkhai.payments.v1` needs three things from its
+deployment, beside `[Settlement.arkhai_payments]` in its public `config`: its
+payments key, the CA its payments service's certificate chains to when that is
+not a public one, and a way to prove the two work together. How the storefront
+resolves them is in `DEPLOYMENT_AND_CONFIG.md`,
+["Settlement consumer configuration and cutover"](development/DEPLOYMENT_AND_CONFIG.md#settlement-consumer-configuration-and-cutover).
+
+**The key goes in the runtime Secret's overlay.** State it as
+`[Settlement.arkhai_payments] api_key` in the `storefront.secrets.toml` key of the
+Secret the agent's `secret.secretName` names (`secret.secretName` at the top level
+of the bare-metal chart), beside the wallet key:
+
+```toml
+[Settlement.arkhai_payments]
+api_key = "<the seller's payments API key>"
+```
+
+No chart value carries the key, and the values schema refuses `api_key`,
+`api_key_env`, and any `[[DisputeCredential]]` entry in public `config`; a
+dispute credential the storefront needs goes whole in the same overlay. A Secret
+written without the key still deploys: the storefront reports its payments
+readiness blocked by `arkhai_payments.api_key_missing`.
+
+**A private CA is a ConfigMap the deployment supplies.** Put the PEM bundle in a
+ConfigMap key, or a Secret key, and name it with the agent's `caBundle`:
+
+```yaml
+caBundle:
+  configMapName: payments-ca-bundle   # or secretName, never both
+  key: ca-bundle.pem
+```
+
+The chart mounts it and sets `[Settlement.arkhai_payments].ca_bundle_path` to the
+mounted file; a `config` stating another path, or stating no payments section, is
+refused at render. Only the payments client trusts the bundle. The chart has no
+default and creates no ConfigMap: a pod naming a missing one never starts. A
+service with a publicly trusted certificate needs no `caBundle`.
+
+**Prove it with `check-payments`.** Set the agent's `tests.paymentsAccount` to the
+seller's payee account, and `helm test <release>` runs the agent's
+`<agent>-payments-check` pod: `market-storefront check-payments --account
+<account>` (`bare-metal-storefront check-payments` for the bare-metal chart) from
+the storefront's own image, configuration, overlay, credential and CA mount. Rerun
+it after any change to the key, the CA or `service_url`. When the exact conditions
+of the running pod matter, run the same command in it:
+
+```console
+kubectl exec deploy/<storefront deployment> -- market-storefront check-payments --account <payee account>
+```
+
+It prints one JSON line and exits 0 when the read succeeded:
+
+| `step` | What failed | Look at |
+|---|---|---|
+| `configuration` | the section is absent, invalid or disabled, names no `service_url` or no key, or its CA bundle cannot be loaded | `config`, the overlay, the `caBundle` source |
+| `credential` | the variable a buyer-style `api_key_env` names is unset or empty | the overlay: a storefront states `api_key` |
+| `transport` | the service could not be reached over a trusted connection, or answered outside its contract | `service_url`, the network path, the CA bundle |
+| `refused` | the service refused the read; `code` is its error code | the key, and that `--account` is the key's own account |
+
+The line never contains the key.
+
+## Registry secret profile
+
+The registry chart takes the registry's secret settings — the bootstrap key
+`REGISTRY_BOOTSTRAP_API_KEY`, which seeds one write-scoped key when the key table
+is empty, and the administrator key `REGISTRY_ADMIN_API_KEY` — from a Secret
+holding a profile env file, named by `secretProfile`. It mounts the file beside the
+profile it renders from its values and appends its profile to `ACTIVE_PROFILES`,
+so a setting the file states overrides the rendered one
+(["Registry descriptor configuration"](development/DEPLOYMENT_AND_CONFIG.md#registry-descriptor-configuration)).
+
+A values file naming `auth.bootstrapKeySecret` or `auth.adminKeySecret` is refused
+at render, naming `secretProfile`. To move off them:
+
+1. Create a Secret whose key is `config-<profile>.env`, holding each setting on a
+   dotenv line, with any profile name but `production`, the rendered profile's:
+
+   ```console
+   kubectl create secret generic registry-secret-profile \
+     --from-file=config-secret.env=./config-secret.env
+   ```
+
+   where `config-secret.env` holds
+
+   ```
+   REGISTRY_BOOTSTRAP_API_KEY='<the bootstrap key>'
+   REGISTRY_ADMIN_API_KEY='<the administrator key>'
+   ```
+
+   An External Secrets `ExternalSecret` writing that key into that Secret serves
+   equally.
+2. In the release's values, remove `auth` and name the Secret:
+
+   ```yaml
+   registry:
+     secretProfile:
+       secretName: registry-secret-profile
+       profile: secret
+   ```
+
+3. Upgrade the release. The pod's environment holds only `CONFIG_DIRECTORY` and
+   `ACTIVE_PROFILES`, which reads `production,secret`.
+
+A bootstrap key seeds a key only into an empty table, so moving an existing
+registry changes no key it already holds.

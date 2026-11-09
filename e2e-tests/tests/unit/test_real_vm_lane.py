@@ -2,8 +2,9 @@
 
 The lane's registration of its host, the jobs it finds and waits for, the VM
 list it reads the guest's absence from, its checks of the service's execution,
-the delivered access, and the settlement preview; a rerun's adoption of its
-listing and the re-reservation's claim; and the lease view's reading of a
+the delivered access, and the settlement preview; the resource's sole open listing,
+created offering every ready mechanism or adopted with closed history retained,
+and the re-reservation's claim; and the lease view's reading of a
 GPU-less declaration. The scenario module is imported by name, never its
 stage classes, so pytest does not collect them here.
 """
@@ -24,15 +25,26 @@ from compute_provisioning_contracts import (
     JobStatusResponse,
     ResultEnvelope,
 )
+from market_alkahest.plans import ALKAHEST_MECHANISM
+from market_arkhai_payments import ARKHAI_PAYMENTS_MECHANISM
+from market_core.schemas import RateValue, SettlementOption, derive_settlement_option_id
 from storefront_client import StorefrontClientError
 from storefront_client.models import ListingListResponse, ListingSummary
 
 from e2e_harness.real_provisioning_target import VmHost
 from tests.e2e.roles.helpers.compute_deal import DealLease
-from tests.e2e.roles.helpers.compute_deal_stages import Stage09b_SettlementReadyAndCredentials
+from tests.e2e.roles.helpers.compute_deal_stages import (
+    DEAL_TOKEN,
+    LISTED_HOURLY_RATE,
+    Stage09b_SettlementReadyAndCredentials,
+)
+from tests.e2e.roles.scenarios.vms.composed_listing import (
+    ALKAHEST_SETTLEMENT, create_or_adopt_listing, listing_mechanisms, real_target_resource,
+)
 from tests.e2e.roles.scenarios.vms.host_registry import (
     provision_e2e_executor, register_e2e_host, register_e2e_pool,
 )
+from tests.e2e.roles.scenarios.vms.real_purchase_driver import RealVmPurchaseDriver
 from tests.e2e.roles.scenarios.vms.real_compute_deal_driver import (
     REAL_POOL_ID,
     REAL_RESOURCE_ID,
@@ -80,6 +92,7 @@ class FakeHosts:
         self.hosts = dict(hosts)
         self.registered: list = []
         self.updates: list = []
+        self.enabled: list = []
 
     def get_host(self, host_id: str):
         if host_id not in self.hosts:
@@ -96,8 +109,12 @@ class FakeHosts:
         connection = _view(body.connection) if body.connection else host.connection
         self.hosts[host_id] = SimpleNamespace(
             host_id=host_id, pool_id=body.pool_id or host.pool_id, connection=connection,
-            enabled=True,
+            enabled=host.enabled,
         )
+
+    def enable_host(self, host_id: str) -> None:
+        self.enabled.append(host_id)
+        self.hosts[host_id].enabled = True
 
 
 def _view(submission: ConnectionSubmission) -> SimpleNamespace:
@@ -127,7 +144,22 @@ def test_a_new_host_is_registered_with_the_connection_given():
 def test_an_unchanged_host_is_left_as_it_is():
     hosts = FakeHosts(**{HOST: _host(HOST, REAL_POOL_ID, target_connection(TARGET))})
     register_e2e_host(hosts, name=HOST, pool_id=REAL_POOL_ID, connection=target_connection(TARGET))
-    assert hosts.registered == [] and hosts.updates == []
+    assert hosts.registered == [] and hosts.updates == [] and hosts.enabled == []
+
+
+def test_a_host_an_earlier_run_left_disabled_is_enabled_again():
+    """A declaration naming a disabled host is neither admitted nor published,
+    so registration restores the host it reconciles."""
+    disabled = _host(HOST, REAL_POOL_ID, target_connection(TARGET))
+    disabled.enabled = False
+    hosts = FakeHosts(**{HOST: disabled})
+
+    host = register_e2e_host(
+        hosts, name=HOST, pool_id=REAL_POOL_ID, connection=target_connection(TARGET)
+    )
+
+    assert hosts.enabled == [HOST]
+    assert host.enabled is True
 
 
 def test_a_host_an_earlier_run_left_has_its_connection_replaced():
@@ -396,7 +428,7 @@ def test_a_failed_list_job_fails():
 # ---------------------------------------------------------------------------
 
 def _preflight(chosen: str) -> RealVmDealState:
-    state = RealVmDealState(_evaluate_settle_passed=True, _evaluate_settle_host_id=chosen)
+    state = RealVmDealState(_evaluate_settle_passed=True, expected_host_id=chosen)
     real_lane.TestStage08a2_SettlementPreviewChoseTheTarget().test_08a2_the_settlement_preview_chose_the_target_host(
         TARGET, MagicMock(spec=RealVmComputeDealDriver), state
     )
@@ -408,7 +440,7 @@ def test_the_preflight_passes_when_the_preview_chose_the_target():
 
 
 def test_the_preflight_fails_and_settlement_stays_blocked_when_another_host_was_chosen():
-    state = RealVmDealState(_evaluate_settle_passed=True, _evaluate_settle_host_id="kvm-other")
+    state = RealVmDealState(_evaluate_settle_passed=True, expected_host_id="kvm-other")
     with pytest.raises(AssertionError, match="chose host 'kvm-other', not the target"):
         real_lane.TestStage08a2_SettlementPreviewChoseTheTarget().test_08a2_the_settlement_preview_chose_the_target_host(
             TARGET, MagicMock(spec=RealVmComputeDealDriver), state
@@ -424,30 +456,85 @@ CAPACITY = TARGET.capacity.model_dump()
 LISTING_SHAPE = TARGET.listing_shape.model_dump()
 
 
+#: The two mechanisms a deal on a real target's resource may settle by.
+BOTH = (ALKAHEST_MECHANISM, ARKHAI_PAYMENTS_MECHANISM)
+CONTACT_EXCHANGE = "contact-exchange.v1"
+OFFER_RESOURCE = {"offering_mode": "vm", "resource_id": REAL_RESOURCE_ID, **LISTING_SHAPE}
+#: Each mechanism's settlement, as a module states it; the fake storefront
+#: reads only the mechanism.
+SETTLEMENTS = {mechanism: {"mechanism": mechanism} for mechanism in BOTH}
+
+
+def _option(mechanism: str) -> dict:
+    rates = [RateValue(field="amount", per="hour", value=1)]
+    settlement = {"schema": mechanism}
+    return SettlementOption(
+        option_id=derive_settlement_option_id(
+            price={"asset": "USD/6", "rates": rates}, settlement=settlement,
+        ),
+        price={"asset": "USD/6", "rates": rates},
+        settlement=settlement,
+    ).model_dump(mode="json")
+
+
 def _listing(
     listing_id: str, *, status: str = "open", paused: bool = False,
-    resource_id: str = REAL_RESOURCE_ID, **shape,
+    resource_id: str = REAL_RESOURCE_ID, mechanisms: tuple[str, ...] = BOTH, **shape,
 ) -> ListingSummary:
     return ListingSummary.from_dict({
         "listing_id": listing_id, "status": status, "paused": paused,
         "listing_resource": {
             "offering_mode": "vm", "resource_id": resource_id, **LISTING_SHAPE, **shape,
         },
+        "settlement_options": [_option(mechanism) for mechanism in mechanisms],
     })
 
 
 class FakeStorefront:
-    """The storefront's listing reads and pause, as 02b's adoption makes them."""
+    """The storefront's listing reads, creation and pause, as 02b makes them.
 
-    def __init__(self, *listings: ListingSummary) -> None:
+    Creation publishes an option for each settlement stated whose mechanism
+    is ready, as the storefront's composition suppresses an unready one, and
+    refuses a second listing on a resource, whose source backs one listing.
+    """
+
+    def __init__(self, *listings: ListingSummary, ready: tuple[str, ...] = BOTH) -> None:
         self.listings = {listing.listing_id: listing for listing in listings}
+        self.ready = ready
         self.read: list[tuple[int, int]] = []
         self.paused: list[str] = []
+        self.created: list[dict] = []
+
+    def get_system_status(self) -> SimpleNamespace:
+        # Contact exchange is a composed seller mechanism too, ready wherever
+        # contact profiles are configured, and settles no paid deal.
+        return SimpleNamespace(settlement=[
+            *({"mechanism": mechanism, "ready": mechanism in self.ready} for mechanism in BOTH),
+            {"mechanism": CONTACT_EXCHANGE, "ready": True},
+        ])
 
     def list_listings(self, *, limit: int, offset: int) -> ListingListResponse:
         self.read.append((limit, offset))
         page = list(self.listings.values())[offset:offset + limit]
         return ListingListResponse(listings=page, count=len(page), limit=limit, offset=offset)
+
+    def create_listing(self, **request) -> SimpleNamespace:
+        resource_id = request["listing_resource"]["resource_id"]
+        assert not any(
+            listing.listing_resource["resource_id"] == resource_id
+            for listing in self.listings.values()
+        ), f"this publication source is already bound to a listing: {resource_id}"
+        self.created.append(request)
+        listing_id = f"listing-{len(self.listings) + 1}"
+        self.listings[listing_id] = _listing(
+            listing_id, paused=request["paused"],
+            resource_id=resource_id,
+            mechanisms=tuple(
+                each["mechanism"] for each in request["settlements"]
+                if each["mechanism"] in self.ready
+            ),
+        )
+        return SimpleNamespace(listing_id=listing_id)
 
     def pause_listing(self, listing_id: str) -> None:
         self.paused.append(listing_id)
@@ -457,12 +544,24 @@ class FakeStorefront:
         return self.listings[listing_id]
 
 
-def _driver(*, storefront_admin_client=None) -> RealVmComputeDealDriver:
+def _listing_for(
+    storefront: FakeStorefront, mechanism: str = ALKAHEST_MECHANISM,
+    settlements: dict = SETTLEMENTS,
+) -> tuple[ListingSummary, bool]:
+    """The listing a module of ``mechanism`` creates or adopts on the fake."""
+    return create_or_adopt_listing(
+        storefront_admin_client=storefront, storefront_seller_client=storefront,
+        resource=OFFER_RESOURCE, shape=LISTING_SHAPE, mechanism=mechanism,
+        settlements=settlements, max_duration_seconds=3600,
+    )
+
+
+def _driver(*, storefront_admin_client=None, target=TARGET) -> RealVmComputeDealDriver:
     return RealVmComputeDealDriver(
         provisioning_client=None, storefront_client=None,
         storefront_admin_client=storefront_admin_client, storefront_service_client=None,
         site_capacity_admin_client=None, site_capacity=None, site_id="site",
-        vm_operator_client=None, target=TARGET, buyer_public_key="k",
+        vm_operator_client=None, target=target, buyer_public_key="k",
         listing_shape={}, jobs=JobWatch(None),
     )
 
@@ -477,23 +576,107 @@ def test_the_re_reservation_claims_the_resource_and_the_sold_capacity_as_dimensi
     )
 
 
-def test_no_listing_on_the_resource_leaves_the_run_to_create_one():
+def test_selected_vm_resource_is_shared_by_listing_and_capacity_checks():
+    target = VmHost.model_validate({**TARGET.model_dump(), "resource_id": "example-cpu-resource"})
+    admin = MagicMock()
+    driver = _driver(storefront_admin_client=admin, target=target)
+    assert real_target_resource(target)["resource_id"] == "example-cpu-resource"
+    driver.reserve_released_capacity(admin, listing_id="listing-1", escrow_uid="escrow-1")
+    assert driver.reserved_resource_id == "example-cpu-resource"
+    assert admin.admin_reserve_capacity.call_args.kwargs["required_attributes"]["resource_id"] == "example-cpu-resource"
+
+
+@pytest.mark.parametrize(
+    ("ready", "offered"),
+    [(BOTH, BOTH), ((ALKAHEST_MECHANISM,), (ALKAHEST_MECHANISM,))],
+    ids=["two mechanisms", "one mechanism"],
+)
+def test_creation_states_one_settlement_per_ready_deal_mechanism(ready, offered):
+    """Contact exchange, ready beside them, settles no paid deal and is not stated."""
+    storefront = FakeStorefront(ready=ready)
+    listing, adopted = _listing_for(storefront)
+    assert adopted is False
+    (request,) = storefront.created
+    assert [each["mechanism"] for each in request["settlements"]] == list(ready)
+    assert request["paused"] is True and request["listing_resource"] == OFFER_RESOURCE
+    assert listing_mechanisms(listing) == offered
+    assert (listing.status, listing.paused) == ("open", True)
+
+
+@pytest.mark.parametrize(
+    "order",
+    [BOTH, tuple(reversed(BOTH))],
+    ids=["alkahest first", "payments first"],
+)
+def test_an_alkahest_module_and_a_payments_module_share_one_listing(order):
     storefront = FakeStorefront()
-    assert _driver(storefront_admin_client=storefront).listing_for_run() is None
-    assert storefront.paused == []
+    first, created = _listing_for(storefront, order[0])
+    second, adopted = _listing_for(storefront, order[1])
+    assert (created, adopted) == (False, True)
+    assert second.listing_id == first.listing_id
+    assert len(storefront.created) == 1 and len(storefront.listings) == 1
+
+
+def test_a_listing_lacking_the_modules_mechanism_fails_naming_it_and_its_options():
+    storefront = FakeStorefront(_listing("listing-1", mechanisms=(ALKAHEST_MECHANISM,)))
+    with pytest.raises(AssertionError) as failure:
+        _listing_for(storefront, ARKHAI_PAYMENTS_MECHANISM)
+    message = str(failure.value)
+    assert f"listing listing-1 on this resource offers no {ARKHAI_PAYMENTS_MECHANISM}" in message
+    assert storefront.listings["listing-1"].extra["settlement_options"][0]["option_id"] in message
+    assert storefront.paused == [] and storefront.created == []
+
+
+def test_a_ready_mechanism_the_run_states_no_settlement_for_fails_before_creation():
+    storefront = FakeStorefront()
+    with pytest.raises(AssertionError, match=ARKHAI_PAYMENTS_MECHANISM):
+        _listing_for(storefront, settlements={ALKAHEST_MECHANISM: SETTLEMENTS[ALKAHEST_MECHANISM]})
+    assert storefront.created == []
+
+
+def test_a_module_whose_mechanism_is_not_ready_creates_nothing():
+    storefront = FakeStorefront(ready=(ALKAHEST_MECHANISM,))
+    with pytest.raises(AssertionError, match=f"{ARKHAI_PAYMENTS_MECHANISM} not ready"):
+        _listing_for(storefront, ARKHAI_PAYMENTS_MECHANISM)
+    assert storefront.created == []
+
+
+def test_the_real_modules_alkahest_rate_is_the_canonical_asking_rate_in_whole_tokens():
+    assert ALKAHEST_SETTLEMENT["rate"] == "10"
+    assert ALKAHEST_SETTLEMENT["asset"] == DEAL_TOKEN["contract_address"]
+    assert int(ALKAHEST_SETTLEMENT["rate"]) * 10 ** DEAL_TOKEN["decimals"] == LISTED_HOURLY_RATE
 
 
 def test_an_open_listing_of_the_targets_shape_is_paused_and_adopted():
     storefront = FakeStorefront(_listing("listing-1"))
-    adopted = _driver(storefront_admin_client=storefront).listing_for_run()
+    adopted, was_adopted = _listing_for(storefront)
+    assert was_adopted is True
     assert (adopted.listing_id, adopted.status, adopted.paused) == ("listing-1", "open", True)
-    assert storefront.paused == ["listing-1"]
+    assert storefront.paused == ["listing-1"] and storefront.created == []
 
 
 def test_a_listing_already_paused_is_adopted_without_another_pause():
     storefront = FakeStorefront(_listing("listing-1", paused=True))
-    assert _driver(storefront_admin_client=storefront).listing_for_run().listing_id == "listing-1"
+    assert _listing_for(storefront)[0].listing_id == "listing-1"
     assert storefront.paused == []
+
+
+@pytest.mark.parametrize("mechanism", BOTH)
+@pytest.mark.parametrize("closed_first", [True, False])
+def test_the_only_open_listing_is_adopted_without_changing_closed_history(
+    mechanism, closed_first,
+):
+    closed = _listing("historical", status="closed", disk_gb=100)
+    current = _listing("current")
+    rows = (closed, current) if closed_first else (current, closed)
+    storefront = FakeStorefront(*rows)
+
+    adopted, was_adopted = _listing_for(storefront, mechanism)
+
+    assert was_adopted and adopted is current
+    assert storefront.paused == ["current"] and storefront.created == []
+    assert storefront.listings["historical"] is closed
+    assert (closed.status, closed.paused) == ("closed", False)
 
 
 @pytest.mark.parametrize(
@@ -502,19 +685,23 @@ def test_a_listing_already_paused_is_adopted_without_another_pause():
         (_listing("listing-1", status="closed"),),
         (_listing("listing-1"), _listing("listing-2", paused=True)),
         (_listing("listing-1", disk_gb=100),),
+        (_listing("listing-1", status="unknown"), _listing("listing-2")),
     ],
-    ids=["closed", "two", "another shape"],
+    ids=["closed", "two", "another shape", "unknown status"],
 )
 def test_a_listing_this_run_cannot_adopt_fails_naming_the_listings_and_the_capacity(listings):
     storefront = FakeStorefront(*listings)
     with pytest.raises(AssertionError) as failure:
-        _driver(storefront_admin_client=storefront).listing_for_run()
+        _listing_for(storefront)
     message = str(failure.value)
-    assert f"the target's listing shape {LISTING_SHAPE}" in message, message
+    assert f"the listing shape {LISTING_SHAPE}" in message, message
     for listing in listings:
         shape = {name: listing.listing_resource[name] for name in CAPACITY}
-        assert f"{listing.listing_id} {listing.status!r} paused={listing.paused} {shape}" in message, message
-    assert storefront.paused == []
+        assert (
+            f"{listing.listing_id} {listing.status!r} paused={listing.paused} {shape} "
+            f"offering {list(BOTH)}"
+        ) in message, message
+    assert storefront.paused == [] and storefront.created == []
 
 
 def test_listings_on_other_resources_are_ignored():
@@ -522,7 +709,8 @@ def test_listings_on_other_resources_are_ignored():
         _listing("other-closed", status="closed", resource_id="compute-e2e-001"),
         _listing("other-shape", resource_id="compute-e2e-002", disk_gb=10),
     )
-    assert _driver(storefront_admin_client=storefront).listing_for_run() is None
+    listing, adopted = _listing_for(storefront)
+    assert adopted is False and listing.listing_id not in {"other-closed", "other-shape"}
     assert storefront.paused == []
 
 
@@ -531,7 +719,7 @@ def test_02b_records_an_adopted_listing_and_creates_none():
     seller = MagicMock()
     state = RealVmDealState(_registry_reachable=True, _target_host_confirmed=True)
     real_lane.TestStage02b_ListingCreated().test_02b_create_the_listing_paused(
-        _driver(storefront_admin_client=storefront), seller, storefront, {}, state
+        _driver(storefront_admin_client=storefront), seller, storefront, OFFER_RESOURCE, state
     )
     assert state.seller_listing_id == "listing-1"
     seller.create_listing.assert_not_called()
@@ -540,7 +728,7 @@ def test_02b_records_an_adopted_listing_and_creates_none():
 def test_a_listing_on_a_later_page_is_found():
     others = [_listing(f"other-{n}", resource_id="compute-e2e-001") for n in range(200)]
     storefront = FakeStorefront(*others, _listing("listing-1"))
-    assert _driver(storefront_admin_client=storefront).listing_for_run().listing_id == "listing-1"
+    assert _listing_for(storefront)[0].listing_id == "listing-1"
     assert storefront.read == [(200, 0), (200, 200)]
 
 
@@ -898,7 +1086,7 @@ def test_shared_ready_stage_checks_each_lanes_actual_capacity_expectation(expect
     admin.wait_for_settlement.return_value = SimpleNamespace(ready=True, status="ready")
     admin.get_listing.return_value = SimpleNamespace(status=observed)
     driver = SimpleNamespace(listing_status_after_first_fulfillment=expected, assert_delivery=MagicMock())
-    state = RealVmDealState(real_escrow_uid="escrow", provisioning_result_injected=True,
+    state = RealVmDealState(settlement_ref="escrow", provisioning_result_injected=True,
                             seller_listing_id="listing", negotiation_id="negotiation", _listing_reconciled=True)
     call = lambda: Stage09b_SettlementReadyAndCredentials().test_09b_settlement_ready_credentials_and_listing_closed(admin, driver, state)
     if expected == observed:
@@ -964,3 +1152,50 @@ def test_pool_registration_sends_and_reconciles_relay_config_through_typed_clien
     )
     assert host.host_id == HOST and transport.row["provider_config"] == relay
     assert site.register_resource.await_args.kwargs["capacity"] == CAPACITY
+
+
+@pytest.mark.parametrize("resource_id", [None, "example-cpu-resource"])
+@pytest.mark.parametrize("listing_ids", [[], ["selected"], ["other"], ["selected", "other"]])
+def test_real_purchase_refuses_ambiguous_discovery_before_payment(resource_id, listing_ids):
+    target = TARGET.model_copy(update={"resource_id": resource_id})
+    registry = MagicMock()
+    registry.list_listings.return_value.listings = [SimpleNamespace(id=value) for value in listing_ids]
+    listing = SimpleNamespace(id="selected", listing_resource=real_target_resource(target))
+    registry.get_listing.return_value = listing
+    admin = MagicMock()
+    admin.admin_refresh_site_projections.return_value = {"sites": {"site": {"resource_pool": {"state": "loaded"}}}}
+    driver = RealVmPurchaseDriver(
+        provisioning_client=None, storefront_client=None,
+        storefront_admin_client=admin, storefront_service_client=None,
+        site_capacity_admin_client=None, site_capacity=None, site_id="site",
+        vm_operator_client=None, target=target, buyer_public_key="k",
+        listing_shape={}, jobs=JobWatch(None), purchase_registry=registry,
+        seller_account="seller", dispute_window="P7D",
+    )
+    if listing_ids == ["selected"]:
+        assert driver.discover("selected") is listing
+        assert driver.second_purchase("other-key").reserved_resource_id == (resource_id or REAL_RESOURCE_ID)
+    else:
+        with pytest.raises(AssertionError, match="ambiguous"):
+            driver.discover("selected")
+        registry.get_listing.assert_not_called()
+    registry.list_listings.assert_called_once_with(region="e2e-real-host", limit=2)
+
+
+def test_real_purchase_refuses_unconfirmed_projection_before_registry_discovery():
+    admin, registry = MagicMock(), MagicMock()
+    admin.admin_refresh_site_projections.return_value = {
+        "sites": {"site": {"resource_pool": {"state": "unavailable"}}},
+    }
+    driver = RealVmPurchaseDriver(
+        provisioning_client=None, storefront_client=None,
+        storefront_admin_client=admin, storefront_service_client=None,
+        site_capacity_admin_client=None, site_capacity=None, site_id="site",
+        vm_operator_client=None, target=TARGET, buyer_public_key="k",
+        listing_shape={}, jobs=JobWatch(None), purchase_registry=registry,
+        seller_account="seller", dispute_window="P7D",
+    )
+    with pytest.raises(AssertionError, match="site projections did not confirm"):
+        driver.discover("selected")
+    registry.list_listings.assert_not_called()
+    registry.get_listing.assert_not_called()

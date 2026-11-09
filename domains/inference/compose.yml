@@ -7,8 +7,7 @@
 # startup). The `vllm` profile adds a real CPU model server; the gateway fronts
 # it only when told to, since a profile cannot change another service:
 #   INFERENCE_MODEL_BASE_URL=http://model-server:8000/v1 docker compose \
-#     --env-file .e2e-inference.env --profile vllm \
-#     -f compose.inference.yml -f compose.inference-local.yml up -d
+#     --profile vllm -f compose.inference.yml -f compose.inference-local.yml up -d
 #
 # Chain-touching services gate on `anvil`, which compose.dev.yml supplies. Bring
 # this domain up through the repository-root wrapper with its local overlay:
@@ -16,10 +15,17 @@
 # The full multi-domain stack is the root `docker-compose.yml`.
 #
 # Paths below are relative to this file's directory (domains/inference/).
+#
+# This file holds topology only. A deployment's identities, configuration file,
+# secret overlay and registry profile are bound by its overlay
+# (compose.inference-local.yml for development), and nothing here gives one a
+# fallback, so without an overlay the registry, service, gateway and storefront
+# refuse to start for want of them.
 
 services:
-  # The registry for the inference schema: the shared registry image with the
-  # inference filter specification it already carries.
+  # The registry for the inference schema: the shared registry image, selecting
+  # the inference filter specification it already carries through the
+  # deployment's registry profile.
   inference-registry:
     image: arkhai:registry
     depends_on:
@@ -29,8 +35,6 @@ services:
       - "8100:8080"
     env_file:
       - ../../core/registry/.env.docker-compose
-    environment:
-      - REGISTRY_FILTER_SPEC_PATH=/app/filter-spec-inference.yaml
     volumes:
       - ../../shared-env:/app/shared-env
     restart: unless-stopped
@@ -57,8 +61,9 @@ services:
       # Anvil 0), `service` the gateway (ed25519). The public halves of the
       # development identities in dev-env/identities/.
       - INFERENCE_TRUSTED_PRINCIPALS=@json {"seller":[{"scheme":"eip191","identifier":"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"}],"service":[{"scheme":"ed25519","identifier":"iHX7NkwTJ0RDDsjwIpC_K4JRV3RKIxRDd-UY3Bgzmk4"}]}
+    # The authority's own signing credential, at the path named above, is bound
+    # by the deployment's overlay.
     volumes:
-      - ${INFERENCE_SERVICE_IDENTITY_CREDENTIAL_FILE:?set inference service signer credential file}:/run/secrets/arkhai/inference-service/credential:ro
       - inference-service-data:/app/data
     restart: unless-stopped
     deploy:
@@ -127,8 +132,8 @@ services:
       - INFERENCE_GATEWAY_RESOURCE_ID=stub-instruct-quota
       - INFERENCE_GATEWAY_SERVED_MODEL_NAME=stub-instruct
       - INFERENCE_GATEWAY_UPSTREAM_BASE_URL=${INFERENCE_MODEL_BASE_URL:-http://model-stub:8000/v1}
-    volumes:
-      - ${INFERENCE_GATEWAY_IDENTITY_CREDENTIAL_FILE:?set inference gateway signer credential file}:/run/secrets/arkhai/gateway-identity:ro
+    # The gateway's signing credential, at /run/secrets/arkhai/gateway-identity,
+    # is bound by the deployment's overlay.
     restart: unless-stopped
     deploy:
       resources:
@@ -150,10 +155,11 @@ services:
     ports:
       - "8103:8000"
     environment:
+      # Where the loader finds the files the deployment's overlay binds:
+      # /etc/arkhai/storefront.toml and its secret overlay
+      # /etc/arkhai/storefront.secrets.toml.
       - XDG_CONFIG_HOME=/etc
     volumes:
-      - ${INFERENCE_STOREFRONT_CONFIG:-./storefront/storefront.inference.toml}:/etc/arkhai/storefront.toml:ro
-      - ../../kit/alkahest/src/market_alkahest/data/alkahest_anvil_addresses.json:/app/alkahest_anvil_addresses.json:ro
       - inference-storefront-data:/app/data
     restart: unless-stopped
     deploy:

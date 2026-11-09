@@ -178,6 +178,21 @@ the callback, and `await asyncio.wait_for(event.wait(), timeout=...)`
 before proceeding. If no such seam exists yet where a test needs one,
 adding it is the correct fix, not a sleep.
 
+**Tests wait on events, never on durations:** a test does not spend the
+time a scenario passes through. An interval, timeout, or deadline the code
+under test waits out is driven in fake time, through the injected clock and
+sleep or wait the code already takes or a seam added for it. A state the
+test needs is signalled by the code reaching it, such as a thread arriving
+at a lock, not assumed after a pause. A deadline the scenario is defined
+by is asked as a deadline of now, and a lock the code must find held is
+met with no busy timeout. Real time is spent only to prove a real
+operating-system timeout, such as a subprocess killed at its limit, by one
+test per boundary. The one standing exception is a real server a test
+cannot replace with an in-process transport, whose library stops only at
+its next poll: `socketserver`'s `serve_forever` is run with
+`poll_interval=0.01`, and the storefronts' loopback uvicorn servers stop on
+an event rather than at uvicorn's poll.
+
 **Leave nothing held:** a test that holds a job at a mock rule's gate
 (`pause_before_result`) ends that hold itself, by resuming the rule or by
 cancelling the job, so the test is idempotent: it leaves no execution
@@ -229,12 +244,28 @@ wherever a site changed before stepping publication or negotiating, and the
 end-to-end lanes widen the window to an hour so a scenario's rounds are not
 refused between steps.
 
-A scenario that needs a shared service's timer held — a storefront's lifecycle loops,
-provisioning's fulfillment convergence or lease watchdog — takes that lane's hold fixture
-for the whole module with `usefixtures`, listed first so it is released last. A hold is
-taken before the module's first stage and waits until each loop is at its gate, and is
-released in a finaliser whatever the module's outcome. Stages assert a hold; they never
-pause or resume a service themselves, and a source check enforces it.
+Every scenario module a compute pipeline lane selects holds its lane's timers for the
+whole module: the storefront's lifecycle loops, provisioning's fulfillment convergence,
+and its lease watchdog, and in the VM lane also Alice's storefront loops, since her
+publication cycle writes to registries other modules read. Holding every timer the
+lane's stages can meet, rather than those an author judges a module depends on, is
+what keeps a loop no one thought of from racing an observation. The module takes the
+lane's hold fixtures with `usefixtures`, listed first so they are released last. A hold
+is taken before the module's first stage and waits until each loop is at its gate, and
+is released in a finaliser whatever the module's outcome. Stages assert a hold; they
+never pause or resume a service themselves, and a source check enforces it. Two kinds
+of module are outside the rule: one no lane selects, such as the real-host modules an
+operator runs by hand, keeps the holds it has; and one under `scenarios/core/` reaches
+only the dev chain and messages no storefront or provisioning service, so it takes
+none.
+
+With convergence held, a stage makes each transition convergence would make. A buy
+scenario runs `market buy` in the background through `buy_to_ready`
+(`e2e-tests/tests/e2e/roles/helpers/buy.py`): it waits for the buy's escrow and
+settlement events and the storefront's dispatch, drains the mock job queue, advances
+convergence to `active`, and waits for the buy to end `ready`. A foreground buy would
+block on a convergence cycle no one steps. On any failure the helper terminates and
+reaps the buy it started, so a failed stage leaves no buyer polling the stack.
 
 The hold helpers are `storefront_loops_held`, `fulfillment_convergence_held`, and
 `lease_watchdog_held` in `e2e-tests/tests/e2e/roles/helpers/compute_deal.py`; each
@@ -248,7 +279,14 @@ stopped while the cleanup runs. `e2e-tests/tests/unit/test_scenario_holds.py` re
 from source, any pause or resume call or route outside the hold helpers and the
 conftests' hold fixtures, and `e2e-tests/tests/unit/test_scenario_cleanup_order.py`
 reads the fixture order pytest resolves for every compute-lane scenario module and
-refuses a hold released before the module's other cleanup. A module killed by `helm
+refuses a hold released before the module's other cleanup.
+`e2e-tests/tests/unit/test_scenario_lane_holds.py` reads each compute lane's marker
+expression from `e2e-tests/Makefile`, where lane membership is written once, collects
+the setup plan pytest resolves for it as the lane's own run collects, with skip marks
+unevaluated so a module skipped where the check runs is still held to the rule, and
+refuses a module missing one of its lane's holds, naming the module and the hold. A
+module joining a lane, from any directory, comes under the rule with no second list to
+update. A module killed by `helm
 test`'s timeout runs no finaliser, and only a restart clears its pause; modules in a
 lane run serially.
 
@@ -335,6 +373,11 @@ in draw.io.
 
 #### The discipline every scenario follows
 
+An end-to-end test proves a deterministic sequence of state changes — a sequence
+diagram run repeatably — never wall-clock time. A timer left running is an
+unscripted participant in that diagram, and a scenario whose duration a timer sets
+measures the timer rather than the work.
+
 A scenario asserts only on side effects it asked for. While a service's timer
 loops run, an observation races them: a listing reconciled a second later reads
 differently from one reconciled a second earlier, and waiting for the system to
@@ -344,9 +387,22 @@ under ["Pause the loop, then advance it explicitly"](#2-integration-tests), and
 initializes what the deal needs. Then, for each transition, it previews the
 move through the route's evaluate twin or the loop's dry run, advances exactly
 one side effect, and measures that effect against expectations through typed
-clients, with no sleeps: the only wait is on a request the stage made. What a
+clients, with no sleeps: the only wait is on a request the stage made, or for
+an instant the deal's Agreement fixes, such as its start, since no control
+moves the wall clock (`wait_until` in
+`e2e-tests/tests/e2e/roles/helpers/compute_deal_stages.py`); a stage waiting
+for an instant then advances what acts on it explicitly. What a
 stage produced goes into the shared deal state for the stages that depend on
 it, and whatever happened, the fixture's finaliser resumes the loops.
+
+A wait is legitimate only on an effect the stage's own request caused, bounded:
+a stage event its request emits, or a message it sends off the request path,
+such as the seller-side introduction mail the introduction stages read back from
+the lane's Mailpit. Where one service reads another's state live, the stage
+reads the effect once after its step rather than polling for it. A behaviour
+defined by a window or interval elapsing, such as the introduction retention
+sweep, is proven at a level that can drive the clock; no pipeline stage waits
+for it.
 
 ![How an end-to-end scenario holds the loops once, then previews, advances, and measures each transition](diagrams/e2e-stage-discipline.svg)
 
@@ -419,6 +475,50 @@ empty body; the real lane runs every shared stage in that order and no mock-lane
 stage; no shared stage names a mock gate or the mock test client; and every
 state field has one producer that runs before any stage reads it.
 
+A compute buyer purchase — a deal bought through the shipped buyer CLI,
+`market buy` or `market bare-metal buy`, in `arkhai.payments.v1` — runs the same
+stages from fulfillment onwards. Convergence to active, settlement readiness,
+the lease record, the lease's ending, and teardown completion are keyed on the
+deal's settlement reference, which an earlier stage writes: the Alkahest escrow,
+written by the canonical deal's settlement, or the payments negotiation, written
+by the purchase. Every storefront's settle wait resolves a deal by either
+([settlement servicing](../../openspec/specs/settlement-servicing/spec.md)), so
+settlement readiness keeps one body. Each shared stage reads the inputs it
+checks from state an earlier stage wrote independently of the lease it checks:
+the expected host from the Alkahest settlement preview or from the purchase
+driver's declared host — the one host the scenario registered enabled for its
+resource, or a real target's host — and the teardown's fulfillment from
+whichever ending ran. How a lease ends is shared only among scenarios that end
+the same way. The expiry stages back-date the lease, step one lease-watchdog
+cycle, and advance convergence to tearing down; the Alkahest set and the VM
+purchase run them. The bare-metal purchases end by the buyer's
+`market bare-metal teardown` in a stage of their own, which ends in the state
+teardown completion starts from.
+
+The purchase's own stages are defined once, in
+`e2e-tests/tests/e2e/roles/helpers/buyer_purchase_stages.py`, and declared by
+each purchase module in order as the canonical deal's are. They read the payer's
+balance, discover the listing and its payments option, buy through the CLI,
+correlate the run's events to one paid deal, and check the payment records: the
+transaction is bound to its Agreement, its receipt covers that mandate, its
+snapshot names the configured payer and payee with gross equal to the
+Agreement's price, and the payer's available balance, read through the payments
+kit with the buyer's own token, fell by exactly the scenario's own debits. The
+purchase command runs in the background from the buy on, because `market buy`
+polls its settlement until delivery while fulfillment convergence is held and
+later stages step it. Each domain's purchase driver
+(`e2e-tests/tests/e2e/roles/scenarios/vms/purchase_driver.py`,
+`e2e-tests/tests/e2e/roles/scenarios/bare_metal/purchase_driver.py`) supplies its
+command and arguments, its declared host, and its teardown.
+`e2e-tests/tests/unit/test_buyer_purchase_stages.py` holds every purchase module
+to the stage order.
+
+Each compute lane runs one buyer purchase against its payments double. VM's
+`e2e_vm_payment_purchase` lists a resource, host, and pool of its own, since a
+listing's binding to its resource outlives the listing, and ends its lease by
+expiry. Bare metal's is `e2e_bare_metal_payment_deal`, which inserts its own
+re-drive and seller refund between the shared stages.
+
 Settlement by introduction is defined once the same way, in
 `e2e-tests/tests/e2e/roles/helpers/introduction_stages.py`: disclosure of the
 retention window before any contact is given, backed and unbacked supply
@@ -458,35 +558,47 @@ observability seams for e2e-visible behavior accordingly.
 
 The pipeline runs one lane per market domain, each as its own job, so each
 failure's logs stand alone and one domain's failure never hides another's
-evidence. Each lane builds only the images its stack runs
+evidence. The native Ansible gate is a pipeline job beside the lanes, not a
+lane, since it composes no stack ([Ansible Syntax and Native
+Checks](#ansible-syntax-and-native-checks)). Each lane builds only the images its stack runs
 (`make build-e2e-<lane>`) and brings up only its own services, as a compose
 project of its own:
 
 - **VM lane** (`make -C e2e-tests test-e2e-vm`): Bob's and Alice's storefronts
-  and provisioning authorities, the two VM registries, and the dev chain.
+  and provisioning authorities, the two VM registries, and the dev chain. After
+  the canonical deal and a buyer's surrender, its typed-client deal runs two
+  deals on the freed capacity: one whose Agreement starts later, committed at
+  settlement and dispatched only by a resume-pass step once its start is
+  reached, and one whose lapsed hold leaves its settlement placement no
+  capacity, which ends as the seller's failure with nothing dispatched.
 - **Bare-metal lane** (`make -C e2e-tests test-e2e-bare-metal`): one site
   trusting the bare-metal storefront, a bare-metal registry, and the dev chain.
   Its publication scenario declares pools and whole-host capacity through the
   site's operator clients, steps publication, and follows one listing through
   discovery, withdrawal, and reinstatement at the registry. Its mock-provisioned
   deal runs the canonical compute deal for one whole host, stage for stage with
-  VM's, then a second deal on the freed host whose buyer teardown, sent twice,
-  returns one operation and releases capacity once. Its separate
-  `e2e_bare_metal_payment_deal` scenario uses a wallet-free profiled buyer for
-  one fixed-term USD/6 purchase, receipt-gated mock access, same-transaction and
-  same-fulfillment re-drive through `settle_agreement`, then seller refund and
-  separate physical teardown with restored whole-host capacity. Unless the
-  refund stage completed the deal's teardown, the module's cleanup finds the
-  purchase in the buyer's run log, refunds it if the log records the payment
-  approved — retrying for a bounded time while the seller has not yet verified
-  it or a service is unavailable — then releases a host it finds after the
-  refund, reporting one it cannot read or tear down; a refund that still fails
-  fails the run with the negotiation and
-  transaction for an operator. Each cleanup step is
-  attempted even after an earlier one fails, and the module's holds are
-  released last.
-  Unconfigured payments remain a named blocked prerequisite; no real SSH claim
-  is made. Its `e2e_bare_metal_unbacked_introduction` scenario is the compute
+  VM's, stepping the storefront's `delivery-recovery` cycle after dispatch and
+  after readiness, as a restart would; then a second deal on the freed host
+  whose buyer teardown, sent twice, returns one operation and releases capacity
+  once; then a third whose machine is taken before settlement, which ends as
+  the seller's failure with nothing reserved. Its separate
+  `e2e_bare_metal_payment_deal` scenario is the lane's
+  [buyer purchase](#the-canonical-compute-deal): a wallet-free profiled buyer
+  buys one fixed-term USD/6 purchase through `market bare-metal buy` on the
+  shared purchase stages, then receipt-gated mock access, readiness read through
+  the storefront's settle wait on the negotiation, same-transaction and
+  same-fulfillment re-drive through the canonical lifecycle `commit`, the
+  buyer's `market bare-metal teardown`, then the seller's separate refund of the
+  still-held payment and restored whole-host capacity. Unless the last stage
+  recorded the deal ended, the module's cleanup opens any mock gate still
+  closed, finds the purchase in the buyer's run log, refunds it if the log
+  records the payment approved — retrying for a bounded time while the seller
+  has not yet verified it or a service is unavailable — then releases a host it
+  finds after the refund, reporting one it cannot read or tear down; a refund
+  that still fails fails the run with the negotiation and transaction for an
+  operator. Each cleanup step is attempted even after an earlier one fails, and
+  the module's holds are released last.
+  It settles against the lane's payments double; no real SSH claim is made. Its `e2e_bare_metal_unbacked_introduction` scenario is the compute
   family's introduction scenario on bare metal: the site's operator declares a
   whole machine in a capacity-backed pool naming its host, one in an unbacked
   pool naming none, each at an asking rate, and one in a backed pool stating no
@@ -498,11 +610,21 @@ project of its own:
   `access_methods`, and only `contact-exchange.v1`. The buyer reveals the
   introduction through the CLI into its own file sink, the storefront mails the
   buyer's contact to the seller through the lane's Mailpit, and the deal's
-  fulfillment status route answers 404.
+  fulfillment status route answers 404. Its `e2e_bare_metal_introduction`
+  scenario discloses the retention window before commitment, reveals
+  introductions through the production buyer transport, and ends with the
+  operator's deletion of one. No stage waits for the window to pass: the held
+  retention sweep is proven where its clock can be driven, by the storefronts'
+  integration tests (`domains/bare_metal/storefront/tests/test_http_introductions.py`,
+  `domains/vms/storefront/tests/integration/test_introduction_retention.py`).
 - **API-credit lane** (`make -C e2e-tests test-e2e-apicredits`): the credits
   registry, service, storefront, and gated sample app, a compute-schema registry
   of the lane's own that the credits deal's discovery is routed away from, and
-  the dev chain. The lane mounts the engine socket into the test container
+  the dev chain. The lane's overlay (`compose.apicredits-lane.yml`) runs the
+  sample app with no verify cache, so every request re-verifies its key and a
+  top-up is visible to the next request; the cache's own behaviour, including no
+  service call on a key known to be exhausted, is proven by the gate's
+  conformance trace. The lane mounts the engine socket into the test container
   (`BUYER_MACHINE_DOCKER_SOCKET`), and its upgrade/rollback scenario
   (`e2e_credits_service_rollback`,
   `e2e-tests/tests/e2e/roles/scenarios/apicredits/test_credits_service_upgrade_rollback.py`)
@@ -511,10 +633,20 @@ project of its own:
   over a database the pre-kit image wrote, and checks each reads the other's
   grants and serves the live route surface.
 
+The VM, bare-metal and API-credit lanes also run the payments double
+(`compose.payments-double.yml`), which each lane's payment storefront — Bob, the
+bare-metal storefront, the credits storefront — settles against; see
+[Private Service Dependencies](#private-service-dependencies).
+A lane target names only its Compose files, its project, and the run's
+provisioning mode: every value its stack reads is in a committed overlay,
+registry or site profile, or secret overlay, and the runner takes the lane's
+committed profiles (`RUNNER_PROFILES`).
+
 The compute lanes' provisioning services run their mock profile because the
-run selects it: `PROVISIONING_MODE` (`mock` or `real`, default `mock`) is read
-by each lane's environment target, which prints the stack's provisioning
-profiles, never by a storefront. Under the `mock` profile each compute adapter
+run selects it: `PROVISIONING_MODE` (`mock` or `real`, default `mock`) is
+checked and exported to Compose by each lane target in `e2e-tests/Makefile`, and
+each overlay places it last in the provisioning service's profiles
+(`docker,<site>,${PROVISIONING_MODE:-mock}`); no storefront reads it. Under the `mock` profile each compute adapter
 runs its jobs through a mock executor of its own, resolved by the same
 `(offering_mode, action)` table as its real one, and the playbook output the
 mock returns is parsed by the adapter's real result path. The rule and gate
@@ -557,6 +689,16 @@ passes when its filter matches no test. A scenario on that list reads only what 
 `settings.toml` — never a file from the checkout. Every other pipeline scenario is
 reported as not run against Helm.
 
+After the scenario pod, validation runs every storefront payments-check test pod
+the release's hooks render (`helm get hooks`, each pod named
+`<release>-…-payments-check`), each as its own step and likewise counted as
+passed only on its own exit status of 0; a pod with no exit status is stopped.
+Each pod's log is kept as evidence beside the scenario pod's, and a release
+that renders no check pod is warned, never passed. The check pod runs the
+storefront's `check-payments` against the release's payments double, so it
+shows the storefront's CA mount, derived `ca_bundle_path`, overlay key and
+service URL working together; the release serves no payment scenario.
+
 A mock-provisioned deal proves the services compose into a working deal, not
 that a real resource was delivered. Bare metal's release-qualified deal
 (`e2e_bare_metal_deal`) needs a real whole host to grant and revoke access on,
@@ -597,6 +739,58 @@ Each successful fetch also creates `<run-id>.zip` beside the run directory,
 containing that directory and its logs. Repeated fetches replace the ZIP.
 An unavailable artifact is reported without discarding other logs. A successful
 fetch means diagnostics were retrieved; it does not mean the tests passed.
+
+#### Locally verifiable and external-topology scenarios
+
+End-to-end scenarios come in two kinds, each with its own coverage. A *locally
+verifiable* scenario runs against this repository's own stack — a lane's Compose
+project or a Helm release — with provisioning in its mock profile and the
+payments service replaced by the in-lane double. It runs on every pipeline run
+and proves that the services compose into a working deal. An
+*external-topology* scenario needs services or hosts this repository does not
+deploy, such as a hosted payments target or a real host. It runs only where a
+deployment supplies them, and it is the only evidence for what they bring: real
+delivery, access, and revocation on a host, and a payments target's records.
+
+An external-topology scenario that makes a deal minimally extends a locally
+verifiable one. It subclasses that scenario's shared stages wherever their bodies
+agree and adds only the stages its external parts require, so the path both kinds
+run is proven on every pipeline run and the external run adds only what no lane
+can observe. The real-provisioning qualification modules for observations 2, 4
+and 5 extend the lanes' buyer purchases this way
+([the real-provisioning lane](#the-real-provisioning-lane)). An external-topology
+scenario that makes no deal extends nothing: it follows the deal scenarios on the
+same stack and names them, as observation 6's module follows the other two.
+Setup or teardown that needs knowledge this repository lacks — funding a payer
+account at a payment provider's sandbox, providing the hosts — is the
+deployment's topology.
+No scenario performs it. An absent target is a blocked skip, and a stage whose
+input the target does not name skips naming that field.
+
+Evidence from an external-topology run is supplied by whoever deploys the
+topology. The scenarios assert, and log the identifiers each stage reads — the
+buyer run, Agreement, transaction, reservation, jobs, relay port, and grant. The
+deployment's operator presents the outcome as a free-form summary it has
+sanitized. Raw logs and records stay in the operator's restricted storage and
+never enter this repository, and no record format is defined.
+
+A qualification module's outcome is per observation, not per module, because a
+pytest run that passes with a skipped stage has not run every check an
+observation requires. An observation is *made* when every stage requiring it
+passed, *failed* when one failed, and *unproven* when none failed and one skipped
+naming a prerequisite, which the outcome names. A stage the run did not collect
+counts as not run, so deselecting a stage cannot make an observation. Every stage
+of a qualification module requires the module's observations, or its cycle's in
+a module run once per cycle, unless the stage narrows that to fewer; the module
+logs each observation's outcome after its last stage
+(`e2e-tests/tests/e2e/roles/helpers/qualification.py`).
+
+Neither kind waits out the wall clock for a state it can step to. A VM lease's
+end is reached by moving its agreed end into the past and stepping one
+lease-watchdog cycle with the watchdog held, which runs exactly the service code
+a wall-clock expiry runs. That is how "Tests wait on events, never on durations"
+([Integration Tests](#2-integration-tests)) applies to a lease's end; lease
+durations stay fixed.
 
 #### The real-provisioning lane
 
@@ -650,14 +844,20 @@ release. Where a mock lane releases a gate, the real lane waits for the real job
 instead, found through the fulfillment's capacity reservation in the operator
 job list and read by its status within a named bound. That poll is the one wait
 the lane adds to the stage discipline, which otherwise waits only on a request a
-stage made; a failed or timed-out job fails the stage with its logs.
+stage made or for an instant the Agreement fixes; a failed or timed-out job
+fails the stage with its logs. The shared stages compare the runner's clock
+with the stack's — settlement is timed against the Agreement start, and the
+lease's start and activation against settlement — so the operator's machine
+keeps its clock synchronized with the stack's to within a second.
 
 A rerun against the same stack reconciles rather than duplicates. The host's
 connection is replaced where it differs and the declaration rewritten, and the
-open listing an earlier run left on the scenario's resource is adopted, paused,
-rather than created, since a publication source backs one listing for good,
-whether it is open or closed. Several listings, a closed one, or one of another
-shape fail naming them, for an operator to recover. The settle stage waits for
+sole open listing on the scenario's resource is adopted, paused, rather than
+created. Closed historical listings retain their bindings and are preserved.
+Closed listings with no open one, several open listings, a listing of unknown
+status, or an open listing of another shape fail naming them, for an operator to
+recover; a closed binding does not authorize creating a replacement. The settle
+stage waits for
 the deal's own `job_submitted` event, filtered by its negotiation and counted
 from a mark taken before settling, because an adopted listing's event log holds
 earlier deals' events.
@@ -694,6 +894,82 @@ refusal, ordinary expiry/release, closed access and released/quarantined relay
 holdings require a configured real host. The module belongs to no pipeline lane;
 without its target it skips before any holds or supply writes. Unit and mock
 pipeline results do not substitute for this physical qualification.
+
+The real-provisioning modules and the qualification modules below share the
+target's resource and adopt its sole compatible open listing, retaining closed
+historical bindings. That listing offers a settlement option for each deal
+mechanism the storefront composes and reports ready, Alkahest and Arkhai
+payments. On VM
+every module creates or adopts it through one helper
+(`e2e-tests/tests/e2e/roles/scenarios/vms/composed_listing.py`); bare metal's
+published options already are the composed mechanisms. Contact exchange settles
+no deal and is stated on no compute listing. A module adopting the listing
+requires it to offer the module's own mechanism, and otherwise fails naming the
+listing and its options before any deal.
+
+Three external-topology modules, also in no lane, make the runbook's
+[owed observations](VALIDATION_RUNBOOK.md#observations-the-qualification-owes)
+2, 4, 5, and 6 against the target and a payments target. Two extend the lanes'
+buyer purchases; the third, observation 6's, makes no deal and runs after them on
+the stack their purchases populated. The payments target is the runner's
+`PAYMENTS` section, with `LANE_OWNED` unset so an unready target is a blocked skip. Without
+either target they report a blocked skip before any hold or write.
+
+VM payments listings take their declared delivery allowance from
+`PAYMENTS.VM_DELIVERY_DEADLINE_SECONDS`, a positive integer number of seconds
+(or a decimal integer string), defaulting to 300. Listing composition and the
+purchase's option check use the same value; the buyer CLI waits at least that
+long. Set the allowance before publishing an offer, with
+`PAYMENTS.DISPUTE_WINDOW_SECONDS` covering it plus the authority's minimum filing
+window. Existing immutable terms must match the run's inputs. This does not
+extend an accepted Agreement, move a clock, or accept late delivery.
+
+- `e2e_vm_qualification` (observation 2) buys two CPU-only guests through
+  `market buy`, keeps an SSH heartbeat on the first across the second's create
+  and teardown, reads the host's diagnostics before, during, and after through
+  the VM operator job (`diagnose_host`, read through `HostDiagnostics`), and
+  ends both leases by back-dating and stepped watchdog cycles.
+- `e2e_bare_metal_qualification` (observations 4 and 5) runs the normal cycle,
+  then the successor and refusal cycle, which needs the first cycle's consumed
+  UID, each lease ended by the buyer's `market bare-metal teardown`. It checks no
+  GPU.
+- `e2e_real_provisioning_reapply` (observation 6) reapplies both hosts'
+  canonical registrations, steps a publication cycle, and reads the consumed-UID
+  history through the working-data operator route before and after. It holds the
+  storefronts' loops and the VM site's timers and steps no bare-metal timer,
+  since the service's state guards keep that site's convergence and watchdog
+  from restoring anything a faulty reapply removed. Relay-port reconciliation
+  runs ungated on both sites, so it compares each quarantined relay lease's whole
+  record, release time included. The listing baseline includes closed history:
+  every identity, state and pause must remain exactly as before, with no added
+  or removed listing, rather than requiring that history contain only one row.
+
+A module failing after the buyer approved a payment refunds it as the seller,
+unless the module had begun ending that purchase, ends a delivered guest or host
+through its lease's own expiry or reclaim, and names by negotiation and
+transaction whatever it cannot refund or end.
+[`e2e-tests/README.md`](../../e2e-tests/README.md#real-provisioning-qualification)
+gives the steps.
+
+Target version 2 accepts two optional inputs these modules read. A VM host's
+`management_unit` names the operator's management client, a systemd service
+unit, which the diagnostics report beside libvirtd and the buyer tunnel client.
+Observation 2 requires that the management unit keep one invocation, stay
+active, and add no restarts across the reads, and that libvirtd add no
+restarts, report no failed result, and keep one invocation across the reads
+taken while the first guest runs; libvirtd is socket-activated and may exit when
+idle. A relay access's `admission_log` is an absolute harness-local path to a
+copy of the relay's admission plugin log
+([the log](../../tools/frp-grant-admission/README.md#the-log)), which the
+deployment keeps current. For each delivered relayed lease the module requires a
+verified `admit` line whose `jti` is the reservation and whose remote port and
+`kid` are those the relay's lease record names
+(`GET /api/v1/relays/{relay_id}/leases`). The key compared is the one that signed
+the lease's latest grant, not the relay's active key, since a rotation keeps a
+retired key's grants valid. Without either field the stage that needs it skips
+naming the field, and each observation requiring that stage is unproven: the
+management reads by observation 2, the admission check by observations 2, 4,
+and 5.
 
 ## Coverage Contract Between Levels
 
@@ -834,34 +1110,76 @@ absence.
 
 ## Host Requirement Enforcement
 
-The rule that a declaration naming no host cannot be admitted or placed where
-the pool's provider needs one is rechecked at each layer, and each layer
-proves its own check:
+The usable-host rule — where the pool is backed and its provider needs a host, a
+declaration is offered only when it names a registered, enabled host — is
+rechecked at each layer, and each layer proves its own check. Below the
+provisioning service a "disabled" or "unregistered" host is an id a fake
+`DeliverableHosts` report leaves out, one case to the layer; that the host
+authority leaves both out is proved where it lives.
 
-- `kit/resource-pools` unit tests own the predicate:
-  - no requirement supplied;
-  - a declared need;
-  - a provider the requirement does not name;
-  - a value that is not a `bool`.
+- `kit/resource-pools` unit tests own the predicates:
+  - `pool_needs_host`: no requirement supplied, a declared need, a provider the
+    requirement does not name, a value that is not a `bool`;
+  - `declaration_has_usable_host`: a host in the report, a host absent from it,
+    no host named, an empty report, an unbacked pool, a provider needing no
+    host, no requirement, and a requirement with no report.
 - `kit/fulfillment` unit tests own the provider declaration, including a
   registry that refuses a provider declaring none.
-- `kit/site` library integration tests own admission:
-  - refusal with fall-through to a declaration naming a host;
-  - no refusal without a requirement;
-  - resize;
-  - the assignment write.
+- `kit/site` library integration tests own admission and the offered read:
+  - probe, reserve, and resize refusing a declaration with no usable host, with
+    fall-through to one that has one, and matching it again once its host
+    returns to the report;
+  - the rebind recheck refusing such a destination with the debit and the
+    capacity version unchanged;
+  - no refusal without a requirement, and named hosts usable with no report;
+  - one report read per decision, in the decision's own session, and, on a
+    file-backed database, a write from another connection held off for the
+    whole decision;
+  - the offered read and the snapshot reporting a declaration with no usable
+    host not enabled, an unbacked pool's or a pool delivering no mode keeping
+    its own `enabled`, the operator's listing keeping the stored `enabled`, and
+    the capacity version unchanged.
+- `kit/site` unit tests own the projections' input: both are built from the
+  offered read, and the capacity-bucket projection's revision and digest
+  advance when only offered state changes.
 - `kit/fulfillment` library integration tests own placement:
   - exclusion before policy, rebind, cursor, or assignment, on both the
     automatic and the constrained path;
-  - refusal of an existing assignment that records no host.
-- Provisioning unit tests own composition's refusal of a requirement that
-  disagrees with the registered providers.
+  - a pool-scoped hold whose own backing lost its host re-placed elsewhere, or
+    refused with no other candidate;
+  - an existing assignment on a disabled host returned unchanged, and refusal
+    of an existing assignment that records no host;
+  - one report read per scheduling transaction, in its session, and none with
+    no requirement.
+- Provisioning library integration tests own the host authority's report: a
+  disabled host leaves it and returns on enable, an unregistered id is never in
+  it, and it reads the caller's own uncommitted disable.
+- Provisioning unit tests own composition: refusal of a requirement that
+  disagrees with the registered providers; the ledger and the scheduling unit
+  of work receiving the host authority as the same report; and a declaration
+  handed in not enabled projecting not enabled, with its bare-metal view
+  unavailable.
 - Provisioning integration tests prove the deployed surface through the typed
   clients:
   - admission and scheduling refusals with the executor boundary asserted
     never reached;
+  - a host disabled through the family client making probe and reserve answer
+    no capacity and a constrained schedule answer `no_eligible_resource`,
+    projecting the declaration not enabled in the resource-pool projection, its
+    bare-metal view unavailable, leaving it out of the capacity buckets and the
+    snapshot, keeping the operator's listing, and leaving the capacity version
+    unchanged, each restored on enable; an unregistered host likewise until it
+    is registered; an unbacked pool's declaration unaffected; and an existing
+    assignment on a disabled host returned by a retry, its create waiting at
+    dispatch until the host is enabled;
   - dispatch to an unregistered host failing before any playbook, even after a
     host definitions document naming the host was submitted and refused.
+- End to end, `e2e_bare_metal_publication`'s host stages prove the storefront
+  half: disabling the advertised resource's host closes its listing as a
+  withdrawn source after one site-projection and one publication cycle, and
+  enabling it reopens the same listing id. Every lane registers each host a
+  backed declaration names before declaring it, through the shared
+  `register_e2e_host` helper.
 
 ## Multi-Domain Storefront Composition
 
@@ -1023,9 +1341,15 @@ configured for one mode is tested with a receipt signed in the other:
 payments.serve(build_signed_receipt(signer=SERVICE, mandate=accepted.mandate, livemode=True))  # refused unless the role sets livemode
 ```
 
-A fake may give the surrounding transaction snapshot a placeholder proof,
-because sellers trust only the embedded receipt. A change that makes snapshot
-state authoritative must first add a snapshot vector and fixture.
+A snapshot consumed as authority state needs its own verified proof, mode,
+deal/mandate/receipt binding and nonregressing event sequence. The payments kit
+owns snapshot vectors, `sign_snapshot` and the shared clock-injected
+`PaymentsAuthority` fixture engine. `FakePaymentsClient` uses that engine rather
+than reimplementing billing; a receipt-only fixture proves only the receipt gate,
+not part-state observation. The mediation kit independently owns claim framing,
+both signature-scheme vectors and ruling traces. Neither fixture qualifies a
+deployed authority or monetary ruling execution. See
+[lifecycle contract evidence](../../openspec/specs/test-compatibility/architecture.md#lifecycle-contract-evidence).
 
 ## Boundary-Change Validation
 
@@ -1077,7 +1401,8 @@ can refuse.
 ships from one list, which a structure test holds equal to the playbooks
 present; `make validate-playbooks` runs it. Tests that run shipped tasks through
 real `ansible-playbook` are library integration: the VM suite renders both create
-facts and exercises its family-role call boundary, and the family suite runs its
+facts, exercises its family-role call boundary, and runs the host diagnostics
+task file against faked `systemctl` and `virsh`, and the family suite runs its
 installer and authenticated status wait against controlled local file and HTTP
 boundaries. Native tests skip in the default suite without supported Ansible;
 the family HTTP tests also require the `ansible.posix.json` callback.
@@ -1088,11 +1413,21 @@ A missing image, supported Ansible or required callback, no native test, or a
 skipped native test fails the gate. Both domains' playbooks are parsed with their
 own configuration and with the shared service configuration and image role path.
 The shared configuration contains no domain path. A structure test holds the VM
-gate's list of native modules to every module defining its skip guard. The VM
-end-to-end lane runs this gate once it has built the image.
+gate's list of native modules to every module defining its skip guard, and the VM
+gate runs its few native tests in series. The compute family's gate
+(`provisioning/compute/iac/scripts/native_gate_runner.py`) runs each native test
+in its own interpreter, as many at once as the host has CPUs, so no test's
+working directory, environment, or umask reaches another; it prints each test's
+output whole under the test's id as the test ends, then a summary of what ran,
+failed, and skipped.
+
+The end-to-end pipeline runs this gate as its own job, `native-ansible-gate`,
+beside the domain lanes: it builds only the wheels and the provisioning image
+(`make build-e2e-native-gate`), composes no stack, and leaves its output in the
+job log.
 
 The bounded bare-metal working-data helper has its own evidence boundaries.
-`make test-bare-metal-iac` exercises its unit and library-integration behavior;
+`make -C domains test-bare-metal-iac` exercises its unit and library-integration behavior;
 `make build-provisioning` followed by `make test-bare-metal-iac-native`
 executes native account, filesystem and IPC behavior in a disposable isolated
 environment and fails on missing prerequisites or skips. Neither gate proves
@@ -1173,6 +1508,32 @@ passing render is not deployment evidence, just as it is not deal evidence.
   `app.kubernetes.io/name`, which every selector requires — and that each release
   renders exactly its expected test templates, so a test pod that stops rendering
   fails rather than leaving nothing to check.
+- Both storefront charts' render tests assert the payments interface: the CA
+  bundle option (`caBundle`) mounted from a ConfigMap or a Secret together with
+  the `ca_bundle_path` it derives into the rendered configuration, neither
+  rendered without it, and the option refused without a payments section; the
+  values schema refusing in public `config` the payments `api_key`, its
+  `api_key_env`, and every `[[DisputeCredential]]` entry; a payments-only
+  storefront rendering with nothing for its removed settings; and the
+  payments-check test pod running the storefront's own command with the
+  Deployment's image, environment, and configuration mounts but no data volume,
+  probes, or ZeroTier device, rendered only with payments and an account.
+  `helm/charts/payments-lane-double/tests/test_render.py` asserts the double is
+  off by default, runs once behind the Service `payments-double` in the local
+  release and not at all in the bare-metal release, and serves a named TLS
+  Secret over the image's files.
+- `helm/tests/test_release_topology.py` also holds the local release's payments
+  values to the double's committed fixtures, and asserts the registry chart
+  renders its settings as the profile `config-production.env`, sets only
+  `CONFIG_DIRECTORY` and `ACTIVE_PROFILES` in the pod environment, layers a
+  `secretProfile` after it, and refuses the retired `auth.*KeySecret` values
+  naming `secretProfile`. Through the interpreter `REGISTRY_PYTHON` names, which
+  `test-render.sh` sets when `core/registry/.venv` exists, it loads the rendered
+  profile with the registry's own loader; without it that check reports a skip.
+- Release tooling (`make test-release-tooling`) reads back the secret overlays
+  `topology-secrets` writes: the seller payments key in each storefront's
+  runtime overlay, and Bob's `[[DisputeCredential]]` equal to his Compose
+  secret overlay's (`scripts/tests/test_change_build_and_helm_targets.py`).
 
 **How to write one:**
 
@@ -1247,21 +1608,62 @@ and `kit/api/gate-ports/rust/tests/conformance.rs`.
 
 This repository is public, and every test target it runs in public CI or a public build MUST pass without credentials for a private repository, image or package. A scenario that needs a private service's internals (its source, images, development-mode auth, operator test funds, or ledger reads) lives in that service's repository, which may depend on SCM's public artifacts. SCM's own e2e may run against a service's public test deployment, readiness-gated: it reports the unmet prerequisite when no target is configured or reachable. Otherwise SCM tests the client side against the service's published contract (schemas and test vectors) and a test double at the client kit's boundary.
 
-The API-credit payment scenario reads its payments policy through
-`e2e-tests/tests/e2e/roles/helpers/payments.py`, which other payment scenarios
-may reuse. A blank PAYMENTS.SERVICE_URL means no payments target is configured,
-and the scenario reports a blocked skip, never an Alkahest fallback: that is
-what the pipeline runs. With SERVICE_URL set, SERVICE_IDENTITY,
-DISPUTE_AUTHORITY, BUYER_ACCOUNT, BUYER_MARKETPLACE_CREDENTIAL and
-SELLER_MARKETPLACE_CREDENTIAL are required, and a missing one fails the
-scenario by name before the target's `/health` is checked (timeout 5 seconds,
-environment proxies disabled); an unready target is again a blocked skip.
-FEE_BPS defaults to 250; LIVEMODE and DEVELOPMENT_AUTH default to false, are
-read as strict booleans, and LIVEMODE is emitted explicitly in buyer TOML.
-DEVELOPMENT_AUTH and API_KEY_ENV are mutually exclusive. The helper serializes
-only the named payments table, not domain configuration or payer selection.
+A double of a private service mirrors its producer's API — routes,
+authentication, admission, read authorization, idempotency and error codes —
+unless there is a compelling reason to deviate, and states the deviation; a
+double that answers differently proves only that the client agrees with the
+double. Where it wraps a kit's engine it serves what that engine serves, and it
+narrows its claims rather than its behaviour.
+
+**The lanes' payments target.** Every end-to-end lane runs the payments double,
+`tools/payments-lane-double`: an HTTPS service at `https://payments-double:8443`
+over the payments kit's `PaymentsAuthority` engine, mirroring the payments
+service's API, signing only `livemode: false` receipts, and holding only
+labelled public development fixtures (its [README](../../tools/payments-lane-double/README.md)
+says what it serves and claims). Its callers trust its committed lane CA through
+their payments configuration's `ca_bundle_path`, never `SSL_CERT_FILE`. Each lane
+target runs the runner under `ACTIVE_PROFILES=docker,payments-lane,<lane>-lane`
+(`RUNNER_PROFILES` in `e2e-tests/Makefile`): `config-payments-lane.yml` holds the
+double's target, receipt identity, fee policy, CA bundle path, accounts and the
+buyer's credentials, and `config-<lane>-lane.yml` only what differs by lane — the
+seller's marketplace credential, and in the bare-metal lane its price and
+dispute window — Dynaconf merging the
+`payments` section key by key. Unset, the runner runs under `docker` alone and
+has no payments target. The runner's environment carries no payments value; the
+lane CA reaches it as one mount. Tests hold every value a lane profile restates
+to the fixture or identity file it comes from. Once the stack is up, each lane
+runs its payment storefront's `check-payments` from the storefront's own
+container, an authenticated read of the seller's balance at the double, and a
+failed check fails lane setup by name before any scenario.
+
+The lanes' registries recommend one pinned dispute authority nobody can answer —
+its origin under `.invalid`, its record key without a usable private half, its
+account without a token at the double — which sellers and buyers take from the
+registry rather than from a `[[Dispute]]` entry of their own. The VM payment
+scenario's case and refund stages need an authority that accepts a filed case,
+`MEDIATION.SERVICE_URL`, blank by default, and report a blocked skip naming it;
+its commit and servicing stages run against the double.
+
+**The payments helper.** Payment scenarios read their payments policy through
+`e2e-tests/tests/e2e/roles/helpers/payments.py`. A blank PAYMENTS.SERVICE_URL
+means no payments target is configured, and the scenario reports a blocked skip,
+never an Alkahest fallback. With SERVICE_URL set, SERVICE_IDENTITY,
+BUYER_ACCOUNT, BUYER_MARKETPLACE_CREDENTIAL and SELLER_MARKETPLACE_CREDENTIAL
+are required, and a missing one fails the scenario by name before the target's
+`/health` is checked (timeout 5 seconds, environment proxies disabled, trusting
+CA_BUNDLE_PATH alone when it is set). An unready target is a blocked skip when
+it is external and a failure naming its URL when the run marks it its own
+(LANE_OWNED, as every lane profile does); LANE_OWNED with no SERVICE_URL fails
+too. FEE_BPS defaults to 250; LIVEMODE, DEVELOPMENT_AUTH and LANE_OWNED default
+to false and are read as strict booleans, and LIVEMODE is emitted explicitly in
+buyer TOML. API_KEY_ENV is required without DEVELOPMENT_AUTH, and the two are
+mutually exclusive. The buyer's token is the setting BUYER_API_KEY, never a
+runner variable: the harness writes it into each `market` process's environment
+under the variable API_KEY_ENV names, as the buyer's own provider reads it. The
+helper serializes only the named payments table, its `ca_bundle_path` included,
+not domain configuration or payer selection.
 See [shared payment-scenario configuration](../../e2e-tests/README.md#shared-payment-scenario-configuration)
-for environment and runner setup.
+for an external run's setup.
 
 **Current example:** complete deals settled through the Arkhai payments service are qualified by that service's own suite. Here, `kit/arkhai-payments` generates its models from the service's published schema and checks the published vectors, all vendored and identified by content hash in `kit/arkhai-payments/schema/SOURCE.md`: the current producer vectors through the strict models, signatures and transaction identities, and the historical vectors as raw transaction identities, receipt framing, signatures and attachment hashes only, which the current models refuse, as "Payment Receipts in Tests" describes. Neither proves live service responses, provider funding or physical delivery.
 

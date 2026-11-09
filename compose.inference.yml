@@ -2,13 +2,12 @@
 # Anvil chain and the inference domain stack, with no VM or API-credits
 # services. See domains/inference/compose.yml.
 #
-# This file composes base topology only. The development signer, wallet, and
-# buyer-path bindings live in compose.inference-local.yml, layered with `-f`
+# This file composes base topology only, and its services refuse to start alone.
+# The development identities, configuration, secret overlay, registry profile
+# and buyer service live in compose.inference-local.yml, layered with `-f`
 # because an including file cannot redefine a service it imported:
 #
-#     make -s --no-print-directory e2e-inference-dev-env > .e2e-inference.env
-#     docker compose --env-file .e2e-inference.env \
-#       -f compose.inference.yml -f compose.inference-local.yml up -d
+#     docker compose -f compose.inference.yml -f compose.inference-local.yml up -d
 include:
   - compose.dev.yml
   - domains/inference/compose.yml

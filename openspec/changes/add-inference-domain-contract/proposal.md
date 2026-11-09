@@ -217,7 +217,7 @@ them.
   the `inference` capability's `spec.md`.
 - Why the family kit precedes the stack, and what the withdrawn copy measured
   — the `inference` capability's `architecture.md`, and
-  `docs/development/ROADMAP.md`'s Goal 8 current state.
+  `docs/development/ROADMAP.md`'s Goal 9 current state.
 
 ## Dependencies and Related Changes
 

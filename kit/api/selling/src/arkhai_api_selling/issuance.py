@@ -169,7 +169,7 @@ def settlement_evidence(
         "listing_id": agreement.listing_id,
     }
     evidence = SettlementEvidence(
-        agreement.negotiation_id, agreement.settlement.mechanism, reference, status,
+        agreement.negotiation_id, agreement.settlement.settlement_schema, reference, status,
         {"kind": contributions.settlement_evidence_kind, "schema_version": 1,
          "agreement_digest": hashlib.sha256(raw).hexdigest(),
          "source": dict(source), "delivery": accepted},

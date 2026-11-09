@@ -154,6 +154,9 @@ class BareMetalDealState(ComputeDealState):
     second_fulfillment_id: Optional[str] = None
     _second_deal_active: bool = False
     second_teardown: Optional[dict[str, Any]] = None
+    #: 12e saw the second deal's machine released once, so the deal after it
+    #: (13a) starts from a free machine.
+    _second_deal_released: bool = False
 
 
 @pytest.fixture(scope="module")
@@ -301,17 +304,27 @@ def storefront_loops_held(bare_metal_storefront_admin):
 
 
 @pytest.fixture(scope="module")
+def bare_metal_storefront_loops_held(bare_metal_storefront_admin):
+    """The bare-metal storefront's lifecycle loops, held for a module outside
+    this lane's directory that also holds another storefront's under the
+    lane's usual name."""
+    with compute_deal.storefront_loops_held(bare_metal_storefront_admin) as held:
+        yield held
+
+
+@pytest.fixture(scope="module")
 def fulfillment_convergence_held(provisioning_client):
-    """The site's fulfillment convergence, held for a module that advances it
-    itself."""
+    """The site's fulfillment convergence, held for the module; a module that
+    needs a transition advances it itself."""
     with compute_deal.fulfillment_convergence_held(provisioning_client) as held:
         yield held
 
 
 @pytest.fixture(scope="module")
 def lease_watchdog_held(provisioning_client):
-    """The site's lease watchdog, held for a module that steps lease expiry
-    itself; stages read the hold back through system status."""
+    """The site's lease watchdog, held for the module; a module that needs
+    lease expiry steps it itself, and stages read the hold back through system
+    status."""
     with compute_deal.lease_watchdog_held(provisioning_client) as held:
         yield held
 

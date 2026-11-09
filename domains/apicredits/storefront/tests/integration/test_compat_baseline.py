@@ -403,7 +403,7 @@ _SETTINGS_ATTR = re.compile(r"settings\.([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*
 _ENVIRON = re.compile(
     r'environ\)?(?:\.get)?\(\s*"([A-Z_][A-Z0-9_]*)"|environ\["([A-Z_][A-Z0-9_]*)"\]'
 )
-_SETTINGS_METHODS = {"get", "set", "unset", "toml"}
+_SETTINGS_METHODS = {"as_dict", "get", "set", "unset", "toml"}
 
 
 def capture_configuration() -> dict[str, Any]:

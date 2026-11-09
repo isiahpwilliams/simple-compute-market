@@ -17,6 +17,7 @@ from core_buyer.orchestration import make_publisher_trust_resolver
 from core_buyer.orchestrator import BuyConfig, BuyResult, NegotiationResult
 from core_buyer.run_log import RunLog
 from core_buyer.settlement import BuyerSettlementPolicy
+from market_deal_lifecycle.terms import TermContext
 from market_settlement_runtime import MechanismRegistration, SettlementConfig
 from rich.console import Console
 from rich.panel import Panel
@@ -119,6 +120,8 @@ class BuyerStage(Protocol):
     mechanism_id: str
     escrow_codec: EscrowCodec | None
     options: tuple[StageOption, ...]
+    #: The lifecycle terms this stage can honor, for a mechanism with a lifecycle adapter.
+    term_context: TermContext | None
 
     def registration(self) -> MechanismRegistration: ...
 

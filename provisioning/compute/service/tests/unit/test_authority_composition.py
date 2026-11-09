@@ -16,6 +16,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from market_identity import Ed25519Signer
+from compute_provisioning_service.identity import ProvisioningIdentityContext
 
 from compute_provisioning.release import (
     FulfillmentReleaseExecutor,
@@ -35,6 +37,13 @@ def _container() -> Container:
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     container.session_factory.override(sessionmaker(bind=engine))
+    # Public deterministic development principals; never use on a public network.
+    container.identity_context.override(ProvisioningIdentityContext(
+        signer=Ed25519Signer(bytes([1]) * 32),
+        storefront_principal=Ed25519Signer(bytes([2]) * 32).identity,
+        admin_principal=Ed25519Signer(bytes([3]) * 32).identity,
+        storefront_site_id="fixture-site",
+    ))
     return container
 
 
@@ -180,6 +189,25 @@ def test_release_is_composed_once_for_every_offering_mode():
     assert lifecycle_inputs["release_executor"] is container.release_executor
     assert lifecycle_inputs["release_status"] is container.release_status
     assert executor._teardown_port is container.fulfillment_teardown_port()
+
+
+def test_the_ledger_and_the_scheduler_read_the_host_authoritys_report():
+    """Admission, the site's offered read, and scheduling all judge a
+    declaration's host by one report of the hosts taking new delivery: the
+    host authority, with the same host requirement beside it. A ledger or
+    unit of work built without it would accept any named host."""
+    container = _container()
+    host_authority = container.host_authority()
+
+    ledger = container.capacity_ledger_service()
+    unit_of_work = container.scheduling_unit_of_work()
+    scheduler = container.physical_settlement_scheduler()
+
+    assert ledger._deliverable_hosts is host_authority
+    assert unit_of_work.deliverable_hosts is host_authority
+    assert scheduler._unit_of_work is unit_of_work
+    assert ledger._host_requirement is scheduler._host_requirement
+    assert ledger._host_requirement == container.host_requirement()
 
 
 def test_the_release_effect_registry_is_the_ledgers_and_composition_fills_it():

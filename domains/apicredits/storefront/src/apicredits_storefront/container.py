@@ -142,7 +142,7 @@ def get_sqlite_client(
     return _sqlite_client
 
 
-def _registry_client() -> MultiRegistryClient:
+def registry_client() -> MultiRegistryClient:
     signer = resolved_marketplace_signer
     if signer is None:
         raise RuntimeError("storefront marketplace signer is not initialized")
@@ -162,7 +162,7 @@ def _registry_publication() -> RegistryPublication:
         enabled=config.settings.enable_registry_discovery,
         registry_urls=tuple(config.settings.registry.urls),
         storefront_url=config.BASE_URL_OVERRIDE,
-        client_factory=_registry_client,
+        client_factory=registry_client,
     )
 
 

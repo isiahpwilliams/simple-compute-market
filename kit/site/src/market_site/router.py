@@ -221,7 +221,9 @@ def make_capacity_router(
                 lease_start_utc=body.lease_start_utc,
                 lease_duration_seconds=body.lease_duration_seconds,
             )
-        except UndeclaredOfferingModeError as exc:
+        except CapacityConflictError as exc:
+            # An undeclared offering mode, or a replay under a recorded
+            # placement key or escrow that does not match what it reserved.
             raise HTTPException(status_code=409, detail=str(exc))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -301,6 +303,33 @@ def make_capacity_router(
             capacity_reservation_id=capacity_reservation_id,
             lease_end_utc=body.lease_end_utc,
         ))
+
+    @router.post(
+        "/reservations/{capacity_reservation_id}/activate-lease",
+        response_model=ReservationResponse,
+        summary="Record that a lease began running",
+    )
+    def activate_lease(
+        capacity_reservation_id: str,
+        ledger: CapacityLedgerService = Depends(get_ledger),
+    ) -> ReservationResponse:
+        """Record a lease's activation once, by reservation identity alone.
+
+        Answers as commit does: the reservation as the site recorded it, 404
+        for an unknown reservation, and 409 when it is refused, so a caller can
+        tell a release that claimed the lease first from a reservation the site
+        does not hold.
+        """
+        try:
+            reservation = ledger.activate_lease(capacity_reservation_id)
+        except CapacityConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        if reservation is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"reservation {capacity_reservation_id!r} not found",
+            )
+        return ReservationResponse(reservation=reservation)
 
     # ------------------------------------------------------------------
     # Reservation reads (deal-side bookkeeping and operators)

@@ -40,10 +40,11 @@ _REFUSAL = "key_out_of_scope"
 
 def _event(event: str, **fields) -> dict:
     if fields.get("status") == "agreed":
-        params = {"accepted_escrow": dict(_PROPOSAL)}
+        price = {"asset": "token", "rates": []}
+        settlement = {"schema": "alkahest.v1", "accepted_escrow": dict(_PROPOSAL)}
         option = SettlementOption(
-            option_id=derive_settlement_option_id(mechanism="alkahest.v1", asset="token", rates=[], params=params),
-            mechanism="alkahest.v1", asset="token", rates=[], params=params,
+            option_id=derive_settlement_option_id(price=price, settlement=settlement),
+            price=price, settlement=settlement,
         )
         agreement = Agreement(
             negotiation_id=fields["negotiation_id"], listing_id="lst-1", listing_hash="0" * 64,
@@ -54,7 +55,8 @@ def _event(event: str, **fields) -> dict:
         fields["agreement"] = agreement.model_dump(mode="json")
         fields["agreement_bytes"] = base64.b64encode(agreement.model_dump_json().encode()).decode()
         fields["settlement_selection"] = {
-            "mechanism": option.mechanism, "option_id": option.option_id, "expiration_unix": 1_800_000_000,
+            "settlement": {"schema": option.settlement_schema}, "option_id": option.option_id,
+            "expiration_unix": 1_800_000_000,
         }
     return {
         "event": event,

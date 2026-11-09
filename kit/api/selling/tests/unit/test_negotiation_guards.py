@@ -86,8 +86,8 @@ def _rejection(decision) -> str | None:
 
 def _selection(**extra) -> dict:
     return {
-        "mechanism": "example.payments.v1",
         "option_id": _OPTION_ID,
+        "settlement": {"schema": "example.payments.v1"},
         "expiration_unix": 1_900_000_000,
         **extra,
     }
@@ -100,7 +100,11 @@ def _selection_context() -> NegotiationContext:
         listing={
             "listing_id": "L-example",
             "settlement_options": [
-                {"option_id": _OPTION_ID, "mechanism": "example.payments.v1", "asset": "USD/2"}
+                {
+                    "option_id": _OPTION_ID,
+                    "price": {"asset": "USD/2", "rates": []},
+                    "settlement": {"schema": "example.payments.v1"},
+                }
             ],
         },
     )
@@ -115,19 +119,22 @@ def _selecting(selection):
 def test_selection_with_payer_params_is_not_refused_as_malformed():
     guard = make_round_zero_guard(EXAMPLE, None)
     params = {"payer_account": "11111111-1111-4111-8111-111111111111"}
-    decision, _ = guard(_selecting(_selection(params=params)), _selection_context())
+    decision, _ = guard(
+        _selecting(_selection(settlement={"schema": "example.payments.v1", **params})),
+        _selection_context(),
+    )
     assert "selection has invalid fields" not in (_rejection(decision) or "")
 
 
 def test_selection_with_empty_params_is_not_refused_as_malformed():
     guard = make_round_zero_guard(EXAMPLE, None)
-    decision, _ = guard(_selecting(_selection(params=None)), _selection_context())
+    decision, _ = guard(_selecting(_selection()), _selection_context())
     assert "selection has invalid fields" not in (_rejection(decision) or "")
 
 
 def test_selection_with_unknown_fields_or_non_mapping_params_is_refused():
     guard = make_round_zero_guard(EXAMPLE, None)
-    for selection in (_selection(amount="5"), _selection(params=["payer"])):
+    for selection in (_selection(amount="5"), _selection(settlement=["payer"])):
         decision, _ = guard(_selecting(selection), _selection_context())
         assert _rejection(decision) == "invalid_settlement_selection:selection has invalid fields"
 

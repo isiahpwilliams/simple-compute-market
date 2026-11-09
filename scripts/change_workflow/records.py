@@ -4,9 +4,10 @@ commits they name.
 Records and transcripts share one numbering: each takes the number after every
 numbered file in `reviews/` and its transcripts, so a record written beside a run
 is never overwritten by it. A triage's outcome names the records it triaged by
-these names (`triaged_problems`). A validation record clears a commit for what follows
+these names (`outcome.triaged_problems`). A validation record clears a commit for what follows
 it when it names that commit, or an ancestor from which the commit changes only
-changes' records — or, at closeout's gate, only documentation.
+changes' records — or, at closeout's gate, only changes' records and the repository's
+inert paths (`exempting`).
 """
 
 from __future__ import annotations
@@ -14,12 +15,14 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, Sequence
 
-from change_workflow.common import CHANGES, KINDS
+from .common import CHANGES
 
 TRANSCRIPTS = "transcripts"
 NUMBERED = re.compile(r"^(\d+)-")
+# A numbered record: a review, a validation, the owner's notes; not its triage file.
+RECORD = re.compile(r"^(?P<number>\d+)-(?P<kind>[a-z-]+)\.md$")
 _VALIDATION_COMMIT = re.compile(r"^- \*\*Commit:\*\*\s*([0-9a-f]{7,40})\b", re.M)
 _VALIDATION_RESULT = re.compile(r"^- \*\*Result:\*\*\s*(\w+)", re.M)
 
@@ -33,21 +36,30 @@ ChangedSince = Callable[[Path, str, str], list[str] | None]
 RECORD_PATH = re.compile(
     rf"^{re.escape(str(CHANGES))}/(?:archive/)?(?!archive/)[^/]+/(interventions\.jsonl$|reviews/)")
 
-# The documents. A commit after a pre-closeout review, or a closeout correction, may
-# change them without a validation, since closeout's own checks (`make check-change`,
-# `make check-packaging`) read them again before the archive; a skill or the step
-# table changes behaviour, so `.agents/` and `.claude/` are outside. Before then only
-# changes' records are exempt: documentation the packaging checks read, such as
-# `docs/development/ARCHITECTURE.toml`, is checked by nothing but the next validation.
-DOCUMENTATION = ("openspec/", "docs/")
-
-
 def is_record(path: str) -> bool:
     return bool(RECORD_PATH.match(path))
 
 
-def is_documentation(path: str) -> bool:
-    return path.startswith(DOCUMENTATION)
+def inert(path: str, inert_paths: Sequence[str] | None) -> bool:
+    """Whether `path`, relative to the root, lies under one of the inert paths: an
+    entry names a directory or a file, matched whole, so `docs/` covers `docs/a.md`
+    and not `docsite/a.md`. With none declared, no path is inert."""
+    return any(path == entry.rstrip("/") or path.startswith(entry.rstrip("/") + "/")
+               for entry in inert_paths or ())
+
+
+def exempting(inert_paths: Sequence[str] | None) -> Callable[[str], bool]:
+    """Whether a path is a change's record or lies under the repository's inert
+    paths. A commit after a pre-closeout review, or a closeout correction, may change
+    only these without a validation, since closeout's own checks read them again
+    before the archive; before then only changes' records are exempt, since an inert
+    path the packaging checks read is checked by nothing but the next validation."""
+    return lambda path: is_record(path) or inert(path, inert_paths)
+
+
+def has_records(reviews: Path) -> bool:
+    """Whether `reviews` holds a numbered record."""
+    return reviews.is_dir() and any(RECORD.match(entry.name) for entry in reviews.iterdir())
 
 
 def next_number(reviews: Path) -> int:
@@ -91,54 +103,6 @@ def changed_since(root: Path, commit: str, head: str) -> list[str] | None:
     diff = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", commit, head],
                           cwd=root, capture_output=True, text=True)
     return [path for path in diff.stdout.split("\0") if path] if diff.returncode == 0 else None
-
-
-_RECORD_NAME = re.compile(r"^\d+-([a-z]+(?:-[a-z]+)*)$")
-
-
-def triaged_problems(triaged: Any, reviews: Path) -> list[str]:
-    """Why `triaged`, the records a triage's outcome names, does not name what it
-    triaged; empty when it does.
-
-    It is a non-empty list of distinct names, each a numbered record in `reviews` as
-    its file is named without `.md`, `NN-<kind>`, with its triage file beside it, and
-    at least one of them a review, `-external` included; the others may be the
-    validation, the owner's notes, or the orchestrating session's observations
-    triaged with it. Whether a record belongs to the triage the computation meant
-    cannot be checked here: the triage file beside it is that triage's mark.
-    """
-    if triaged is None:
-        return ["the triage names no records in triaged"]
-    if not isinstance(triaged, list) or not triaged:
-        return [f"triaged is not a non-empty list of records: {triaged!r}"]
-    problems = []
-    seen: set[str] = set()
-    kinds = []
-    for name in triaged:
-        if not isinstance(name, str) or not (match := _RECORD_NAME.match(name)):
-            problems.append(f"{name!r} is not a record's name, NN-<kind>")
-            continue
-        if name in seen:
-            problems.append(f"{name} is named twice")
-            continue
-        seen.add(name)
-        if not (reviews / f"{name}.md").is_file():
-            problems.append(f"{name} is no record in reviews/")
-        elif not (reviews / f"{name}.triage.md").is_file():
-            problems.append(f"{name} has no triage file beside it")
-        kinds.append(match.group(1))
-    if not problems and not any(kind.removesuffix("-external") in KINDS for kind in kinds):
-        problems.append(f"{', '.join(triaged)} names no review")
-    return problems
-
-
-def triage_outcome_problems(outcome: Any, reviews: Path) -> list[str]:
-    """Why a triage's outcome does not name what it triaged; empty when it does, or
-    when it ends without an exit — a question, a block, or a stop — and so names
-    nothing the next step is routed on."""
-    if not isinstance(outcome, dict) or outcome.get("outcome") not in ("finished", "returned"):
-        return []
-    return triaged_problems(outcome.get("triaged"), reviews)
 
 
 def latest_validation(reviews: Path) -> Path | None:

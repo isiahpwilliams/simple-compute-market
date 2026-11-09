@@ -326,6 +326,7 @@ class AlkahestBuyerStage:
     escrow_codec = AlkahestEscrowCodec()
     options: tuple[StageOption, ...] = ()
     registration = staticmethod(create_alkahest_registration)
+    term_context = None
 
     def __init__(
         self,
@@ -373,8 +374,8 @@ class AlkahestBuyerStage:
             )
         candidates = [
             option for _registration, option in settlement_policy.compatible_options(
-                listing.get("settlement_options") or (),
-            ) if option.mechanism == selected.selection.mechanism
+                listing.get("settlement_options") or (), listing=listing,
+            ) if option.settlement_schema == selected.selection.settlement_schema
         ]
         constrained = dict(listing)
         constrained["accepted_escrows"] = [self.accepted_entry(
@@ -392,13 +393,16 @@ class AlkahestBuyerStage:
                 f"Listing {listing.get('listing_id')!r} has no accepted_escrows entry "
                 f"on chain {chain.name!r}."
             )
-        option = next(option for option in candidates if option.params["accepted_escrow"] == entry)
+        option = next(
+            option for option in candidates
+            if option.settlement_params["accepted_escrow"] == entry
+        )
         return replace(selected, option=option, selection=selected.selection.model_copy(
             update={"option_id": option.option_id},
         ))
 
     def accepted_entry(self, selected: Any) -> dict[str, Any]:
-        entry = selected.option.params.get("accepted_escrow")
+        entry = selected.option.settlement_params.get("accepted_escrow")
         if not isinstance(entry, Mapping):
             raise ValueError("selected Alkahest option has no accepted escrow payload")
         return dict(entry)

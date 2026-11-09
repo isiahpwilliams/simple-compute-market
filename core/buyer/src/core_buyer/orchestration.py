@@ -18,6 +18,8 @@ count, the provisioning payload) into the top-level `negotiate` /
 
 from __future__ import annotations
 
+from market_identity import EnvelopeCapture
+
 import asyncio
 import time
 import uuid
@@ -282,6 +284,7 @@ def _signed_json(
     request_id: str | None = None,
     timestamp: int | None = None,
     resolve_response_principals: Callable[[], TrustedIdentitySet],
+    capture: EnvelopeCapture | None = None,
 ) -> dict[str, Any]:
     return _authenticated_json(
         url,
@@ -295,6 +298,7 @@ def _signed_json(
         request_id=request_id,
         timestamp=timestamp,
         expected_response_principals=resolve_response_principals(),
+        capture=capture,
     )
 
 
@@ -309,8 +313,15 @@ def signed_storefront_json(
     resource: str,
     timeout: float,
     resolve_response_principals: Callable[[], TrustedIdentitySet],
+    capture: EnvelopeCapture | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
-    """Call one signed storefront route and verify its signed JSON response."""
+    """Call one signed storefront route and verify its signed JSON response.
+
+    Each call mints a fresh request identity unless ``request_id`` names one;
+    repeating an identity sends the exact retry the storefront's replay
+    protection recognises.
+    """
 
     return _signed_json(
         url,
@@ -321,7 +332,9 @@ def signed_storefront_json(
         operation=operation,
         resource=resource,
         timeout=timeout,
+        request_id=request_id,
         resolve_response_principals=resolve_response_principals,
+        capture=capture,
     )
 
 
@@ -337,7 +350,7 @@ def wait_for_settlement(
     sleep: Callable[[float], None] = time.sleep,
     resolve_seller_principals: Callable[[], TrustedIdentitySet],
 ) -> dict[str, Any]:
-    """Poll an EVM settlement until it reaches a terminal public status."""
+    """Poll settlement, observing public status and returning private delivery."""
 
     deadline = time.monotonic() + total_timeout
     attempts = 0
@@ -351,7 +364,9 @@ def wait_for_settlement(
             resolve_seller_principals=resolve_seller_principals,
         )
         if on_poll:
-            on_poll(attempts, status_body)
+            # Authenticated delivery may contain credentials or future private
+            # fields; progress observers persist public status only.
+            on_poll(attempts, {"status": status_body.get("status")})
         if status_body.get("status") in ("ready", "failed"):
             return status_body
         if time.monotonic() >= deadline:
@@ -405,6 +420,7 @@ def make_negotiate_hook(
     validate_acceptance: Callable[[NegotiationOutcome], None] | None = None,
     advertised_plan_validator: AdvertisedPlanValidatorFn | None = None,
     accepted_listing_record: AcceptedListingRecordFn | None = None,
+    capture: EnvelopeCapture | None = None,
 ) -> NegotiateFn:
     """Build the schema-instantiated negotiate hook.
 
@@ -439,6 +455,7 @@ def make_negotiate_hook(
             validate_acceptance=validate_acceptance,
             advertised_plan_validator=advertised_plan_validator,
             accepted_listing_record=accepted_listing_record,
+            capture=capture,
             on_event=on_event,
         )
 
@@ -464,6 +481,7 @@ def _negotiate_matches(
     on_event: Callable[[str, dict], None],
     advertised_plan_validator: AdvertisedPlanValidatorFn | None = None,
     accepted_listing_record: AcceptedListingRecordFn | None = None,
+    capture: EnvelopeCapture | None = None,
 ) -> NegotiationResult:
     attempts: list[dict[str, Any]] = []
 
@@ -671,6 +689,7 @@ def _negotiate_matches(
                     else None
                 ),
                 resolve_seller_principals=resolve_seller_principals,
+                capture=capture,
             )
         except RuntimeError as exc:
             _emit_neg("negotiation_failed", error=f"http_error: {exc}")
@@ -809,7 +828,7 @@ def make_settle_hook(
             raise ValueError("accepted work has no Agreement settlement option")
         if agreement.negotiation_id != outcome.negotiation_id:
             raise ValueError("accepted Agreement changed negotiation identity")
-        mechanism = agreement.settlement.mechanism
+        mechanism = agreement.settlement.settlement_schema
         try:
             stage = stages[mechanism]
         except KeyError as exc:

@@ -28,7 +28,7 @@ identities = [
 
 [wallet]
 address     = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-private_key = "" # INFERENCE_STOREFRONT_WALLET__PRIVATE_KEY secret environment input
+private_key = "" # stated in the secret overlay, storefront.secrets.toml
 
 # Alkahest is the only mechanism this storefront composes; naming another
 # here refuses startup.

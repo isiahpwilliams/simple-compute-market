@@ -25,12 +25,10 @@ def _option(value=1, per="credit", field="amount"):
     rates = [RateValue(field=field, per=per, value=value)]
     return {
         "option_id": derive_settlement_option_id(
-            mechanism="alkahest.v1", asset=_ASSET, rates=rates, params={}
+            price={"asset": _ASSET, "rates": rates}, settlement={"schema": "alkahest.v1"}
         ),
-        "mechanism": "alkahest.v1",
-        "asset": _ASSET,
-        "rates": [rate.model_dump(mode="json") for rate in rates],
-        "params": {},
+        "price": {"asset": _ASSET, "rates": [rate.model_dump(mode="json") for rate in rates]},
+        "settlement": {"schema": "alkahest.v1"},
     }
 
 
@@ -46,7 +44,7 @@ def _order(*options, **extra):
 
 def _selection(option):
     return SettlementSelection(
-        mechanism=option["mechanism"], option_id=option["option_id"], expiration_unix=2_000_000_000
+        settlement=option["settlement"], option_id=option["option_id"], expiration_unix=2_000_000_000
     )
 
 
@@ -89,7 +87,7 @@ def test_selected_option_not_per_credit_is_rejected(per):
 def test_selection_must_match_exactly_one_option():
     option = _option()
     other = _option(value=1, per="credit")
-    other["mechanism"] = "arkhai.payments.v1"
+    other["settlement"] = {"schema": "arkhai.payments.v1"}
     with pytest.raises(ValueError, match="exact-match"):
         selected_unit_price(_order(option), _selection(other))
 
@@ -189,11 +187,11 @@ def test_selected_option_with_two_amount_rates_is_refused():
     unit = RateValue(field="amount", per="credit", value=1)
     rates = [unit, unit]
     option = {
-        "option_id": derive_settlement_option_id(mechanism="alkahest.v1", asset=_ASSET, rates=rates, params={}),
-        "mechanism": "alkahest.v1",
-        "asset": _ASSET,
-        "rates": [rate.model_dump(mode="json") for rate in rates],
-        "params": {},
+        "option_id": derive_settlement_option_id(
+            price={"asset": _ASSET, "rates": rates}, settlement={"schema": "alkahest.v1"}
+        ),
+        "price": {"asset": _ASSET, "rates": [rate.model_dump(mode="json") for rate in rates]},
+        "settlement": {"schema": "alkahest.v1"},
     }
     with pytest.raises(ValueError, match="exactly one amount rate"):
         selected_unit_price(_order(option), _selection(option))

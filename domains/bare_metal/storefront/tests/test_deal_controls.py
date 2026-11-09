@@ -6,12 +6,15 @@ them as an administrator, or as the site, would, over the production app.
 
 from __future__ import annotations
 
+import itertools
 import json
 import sqlite3
 from dataclasses import replace
 
 import httpx
 import pytest
+from arkhai_bare_metal_storefront.deal_controls import settlement_admin_routes
+from market_arkhai_payments.fixtures import build_signed_receipt
 from market_identity import Eip191Signer, TrustedIdentitySet
 from storefront_client import StorefrontClient
 from storefront_client.client import StorefrontClientError
@@ -26,6 +29,7 @@ from test_http_settlement import (
     _app,
     _buyer,
     _CapacityClient,
+    _payment_deal,
     _ProvisioningClient,
 )
 
@@ -35,12 +39,12 @@ from site_trust import seeded_sites
 from source_sites import SourceSite, source_projections
 
 
-def _client(app, signer, role: str) -> StorefrontClient:
+def _client(app, signer, role: str, *, seller=SELLER_SIGNER.identity) -> StorefrontClient:
     return StorefrontClient(
         "http://seller",
         signer=signer,
         caller_role=role,
-        expected_publishers=TrustedIdentitySet(identities=(SELLER_SIGNER.identity,)),
+        expected_publishers=TrustedIdentitySet(identities=(seller,)),
         transport=httpx.ASGITransport(app=app),
     )
 
@@ -243,6 +247,101 @@ async def test_wait_returns_once_the_settled_lease_is_active(tmp_path) -> None:
     assert len(capacity.reserve_calls) == len(provisioning.begin_calls) == 1
 
 
+async def test_wait_answers_a_deal_ended_before_delivery_at_once(tmp_path) -> None:
+    """A settlement placement that finds no capacity ends the deal before
+    anything is dispatched. The wait answers that end at once, rather than
+    polling to its timeout for a fulfillment that will never exist."""
+
+    class NoCapacity(_CapacityClient):
+        async def reserve(self, **request):
+            self.reserve_calls.append(request)
+            return None
+
+    provisioning = _ProvisioningClient()
+    runtime, negotiation_id, _capacity = await _runtime(tmp_path, provisioning=provisioning)
+    capacity = NoCapacity()
+    runtime = replace(runtime, capacity_client=capacity)
+    app = _app(runtime)
+    async with app.router.lifespan_context(app):
+        async with _client(app, ADMIN_SIGNER, "admin") as admin:
+            await admin.admin_pause_lifecycle_loops()
+            async with _buyer(app) as buyer:
+                await buyer.settle_evm(
+                    ESCROW_UID, negotiation_id=negotiation_id, buyer_evm_address=BUYER
+                )
+            # A deadline shorter than one poll: the wait reads the status once,
+            # so only an answer already terminal is ready.
+            ended = await admin.wait_for_settlement(ESCROW_UID, timeout=0.1)
+
+    assert ended.ready is True and ended.status == "ended"
+    assert len(capacity.reserve_calls) == 1
+    assert provisioning.begin_calls == []
+
+
+async def test_wait_resolves_a_payments_deal_by_its_negotiation_and_its_transaction(
+    tmp_path,
+) -> None:
+    """An ``arkhai.payments.v1`` deal writes no escrow row; its settlement record
+    is what the wait resolves, by the negotiation or by the transaction the
+    record establishes, and it reports ready once the fulfillment is active.
+    The deal adopts no servicing obligation, so delivery wakes none and a
+    servicing cycle finds nothing to do.
+
+    The waits that must not end run through the storefront's own route service
+    on a clock that passes a second a read, so each reaches its deadline
+    without spending it; the waits that end go through the canonical client."""
+
+    class Provisioning(_ProvisioningClient):
+        state = "dispatching"
+
+        async def get_fulfillment_status(self, fulfillment_id, **request):
+            status = await super().get_fulfillment_status(fulfillment_id, **request)
+            status.state = self.state
+            return status
+
+    provisioning = Provisioning()
+    deal = await _payment_deal(tmp_path, provisioning=provisioning)
+    bindings, trust = seeded_sites(deal.db.db_path, {"site-a": SITE_SIGNER.identity})
+    runtime = replace(deal.runtime, site_bindings=bindings, service_peer_trust=trust)
+    negotiation_id, transaction_id = deal.negotiation_id, deal.data.transaction_id
+    ticks = itertools.count()
+    unready_wait = settlement_admin_routes(
+        runtime, poll_seconds=0.0, clock=lambda: float(next(ticks))
+    ).wait
+    app = _app(runtime)
+    async with app.router.lifespan_context(app):
+        async with (
+            _client(app, ADMIN_SIGNER, "admin", seller=deal.seller.identity) as admin,
+            _client(app, deal.buyer, "buyer", seller=deal.seller.identity) as buyer,
+        ):
+            await admin.admin_pause_lifecycle_loops()
+            unpaid = await unready_wait(negotiation_id, timeout=1)
+            deal.payments.serve(
+                build_signed_receipt(signer=deal.receipt_signer, mandate=deal.data.mandate)
+            )
+            await buyer.settle_agreement(negotiation_id)
+            pending = [
+                await unready_wait(reference, timeout=1)
+                for reference in (negotiation_id, transaction_id)
+            ]
+            provisioning.state = "active"
+            ready = [
+                await admin.wait_for_settlement(reference, timeout=1.0)
+                for reference in (negotiation_id, transaction_id)
+            ]
+            serviced = await admin.admin_run_lifecycle_cycle("settlement-servicing")
+
+    assert (unpaid["ready"], unpaid["status"]) == (False, "accepted")
+    for waited in pending:
+        assert (waited["ready"], waited["status"]) == (False, "settlement_verified")
+    for waited in ready:
+        assert (waited.ready, waited.status) == (True, "ready")
+    assert (await runtime.settlement_runtime.get_status(negotiation_id)).obligations == []
+    assert serviced["processed"] == 0
+    assert await runtime.db.load_escrow(escrow_uid=transaction_id) is None
+    assert len(deal.capacity.reserve_calls) == len(provisioning.begin_calls) == 1
+
+
 async def test_wait_answers_a_delivery_conflict_as_the_fulfillment_reads_do(
     tmp_path,
 ) -> None:
@@ -291,6 +390,39 @@ async def test_admin_reserve_takes_the_listings_machine(tmp_path) -> None:
     assert call["claim"]["resource_id"] == "resource-1"
     assert call["deal_ref"] == {"listing_id": "listing-1", "reserved_by": "admin"}
     assert refused.value.status_code == 409
+
+
+async def test_admin_reserve_matches_the_claim_the_site_receives(tmp_path) -> None:
+    """A required attribute is matched against the claim as the site receives
+    it: the listing's machine pinned by ``resource_id`` and its quantities
+    under ``dimensions``, compared exactly, so a boolean never stands for the
+    claim's integer unit (requirement "A bare-metal listing sells one whole
+    unit")."""
+    runtime, _negotiation_id, capacity = await _runtime(tmp_path)
+    app = _app(runtime)
+    refused = []
+    async with app.router.lifespan_context(app):
+        async with _client(app, ADMIN_SIGNER, "admin") as admin:
+            reserved = await admin.admin_reserve_capacity(
+                required_attributes={"resource_id": "resource-1", "dimensions": {"units": 1}},
+                listing_id="listing-1",
+            )
+            for required in (
+                {"resource_id": "resource-2"},
+                {"dimensions": {"units": 2}},
+                {"dimensions": {"units": True}},
+            ):
+                with pytest.raises(StorefrontClientError) as refusal:
+                    await admin.admin_reserve_capacity(
+                        required_attributes=required, listing_id="listing-1"
+                    )
+                refused.append(refusal.value)
+
+    assert reserved.capacity_reservation_id == "reservation-a"
+    [call] = capacity.reserve_calls
+    assert call["claim"]["resource_id"] == "resource-1"
+    assert call["claim"]["dimensions"] == {"units": 1}
+    assert [refusal.status_code for refusal in refused] == [409, 409, 409]
 
 
 async def test_admin_reserve_refuses_a_listing_no_authority_stands_behind(tmp_path) -> None:
@@ -437,4 +569,3 @@ async def test_a_reserve_and_a_release_refresh_no_held_projection(tmp_path) -> N
     assert released["state"] == "released"
     assert site.calls == loaded
     assert after == confirmed
-

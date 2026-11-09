@@ -41,8 +41,8 @@ from market_alkahest import (
     AlkahestChainProbe,
     AlkahestConditionalEscrowClient,
     AlkahestFulfillmentPublisher,
-    configured_release_model,
     create_alkahest_registration,
+    require_deliverable_release_models,
 )
 from market_alkahest.escrow_verification import verify_escrow_against_plan
 from market_core import SettlementEvidence
@@ -197,13 +197,10 @@ class AlkahestSellerStage:
         return None
 
     def validate_configuration(self, settlement_config: Any) -> None:
-        """Refuse a configured section selecting contradictory release models.
-
-        That is incoherent configuration rather than an unusable mechanism, so it
-        stops startup, enabled or not; a coherent model this stage cannot deliver
-        makes Alkahest unready instead.
-        """
-        configured_release_model(settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY))
+        """Refuse an Alkahest section, enabled or not, offering a model this stage cannot deliver."""
+        require_deliverable_release_models(
+            settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY), self.release_models,
+        )
 
     def release_conditions(
         self,
@@ -515,7 +512,7 @@ class AlkahestSellerStage:
             thread = await db.load_negotiation_thread_row(negotiation_id=params.negotiation_id)
             agreement, raw = accepted_agreement(thread)
             evidence.validate_identity(
-                negotiation_id=prepared.agreement_ref, mechanism=agreement.settlement.mechanism,
+                negotiation_id=prepared.agreement_ref, mechanism=agreement.settlement.settlement_schema,
                 settlement_ref=prepared.mechanism_ref,
             )
             if evidence.evidence["agreement_digest"] != hashlib.sha256(raw).hexdigest():

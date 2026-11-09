@@ -271,7 +271,7 @@ def register(
                 raise typer.BadParameter("run has no recorded settlement selection")
             mechanism = SettlementSelection.model_validate(
                 resume_point.settlement_selection,
-            ).mechanism
+            ).settlement_schema
             if mechanism not in settlement.stages:
                 raise typer.BadParameter(
                     f"unsupported recorded {contributions.noun} settlement mechanism"
@@ -376,16 +376,21 @@ def register(
         picked_entry = None
         if listing_dict is not None:
             try:
-                settlement_policy = settlement.resolve_policy(identity=identity)
+                settlement_policy = settlement.resolve_policy(
+                    identity=identity, registry_urls=registry_urls,
+                )
                 selected_settlement = settlement_policy.select(
-                    listing_dict, expiration_unix=int(time.time()) + 3600,
+                    listing_dict,
+                    expiration_unix=int(time.time()) + 3600,
                 )
                 if selected_settlement is None:
                     raise ValueError(
                         f"listing {listing_id!r} has no installed, enabled, compatible "
                         "settlement option"
                     )
-                selected_stage = settlement.stages[selected_settlement.selection.mechanism]
+                selected_stage = settlement.stages[
+                    selected_settlement.selection.settlement_schema
+                ]
                 selected_settlement = selected_stage.prepare_selection(
                     selected_settlement, listing=listing_dict,
                     settlement_policy=settlement_policy, policy=_policy,

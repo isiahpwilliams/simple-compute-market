@@ -75,15 +75,16 @@ def accepted_escrow_artifacts(
     if isinstance(accepted, Mapping):
         params = {"accepted_escrow": dict(accepted)}
         asset = str((accepted.get("fields") or {}).get("token") or "")
+        price = {"asset": asset, "rates": []}
+        settlement = {"schema": ALKAHEST_MECHANISM_ID, **params}
         option = SettlementOption(
-            option_id=derive_settlement_option_id(
-                mechanism=ALKAHEST_MECHANISM_ID, asset=asset, rates=[], params=params
-            ),
-            mechanism=ALKAHEST_MECHANISM_ID, asset=asset, rates=[], params=params,
+            option_id=derive_settlement_option_id(price=price, settlement=settlement),
+            price=price, settlement=settlement,
         )
         artifacts["_agreement_settlement_option"] = option.model_dump(mode="json")
         artifacts["settlement_selection"] = SettlementSelection(
-            mechanism=option.mechanism, option_id=option.option_id,
+            option_id=option.option_id,
+            settlement={"schema": option.settlement_schema},
             expiration_unix=accepted.get("expiration_unix"),
         ).model_dump(mode="json", exclude_none=True)
     return artifacts

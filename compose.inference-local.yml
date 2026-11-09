@@ -1,45 +1,55 @@
-# Development overlay for the inference market: the signer, wallet, and
-# buyer-path bindings of the inference services.
+# Development overlay for the inference market: its services' identities,
+# configuration file, secret overlay and registry profile, and the inference
+# buyer service.
 #
 # Layered over compose.inference.yml, which includes compose.dev.yml for the
 # dev chain. The inference end-to-end lane adds compose.inference-lane.yml, the
 # compute and API-credit registries its schema-filter scenario reads:
 #
-#     docker compose -p simple-market-inference --env-file <file> \
+#     docker compose -p simple-market-inference \
 #       -f compose.inference.yml -f compose.inference-local.yml \
 #       -f compose.inference-lane.yml up -d
 #
-# The full local stack layers this file over docker-compose.yml with the VM and
-# API-credit overlays instead; see that file. Every value it binds is a
-# well-known development value that must never be used on a public network;
-# see dev-env/identities/README.md.
+# `make -C e2e-tests test-e2e-inference` does exactly this. The full local stack
+# layers this file over docker-compose.yml with the VM and API-credit overlays
+# instead; see that file.
+#
+# Every path is relative to the repository root, the project directory of every
+# `-f` file, and every value it binds is committed: a well-known development
+# value that must never be used on a public network; see
+# dev-env/identities/README.md.
 
 services:
   inference-registry:
     environment:
-      - REGISTRY_AUTHORITY_ID=inference-registry
-      - REGISTRY_AUTHORITY_SCHEME=ed25519
-      - REGISTRY_AUTHORITY_IDENTIFIER=QpkX0mKYYK2PMdhAweeYEpDGzdX_htGTGmZq-L0e9r8
-      - REGISTRY_AUTHORITY_CREDENTIAL_FILE=/run/secrets/arkhai/registry-identity/credential
-      - REGISTRY_DESCRIPTOR_BASE_URL=http://localhost:8100
-      - REGISTRY_DESCRIPTOR_DISPLAY_NAME=Local Inference Registry
-      - REGISTRY_DESCRIPTOR_OPERATOR_IDENTITY=Arkhai local development
+      - CONFIG_DIRECTORY=/etc/arkhai/registry
+      - ACTIVE_PROFILES=inference-registry
     volumes:
-      - ${INFERENCE_REGISTRY_IDENTITY_CREDENTIAL_FILE:?set inference registry signer credential file}:/run/secrets/arkhai/registry-identity/credential:ro
+      - ./dev-env/registry:/etc/arkhai/registry:ro
+      - ./dev-env/identities/inference-registry.ed25519:/run/secrets/arkhai/registry-identity/credential:ro
+  inference-service:
+    volumes:
+      - ./dev-env/identities/inference-service.ed25519:/run/secrets/arkhai/inference-service/credential:ro
+  inference-gateway:
+    volumes:
+      - ./dev-env/identities/inference-gateway.ed25519:/run/secrets/arkhai/gateway-identity:ro
   inference-storefront:
     env_file:
-      - ${INFERENCE_IDENTITY_ENV_FILE:?set inference signer credential environment file}
-      - ${INFERENCE_EVM_WALLET_ENV_FILE:?set inference EVM wallet environment file}
-    environment:
-      # The storefront reads its EVM key under its own Dynaconf prefix, not the
-      # wallet file's AGENT_PRIV_KEY. Anvil account 0, matching `[wallet].address`
-      # in storefront.inference.toml; `@str` keeps the hex from parsing as an
-      # integer.
-      - INFERENCE_STOREFRONT_WALLET__PRIVATE_KEY=@str 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - ./dev-env/identities/inference.identity.env
+    volumes:
+      - ./domains/inference/storefront/storefront.inference.toml:/etc/arkhai/storefront.toml:ro
+      # The wallet key.
+      - ./dev-env/identities/inference.storefront.secrets.toml:/etc/arkhai/storefront.secrets.toml:ro
+      # The dev chain's deployed Alkahest contract addresses, shipped with the
+      # Alkahest kit. A non-Anvil deployment supplies its own address book here.
+      - ./kit/alkahest/src/market_alkahest/data/alkahest_anvil_addresses.json:/app/alkahest_anvil_addresses.json:ro
+  # A one-shot buyer, run by hand, as compose.vms-local.yml's buyer-cli is: its
+  # Git-ignored profile and run-state directories must exist, writable by uid
+  # and gid 1000, before it runs.
   inference-buyer-cli:
-    image: ${INFERENCE_BUYER_IMAGE:-arkhai:e2e-tests}
+    image: arkhai:e2e-tests
     profiles: [buyer]
-    user: "${INFERENCE_BUYER_UID:-1000}:${INFERENCE_BUYER_GID:-1000}"
+    user: "1000:1000"
     entrypoint: ["market"]
     command: ["profile", "show"]
     environment:
@@ -47,7 +57,7 @@ services:
       XDG_DATA_HOME: /var/lib/arkhai-buyer
       XDG_STATE_HOME: /var/lib/arkhai-buyer-state
     volumes:
-      - ${INFERENCE_BUYER_CONFIG_PATH:?set buyer public config path}:/etc/arkhai/config.toml:ro
-      - ${INFERENCE_BUYER_PROFILE_DIR:?set persistent buyer profile directory}:/var/lib/arkhai-buyer/arkhai/buyer:rw
-      - ${INFERENCE_BUYER_STATE_DIR:?set persistent buyer run-state directory}:/var/lib/arkhai-buyer-state/arkhai:rw
-      - ${INFERENCE_BUYER_CREDENTIAL_FILE:?set strict buyer credential file}:/run/secrets/arkhai/buyer-credential:ro
+      - ./dev-env/identities/inference-buyer.config.toml:/etc/arkhai/config.toml:ro
+      - ./.e2e-buyer/inference/profile:/var/lib/arkhai-buyer/arkhai/buyer:rw
+      - ./.e2e-buyer/inference/state:/var/lib/arkhai-buyer-state/arkhai:rw
+      - ./dev-env/identities/buyer.eip191:/run/secrets/arkhai/buyer-credential:ro

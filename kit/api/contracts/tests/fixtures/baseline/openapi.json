@@ -778,7 +778,7 @@
           },
           "deal_ref": {
             "additionalProperties": true,
-            "description": "Opaque storefront bookkeeping keys (listing_id, escrow_uid, owner callback), recorded on the reservation so deal-scoped events route back to the owning storefront.",
+            "description": "Opaque storefront bookkeeping keys (listing_id, escrow_uid, owner callback), recorded on the reservation so deal-scoped events route back to the owning storefront. A placement_key, '<negotiation_id>:<placement>', makes the reserve replayable: a repeat under the same key returns the reservation it recorded, in its current state, and one asking for a different claim or lease window is refused.",
             "title": "Deal Ref",
             "type": "object"
           },
@@ -1388,6 +1388,49 @@
           }
         },
         "summary": "Get a ledger reservation",
+        "tags": [
+          "capacity"
+        ]
+      }
+    },
+    "/api/v1/capacity/reservations/{capacity_reservation_id}/activate-lease": {
+      "post": {
+        "description": "Record a lease's activation once, by reservation identity alone.\n\nAnswers as commit does: the reservation as the site recorded it, 404\nfor an unknown reservation, and 409 when it is refused, so a caller can\ntell a release that claimed the lease first from a reservation the site\ndoes not hold.",
+        "operationId": "activate_lease_api_v1_capacity_reservations__capacity_reservation_id__activate_lease_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capacity_reservation_id",
+            "required": true,
+            "schema": {
+              "title": "Capacity Reservation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record that a lease began running",
         "tags": [
           "capacity"
         ]

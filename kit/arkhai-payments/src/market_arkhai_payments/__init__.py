@@ -1,5 +1,11 @@
 """Stateless client for the external Arkhai payments authority."""
 
+from .access_check import (
+    PaymentsAccessOutcome,
+    check_configured_payments_access,
+    check_payments_access,
+)
+from .adapter import PaymentAdapter, SnapshotVerifier, pinned_snapshot_verifier
 from .reconciliation import (
     ReconciliationPass,
     reconcile_accepted_payments,
@@ -31,6 +37,7 @@ from market_arkhai_payments.mandates import (
     PaymentsOptionParams,
     check,
     derive_mandate,
+    derive_part_terms,
     duration_seconds,
     format_duration,
 )
@@ -47,6 +54,9 @@ from market_arkhai_payments.models import (
 from market_arkhai_payments.receipts import (
     agreement_hash,
     receipt_message,
+    snapshot_message,
+    ReceiptIdentity,
+    verify_snapshot,
     transaction_id,
     verify_receipt,
 )
@@ -75,6 +85,7 @@ from market_arkhai_payments.settlement_config import (
     ArkhaiPaymentsPublicationInput,
     create_arkhai_payments_registration,
     payments_client_for_owner,
+    resolve_payments_api_key,
 )
 
 __all__ = [
@@ -93,11 +104,13 @@ __all__ = [
     "MandatePolicyError",
     "NotPaid",
     "NothingToReverse",
+    "PaymentAdapter",
     "PaymentApproval",
     "PaymentApprovalDeclined",
     "PaymentSellerStage",
     "PaymentSettlementData",
     "PaymentsAPIError",
+    "PaymentsAccessOutcome",
     "PaymentsBlocked",
     "PaymentsClient",
     "PaymentsError",
@@ -118,6 +131,7 @@ __all__ = [
     "RefundOutcome",
     "RefundUnavailable",
     "Refunded",
+    "SnapshotVerifier",
     "SignedReceipt",
     "SignedTransactionSnapshot",
     "StoredDealAttachment",
@@ -126,14 +140,22 @@ __all__ = [
     "agreement_hash",
     "agreement_payer_account",
     "check",
+    "check_configured_payments_access",
+    "check_payments_access",
     "create_arkhai_payments_registration",
     "derive_mandate",
+    "derive_part_terms",
     "duration_seconds",
     "format_duration",
     "mandate_policy_for_agreement",
     "payments_client_for_owner",
+    "pinned_snapshot_verifier",
     "receipt_message",
+    "snapshot_message",
+    "ReceiptIdentity",
+    "verify_snapshot",
     "reconcile_accepted_payments",
+    "resolve_payments_api_key",
     "run_payment_reconciliation",
     "selected_payment_option",
     "servicing_stage",

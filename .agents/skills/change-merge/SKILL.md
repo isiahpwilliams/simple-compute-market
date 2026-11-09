@@ -16,9 +16,10 @@ the change with it, and hand the merged `HEAD` to the validation before closeout
 which then tests the change as it will land.
 
 **The branch you merge** — the *base* below — is the one your invocation names
-after the change: `<change> from <branch>`. `make merge` names the branch the owner
-gives it, or its default. Invoked with no branch, ask the owner which branch the
-change will land on; never assume one.
+after the change: `<change> from <branch>`. The engine names the branch the owner
+gives it (`make merge FROM=<branch>`), or else the branch the change's clone
+recorded as the one it lands on, and refuses to start with neither. Invoked with
+no branch, ask the owner which branch the change will land on; never assume one.
 
 You also decide what the merge needs next, and the owner confirms what costs more
 than the default:
@@ -39,7 +40,7 @@ fails: you hold what each side changed, so you repair what it found
 
 Run interactively, this section does not apply but for the outcome it describes,
 which an interactive run records itself ("Running interactively"). When this skill
-runs through `scripts/run_change_step.py` — `make merge UNATTENDED=1`, or the
+runs through `scripts/change-workflow start --unattended` — `make merge UNATTENDED=1`, or the
 orchestrating session — nobody can answer in the session, and every turn ends with
 an outcome matching `.agents/change-outcome.schema.json`, whose `message` the owner
 reads as written:
@@ -71,8 +72,11 @@ reads as written:
   `git checkout`, and a merge stopped at a conflict you ask about stays in progress
   for the owner's answer.
 - **A turn's end is its outcome.** Never end a turn with work still running. Wait
-  for a background command inside one Bash call, with a blocking `tail -f … | grep
-  -m1` on its output matching the line it prints when it ends.
+  for a background command inside one Bash call, with `scripts/change-workflow wait
+  <output-file> '<pattern>'` matching the line it prints when it ends, repeated when
+  the wait gives up; when it says the command ended with no line matching, read the
+  output rather than waiting again — never with `tail -f`, which hangs when that line
+  is the last.
 - **The end is an outcome.** Once the merge is concluded and pushed and its exit
   chosen (step 7), end with `finished`, `next` that exit — `{"step": "closeout"}`
   or `{"step": "review", "kind": "pre-closeout"}` — and `message` the report (step
@@ -87,7 +91,7 @@ command — no wrapper records the run, so its last act records the outcome it w
 end with unattended:
 
 ```text
-python3 scripts/run_change_step.py record <change> merge --outcome '<the outcome, as JSON>'
+scripts/change-workflow record <change> merge --outcome '<the outcome, as JSON>'
 ```
 
 Record `finished` or `returned`, never a question or a stop, which the owner,
@@ -99,33 +103,35 @@ present, settles in the session. When the owner waived the validation of the mer
 - **Branch.** The checked-out branch is the one this change is worked on. If it
   does not carry the change's latest commits, or its name belongs to another
   change, stop and ask the owner — unless the change's log holds the owner's
-  decision that it runs on this branch (`python3 scripts/run_change_step.py log
-  <change> --branch <branch>` prints it).
+  decision that it runs on this branch (`scripts/change-workflow log <change>
+  --branch <branch>` prints it).
 - **Base.** Your invocation names it. It is not the change's own branch.
-- **Route.** `python3 scripts/change_next_step.py <change>` names `merge`: the
+- **Route.** `scripts/change-workflow next <change>` names `merge`: the
   pre-closeout triage's exit, a failed validation of the merged `HEAD`, or the
   owner's direction. When a merge is in progress it names the owner, `merging`;
   that is yours to continue only when this session started it and is resumed with
   the owner's answer. Otherwise, when it names anything else, stop: its reason says
   what comes first.
-- **Worktree.** It is clean, but for a merge this session started, and `make
-  round-view-closed` passes.
+- **Worktree.** It is clean, but for a merge this session started, and
+  `scripts/change-workflow check round-view` passes.
 - **Repair or merge.** Read the latest validation record in `reviews/`. When it
   names `HEAD` and failed, this run repairs it: go to "Repairing a failed
   validation". Otherwise go on.
 
 ## 2. Load the context
 
-Read in full: `AGENTS.md` and every document it requires; the change's
+Read in full: the documents `scripts/change-workflow config load merge` prints; the change's
 `proposal.md`, `design.md`, and `tasks.md`, the section notes above all, which say
 which files each section owns and which suites and end-to-end scenarios prove it;
 the latest pre-closeout review and its triage; and the latest validation record.
 
 ## 3. Merge
 
-1. Fetch the base from the remote that has it: `git fetch origin <base>`; for a
-   change worked in its own clone, a branch only the owner's workspace holds comes
-   from its `workspace` remote, `git fetch workspace <base>`. The base is then
+1. Fetch the base from the remote that has it — the remote the branch tracks in the
+   owner's workspace, which a clone has under the same name (`git remote` lists
+   them; `origin` in this repository): `git fetch <remote> <base>`; for a change
+   worked in its own clone, a branch only the owner's workspace holds comes from its
+   `workspace` remote, `git fetch workspace <base>`. The base is then
    `<remote>/<base>`, written `<base>` below. List what it gained: `git log
    --oneline HEAD..<base>`. When it lists nothing, the base is merged already:
    nothing is merged, and `HEAD` and its validation stand. Go to step 7, which
@@ -146,11 +152,11 @@ commits made it (`git log --merge -p -- <file>` shows each side).
   branch has it — this change's from this branch, every other row from the base.
 - **Change documents** under `openspec/changes/`: this change's from this branch,
   another change's from the base.
-- **Locks** (`uv.lock`): take the base's side of the conflicted hunks with the Edit
-  tool, then regenerate them with `make lock`, which settles the change's own
-  dependencies against the base's. A `pyproject.toml` conflict is resolved by hand
-  first: both sides' dependencies, and the higher of two version bumps of one
-  package.
+- **Locks and other derived files** (`uv.lock`): take the base's side of the
+  conflicted hunks with the Edit tool; step 5's `after-functional-change` rebuilds
+  them, which in this repository relocks, settling the change's own dependencies
+  against the base's. A `pyproject.toml` conflict is resolved by hand first: both
+  sides' dependencies, and the higher of two version bumps of one package.
 - **Code, tests, and configuration**: edit each file so both sides hold, with
   comments describing the system that results. Where the two cannot both hold, the
   resolution is a decision: ask the owner, with the options and your
@@ -185,12 +191,19 @@ decision: ask the owner.
 
 Run each, and fix what it reports:
 
-- `make lock`, when a lock or a `pyproject.toml` merged, then `make
-  check-packaging`;
 - the suites the verification tasks name of the sections owning each file you
   resolved or reconciled;
-- `make test`;
-- `make check-change CHANGE=<change>`.
+- `scripts/change-workflow run pre-commit <change>`. The paths the worktree
+  changes decide what it runs: with resolutions or reconciliations outside the
+  inert paths there, it runs `after-functional-change`, which rebuilds a lock
+  whose side you took, then `pre-commit-functional` and `pre-commit`; otherwise
+  `pre-commit` alone. So when the base brought a path outside the inert paths
+  that the worktree no longer shows, because the merge concluded itself, run
+  `scripts/change-workflow run after-functional-change <change>` first: if it
+  changed a path outside the inert paths, `run pre-commit` then runs every hook;
+  if not, run `scripts/change-workflow run pre-commit-functional <change>` by name
+  before `run pre-commit`, so the suites run once. `git add` what the hooks
+  rebuilt.
 
 A failure the base alone causes — failing on the base as well — is not the
 merge's: say so in the report, and do not fix the base here.
@@ -202,7 +215,7 @@ without opening an editor: `git commit -m "<Git's merge subject>" -m "<each
 conflicted file and how it was resolved; each reconciliation and why>"`, the
 subject the first line of `.git/MERGE_MSG`. Without conflicts, the merge concluded
 itself: commit the reconciliations on their own, the message naming the change,
-that they reconcile it with the base, and each fix. Push with `make push-branch`;
+that they reconcile it with the base, and each fix. Push with `scripts/change-workflow push`;
 if it refuses, stop and report its reasons.
 
 ## 7. Choose the exit
@@ -218,8 +231,8 @@ Judge the merge, then take the exit it merits:
   locks, and version bumps, and the reconciliations moved the change's calls to
   what the base renamed or reshaped, which a reviewer would only confirm.
 - **Validation.** The merged `HEAD` is validated before the review or closeout that
-  follows, unless the merge changed only paths under `openspec/` and `docs/`,
-  which the guard exempts by itself. Recommend waiving it only when nothing the
+  follows, unless the merge changed only the repository's inert paths, which the
+  guard exempts by itself. Recommend waiving it only when nothing the
   base brought can reach what the change ships or how it is tested — no shared
   package, lock, image, chart, or harness — and say what you checked. Never
   recommend waiving it after a reconciliation of the change's own code.
@@ -237,14 +250,14 @@ Then:
   Interactively, record it yourself after your outcome:
 
   ```text
-  python3 scripts/run_change_step.py note <change> orchestrator --by owner --decision "closeout without validating the merged HEAD" --reason "<the owner's words>" --resolves <your run's seq> --next closeout
+  scripts/change-workflow note <change> orchestrator --by owner --decision "closeout without validating the merged HEAD" --reason "<the owner's words>" --resolves <your run's seq> --next closeout
   ```
 
 When the exit is closeout and the latest validation passed for `HEAD`, or for an
-ancestor `HEAD` differs from only under `openspec/` and `docs/`, set the change's
+ancestor `HEAD` differs from only in the inert paths, set the change's
 `Status` in `openspec/changes/README.md` to `ready for closeout`, rewrite the row's
 `Notes` in the same edit so nothing in them describes the implementation phase,
-run `make check-change-index`, and commit and push the row. Otherwise leave the
+run `scripts/change-workflow check index`, and commit and push the row. Otherwise leave the
 status: closeout accepts a change still `in implementation` once the computation
 names it.
 

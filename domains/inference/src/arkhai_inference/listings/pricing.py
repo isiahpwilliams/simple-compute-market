@@ -103,9 +103,9 @@ def _unit_rate(value: Any, per: Any) -> int:
 
 def _check_option(option: SettlementOption, asset: str | None) -> int:
     """An option's one amount rate, which must be one per credit, in ``asset``."""
-    if asset is not None and option.asset != asset:
+    if asset is not None and option.price_asset != asset:
         raise ValueError("settlement option asset does not match the rate card's asset")
-    amount_rates = [rate for rate in option.rates if rate.field == "amount"]
+    amount_rates = [rate for rate in option.price_rates if rate.field == "amount"]
     if len(amount_rates) != 1:
         raise ValueError("an inference settlement option advertises exactly one amount rate")
     return _unit_rate(amount_rates[0].value, amount_rates[0].per)
@@ -160,7 +160,7 @@ def selected_unit_price(
         option
         for option in _settlement_options(order)
         if option.option_id == selection.option_id
-        and option.mechanism == selection.mechanism
+        and option.settlement_schema == selection.settlement_schema
     ]
     if len(matches) != 1:
         raise ValueError("settlement selection does not exact-match one listing option")

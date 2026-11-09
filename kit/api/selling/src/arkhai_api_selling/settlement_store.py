@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from market_core import SettlementEvidence
+from market_core.schemas import AGREEMENT_SETTLEMENT_SCHEMA_PATH
 
 from arkhai_api_selling.contributions import SellingContributions
 from arkhai_api_selling.issuance import delivery
@@ -67,17 +68,25 @@ class SettlementRepository:
         return evidence
 
     def get(self, negotiation_id: str) -> SettlementEvidence | None:
+        return self._load("negotiation_id", negotiation_id)
+
+    def get_by_reference(self, settlement_ref: str) -> SettlementEvidence | None:
+        """The evidence whose established reference is ``settlement_ref``: an
+        Alkahest escrow or an Arkhai payments transaction."""
+        return self._load("settlement_ref", settlement_ref)
+
+    def _load(self, column: str, key: str) -> SettlementEvidence | None:
         with sqlite3.connect(self.db_path, timeout=30) as conn:
             row = conn.execute(
-                "SELECT mechanism, settlement_ref, status, evidence, agreement_digest "
-                f"FROM {self._evidence} WHERE negotiation_id = ?",
-                (negotiation_id,),
+                "SELECT negotiation_id, mechanism, settlement_ref, status, evidence, agreement_digest "
+                f"FROM {self._evidence} WHERE {column} = ?",
+                (key,),
             ).fetchone()
         if row is None:
             return None
-        evidence = SettlementEvidence(negotiation_id, row[0], row[1], row[2], json.loads(row[3]))
+        evidence = SettlementEvidence(row[0], row[1], row[2], row[3], json.loads(row[4]))
         delivery(self._contributions, evidence, require_verified=False)
-        if evidence.evidence["agreement_digest"] != row[4]:
+        if evidence.evidence["agreement_digest"] != row[5]:
             raise ValueError("settlement evidence no longer matches its Agreement binding")
         return evidence
 
@@ -209,7 +218,7 @@ class SettlementRepository:
                 WHERE t.terminal_state = 'success'
                   AND t.agreement_bytes IS NOT NULL
                   AND CASE WHEN json_valid(CAST(t.agreement_bytes AS TEXT))
-                      THEN json_extract(CAST(t.agreement_bytes AS TEXT), '$.settlement.mechanism')
+                      THEN json_extract(CAST(t.agreement_bytes AS TEXT), ?)
                       END = ?
                   AND (
                     ev.negotiation_id IS NULL
@@ -219,6 +228,6 @@ class SettlementRepository:
                 ORDER BY t.created_at ASC, t.negotiation_id ASC
                 LIMIT ?
                 """,
-                (mechanism, limit),
+                (AGREEMENT_SETTLEMENT_SCHEMA_PATH, mechanism, limit),
             ).fetchall()
         return [str(row[0]) for row in rows]

@@ -26,6 +26,7 @@ from market_core.schemas import (
     SettlementOption,
     SettlementPlan,
     SettlementSelection,
+    settlement_option_schema,
 )
 from market_identity import Identity, IdentityScheme
 from market_negotiation_runtime import (
@@ -164,15 +165,14 @@ def make_round_zero_guard(
         if isinstance(proposal, dict) and proposal.get("settlement_selection") is not None:
             try:
                 selection = proposal["settlement_selection"]
-                # `params` carries the buyer's inputs to the mechanism and is optional.
                 if (
                     not isinstance(selection, dict)
-                    or not {"mechanism", "option_id", "expiration_unix"} <= set(selection)
-                    or not set(selection) <= {"mechanism", "option_id", "expiration_unix", "params"}
-                    or not isinstance(selection.get("params") or {}, dict)
+                    or not {"settlement", "option_id", "expiration_unix"} <= set(selection)
+                    or not set(selection) <= {"settlement", "option_id", "expiration_unix"}
+                    or not isinstance(selection.get("settlement"), dict)
                 ):
                     raise ValueError("selection has invalid fields")
-                mechanism = selection["mechanism"]
+                mechanism = selection["settlement"].get("schema")
                 option_id = selection["option_id"]
                 expiration_unix = selection["expiration_unix"]
                 if not isinstance(mechanism, str) or not mechanism:
@@ -194,7 +194,7 @@ def make_round_zero_guard(
                     for option in options
                     if isinstance(option, dict)
                     and option.get("option_id") == option_id
-                    and option.get("mechanism") == mechanism
+                    and settlement_option_schema(option) == mechanism
                 ]
                 if len(matches) != 1:
                     raise ValueError("selection does not exact-match one listing option")
@@ -673,14 +673,14 @@ def _selected_policy_state(
         return None
     if not isinstance(raw_selection, Mapping):
         raise NegotiationStateError("selected settlement selection is not exact")
-    required = {"mechanism", "option_id", "expiration_unix"}
-    if not required <= set(raw_selection) or set(raw_selection) - required - {"params"}:
+    required = {"settlement", "option_id", "expiration_unix"}
+    if set(raw_selection) != required:
         raise NegotiationStateError("selected settlement selection is not exact")
     try:
         selection = SettlementSelection.model_validate(raw_selection)
     except (TypeError, ValueError) as exc:
         raise NegotiationStateError("selected settlement selection is invalid") from exc
-    if selection.mechanism not in admitted_mechanisms:
+    if selection.settlement_schema not in admitted_mechanisms:
         raise NegotiationStateError(
             "exact settlement selection uses an unsupported mechanism"
         )
@@ -702,7 +702,7 @@ def _selected_policy_state(
             continue
         if (
             raw_option.get("option_id") == selection.option_id
-            and raw_option.get("mechanism") == selection.mechanism
+            and settlement_option_schema(raw_option) == selection.settlement_schema
         ):
             try:
                 matches.append(SettlementOption.model_validate(raw_option))
@@ -809,15 +809,15 @@ def _accepted_selection_artifacts(
     advertised = SettlementOption.model_validate(option)
     if (
         accepted.option_id != advertised.option_id
-        or accepted.mechanism != advertised.mechanism
+        or accepted.settlement_schema != advertised.settlement_schema
     ):
         raise OfferUnfulfillableError("settlement_selection_not_exact")
-    stage = stages.get(accepted.mechanism)
+    stage = stages.get(accepted.settlement_schema)
     if stage is not None:
         stage.validate_selection(accepted)
-    if accepted.mechanism not in dispatch:
+    if accepted.settlement_schema not in dispatch:
         raise OfferUnfulfillableError("settlement_mechanism_unsupported")
-    build_obligation = dispatch[accepted.mechanism]
+    build_obligation = dispatch[accepted.settlement_schema]
     if build_obligation is None:
         if stage is None or not getattr(stage, "settles_from_agreement", False):
             raise OfferUnfulfillableError("settlement_selection_requires_plan")
@@ -906,8 +906,8 @@ def _with_agreement(
         else None
     )
     plan = artifacts.get("settlement_plan")
-    asset = settlement.asset if settlement is not None else None
-    if asset is None and isinstance(plan, Mapping):
+    asset = settlement.price_asset if settlement is not None else None
+    if settlement is None and isinstance(plan, Mapping):
         obligations = plan.get("obligations")
         if (
             isinstance(obligations, list)
@@ -939,7 +939,9 @@ def _with_agreement(
         seller=acceptance.seller_principal.model_dump(mode="json"),
         settlement=settlement,
         settlement_params=(
-            SettlementSelection.model_validate(artifacts["settlement_selection"]).params
+            SettlementSelection.model_validate(
+                artifacts["settlement_selection"]
+            ).settlement_params
             if isinstance(artifacts.get("settlement_selection"), Mapping)
             else None
         ),
@@ -1049,7 +1051,7 @@ async def place_quota_hold(
     selection = state.get("accepted_settlement_selection")
     if not isinstance(selection, Mapping):
         return
-    stage = stages.get(selection.get("mechanism"))
+    stage = stages.get(selection.get("settlement", {}).get("schema"))
     if stage is None:
         raise OfferUnfulfillableError("settlement_mechanism_unsupported")
     await stage.place_hold(repository, acceptance)
@@ -1141,7 +1143,7 @@ def build_negotiation_runtime(
     dispatch = accepted_obligation_dispatch if accepted_obligation_dispatch is not None else {}
 
     def agreement_artifacts(agreement: Mapping[str, Any]) -> dict[str, Any]:
-        mechanism = agreement["settlement"]["mechanism"]
+        mechanism = settlement_option_schema(agreement["settlement"])
         return stages[mechanism].agreement_artifacts(agreement, None)
 
     artifacts_builder = settlement_artifacts_builder or agreement_artifacts

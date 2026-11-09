@@ -18,6 +18,7 @@ from arkhai_apicredits.listings import coerce_resource_dict
 from arkhai_apicredits.negotiation import ApiCreditsProvisionTerms, make_api_credits_provision_terms
 from core_buyer.cli import build_app
 from core_buyer.policy_surface import configured_buyer_policy
+from market_arkhai_mediation.contract import INTERFACE as MEDIATION_INTERFACE
 from market_core import (
     BUYER_IDENTITY_INJECTION_CONTRACT,
     DomainCapability,
@@ -66,7 +67,12 @@ SETTLEMENT = BuyerSettlementComposition(
     CONTRIBUTIONS,
     SettlementStageTable(
         (stage.mechanism_id, stage)
-        for stage in (AlkahestBuyerStage(), PaymentBuyerStage(payer_section="apicredits"))
+        for stage in (
+            AlkahestBuyerStage(),
+            PaymentBuyerStage(
+                payer_section="apicredits", dispute_interfaces=frozenset({MEDIATION_INTERFACE}),
+            ),
+        )
     ),
 )
 

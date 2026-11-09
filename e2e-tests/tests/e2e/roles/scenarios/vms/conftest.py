@@ -104,6 +104,16 @@ class DealState(ComputeDealState):
     tenant_credentials: Optional[dict[str, Any]] = None
     seller_listing_final_status: Optional[str] = None
     lease_status: Optional[str] = None
+    # The second deal observes buyer surrender independently of natural expiry.
+    lifecycle_purchase: Optional[Any] = None
+    # The deal whose Agreement starts later (`delivery_timing_deal.py`):
+    # agreed and committed at 13a, delivered at 13b, released at 13c, which the
+    # no-capacity deal after it requires.
+    forward_deal: Optional[Any] = None
+    forward_reservation_id: Optional[str] = None
+    _forward_events_since: Optional[int] = None
+    forward_fulfillment_id: Optional[str] = None
+    _forward_deal_released: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -815,37 +825,41 @@ def alice_loops_held(alice_admin_client):
 
 @pytest.fixture(scope="module")
 def fulfillment_convergence_held(provisioning_client):
-    """Bob's provisioning service's fulfillment convergence, held for a module
-    that advances it itself."""
+    """Bob's provisioning service's fulfillment convergence, held for the
+    module; a module that needs a transition advances it itself."""
     with compute_deal.fulfillment_convergence_held(provisioning_client) as held:
         yield held
 
 
 @pytest.fixture(scope="module")
 def lease_watchdog_held(provisioning_client):
-    """Bob's provisioning service's lease watchdog, held for a module that steps
-    lease expiry itself; stages read the hold back through system status."""
+    """Bob's provisioning service's lease watchdog, held for the module; a
+    module that needs lease expiry steps it itself, and stages read the hold
+    back through system status."""
     with compute_deal.lease_watchdog_held(provisioning_client) as held:
         yield held
 
 
 @pytest.fixture(scope="module")
-def reap_buyer_settle_subprocess(deal_state: DealState):
-    """Stop the buyer-CLI ``market settle`` subprocess if it outlived the test.
+def reap_buyer_settle_subprocess(deal_state):
+    """Stop a buyer-CLI subprocess still polling its settlement after the test.
 
-    The deal flow normally lets the subprocess exit cleanly at phase 09b
-    once settlement is ready. If an earlier assertion failed and bailed
-    out, the process is still polling the seller — terminate it so the
-    module run doesn't leak a child.
+    The buyer-CLI deal's ``market settle`` and a buyer purchase's ``market
+    buy`` each run in the background and exit once their settlement is ready.
+    If an earlier assertion failed and bailed out, the process is still
+    polling the seller — terminate it so the module run doesn't leak a child.
+    The buyer-CLI deal's state holds its run as ``settle_run_handle``, a
+    purchase's as ``purchase_run``; other modules' states hold neither.
     """
     yield
-    run = deal_state.settle_run_handle
-    if run is None:
-        return
-    try:
-        run.terminate()
-    except Exception as exc:
-        log.warning("[teardown] could not terminate settle subprocess: %s", exc)
+    for field_name in ("settle_run_handle", "purchase_run"):
+        run = getattr(deal_state, field_name, None)
+        if run is None:
+            continue
+        try:
+            run.terminate()
+        except Exception as exc:
+            log.warning("[teardown] could not terminate the buyer's %s: %s", field_name, exc)
 
 
 @pytest.fixture(scope="module")

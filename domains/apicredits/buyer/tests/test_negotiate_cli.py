@@ -25,6 +25,7 @@ from arkhai_api_buying_alkahest import stage as settlement_stages
 from arkhai_api_buying_arkhai_payments import payments
 from arkhai_apicredits_buyer.cli import app
 from test_negotiation_flow import _MockResponse, _request_header
+from dispute_terms import lifecycle, authority
 
 _BUYER = Ed25519Signer(bytes.fromhex("11" * 32))
 _SELLER = Ed25519Signer(bytes.fromhex("22" * 32))
@@ -75,22 +76,32 @@ def surface(monkeypatch, tmp_path):
             "arkhai_payments": {"enabled": True},
         },
         "apicredits": {"payer_account": _PAYER},
+        "Dispute": [authority().model_dump(mode="json")],
     }
     monkeypatch.setattr(settlement_composition, "load_user_config", lambda: config)
     monkeypatch.setattr(payments, "load_user_config", lambda: config)
     state = SimpleNamespace(config=config, requests=[], opening=None)
 
     def configure(mechanism):
-        params = {"accepted_escrow": _ENTRY} if mechanism == "alkahest.v1" else {
-            "payee_account": "22222222-2222-4222-8222-222222222222", "asset": "USD",
-        }
+        params = (
+            {"accepted_escrow": _ENTRY}
+            if mechanism == "alkahest.v1"
+            else {
+                "payee_account": "22222222-2222-4222-8222-222222222222",
+            }
+        )
         asset = _TOKEN if mechanism == "alkahest.v1" else "USD"
         rates = [RateValue(field="amount", per="token", value=100)]
+        terms = lifecycle() if mechanism == "arkhai.payments.v1" else None
         option = SettlementOption(
-            mechanism=mechanism, asset=asset, rates=rates, params=params,
             option_id=derive_settlement_option_id(
-                mechanism=mechanism, asset=asset, rates=rates, params=params,
+                price={"asset": asset, "rates": rates},
+                settlement={"schema": mechanism, **(params or {})},
+                lifecycle=terms,
             ),
+            price={"asset": asset, "rates": rates},
+            settlement={"schema": mechanism, **(params or {})},
+            lifecycle=terms,
         )
         listing = {
             "listing_id": "credits-1", "storefront_url": "http://seller",
@@ -133,11 +144,21 @@ def _transport(monkeypatch, state, actions):
             payload["settlement_selection"] = selection
         if action == "accept":
             agreement = Agreement(
-                negotiation_id="neg-1", listing_id="credits-1", listing_hash="0" * 64,
-                buyer=payload["buyer_principal"], seller=payload["seller_principal"],
-                settlement=state.option, settlement_params=selection["params"],
-                amount=proposal["fields"]["amount"], asset=state.option.asset,
-                duration_seconds=0, start_utc="2025-01-01T00:00:00Z",
+                negotiation_id="neg-1",
+                listing_id="credits-1",
+                listing_hash="0" * 64,
+                buyer=payload["buyer_principal"],
+                seller=payload["seller_principal"],
+                settlement=state.option,
+                settlement_params={
+                    key: value
+                    for key, value in selection["settlement"].items()
+                    if key != "schema"
+                },
+                amount=proposal["fields"]["amount"],
+                asset=state.option.price_asset,
+                duration_seconds=0,
+                start_utc="2025-01-01T00:00:00Z",
                 accepted_at="2025-01-01T00:00:00Z",
                 provision_terms=payload["accepted_provision_terms"],
             )
@@ -195,7 +216,10 @@ def test_payment_only_cli_is_wallet_free_and_preserves_accepted_state(surface, m
     assert result.exit_code == 0, (result.output, result.exception)
     opening = state.opening
     assert opening["proposal"]["fields"]["amount"] == str(amount)
-    assert opening["proposal"]["settlement_selection"]["params"] == {"payer_account": _PAYER}
+    assert opening["proposal"]["settlement_selection"]["settlement"] == {
+        "schema": "arkhai.payments.v1",
+        "payer_account": _PAYER,
+    }
     events = read_run(_run_id(result), signer=_BUYER)
     accepted = events[-1]
     assert accepted["settlement_selection"] == opening["proposal"]["settlement_selection"]
@@ -263,12 +287,10 @@ def test_negotiate_refuses_a_listing_on_several_configured_chains_under_yes(surf
     monkeypatch.setattr(settlement_stages, "resolve_buyer_wallet", lambda: ("0x" + "11" * 20, None))
     listing = common.fetch_listing_dict()
     second = {**_ENTRY, "chain_name": "base"}
+    settlement = {"schema": "alkahest.v1", "accepted_escrow": second}
     option = state.option.model_copy(update={
-        "params": {"accepted_escrow": second},
-        "option_id": derive_settlement_option_id(
-            mechanism="alkahest.v1", asset=_TOKEN, rates=state.option.rates,
-            params={"accepted_escrow": second},
-        ),
+        "settlement": settlement,
+        "option_id": derive_settlement_option_id(price=state.option.price, settlement=settlement),
     })
     listing["settlement_options"].append(option.model_dump(mode="json"))
     listing["accepted_escrows"].append(second)

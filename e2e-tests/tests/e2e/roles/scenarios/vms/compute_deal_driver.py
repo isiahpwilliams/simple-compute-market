@@ -155,8 +155,8 @@ class VmDealDriverBase:
         # The VM seller accepts nothing it would have to infer from an escrow's
         # shape, so a fresh negotiation names its settlement option explicitly.
         return {
-            "mechanism": "alkahest.v1",
             "option_id": alkahest_option["option_id"],
+            "settlement": {"schema": "alkahest.v1"},
             "expiration_unix": expiration_unix,
         }
 
@@ -186,7 +186,17 @@ class VmComputeDealDriver(VmDealDriverBase):
     buyer_config: dict[str, str]
     create_rule_id: str = PROV_RULE_ID
     teardown_rule_id: str = REMOVE_RULE_ID
+    #: The resource, executor, and pool this deal sells. A listing's binding to
+    #: its source outlives the listing, so a second scenario selling the same
+    #: resource on one stack is refused at listing creation: each scenario that
+    #: lists through this driver on a shared stack names its own three.
     reserved_resource_id: str = E2E_RESOURCE_ID
+    host: str = E2E_DEAL_HOST
+    pool_id: str = E2E_DEAL_POOL_ID
+    #: The GPU model the resource declares, which its listing advertises: a
+    #: scenario buying by discovery names its own, so a query by model finds
+    #: only its listing.
+    gpu_model: str = E2E_DEAL_GPU_MODEL
 
     def seed_supply(self) -> None:
         """Register this scenario's executor and declare its sellable capacity.
@@ -198,17 +208,17 @@ class VmComputeDealDriver(VmDealDriverBase):
         host = provision_e2e_executor(
             self.provisioning_client,
             self.site_capacity_admin_client,
-            host=E2E_DEAL_HOST,
-            pool_id=E2E_DEAL_POOL_ID,
-            resource_id=E2E_RESOURCE_ID,
+            host=self.host,
+            pool_id=self.pool_id,
+            resource_id=self.reserved_resource_id,
             sellable_units=E2E_DEAL_GPU_COUNT,
             attributes={
-                "gpu_model": E2E_DEAL_GPU_MODEL,
+                "gpu_model": self.gpu_model,
                 "region": "California, US",
                 "sla": "90.0",
             },
         )
-        assert host.host_id == E2E_DEAL_HOST
+        assert host.host_id == self.host
         refresh_storefront_projections(self.storefront_admin_client)
 
     def provision_terms(self) -> dict[str, Any]:
@@ -269,8 +279,8 @@ class VmComputeDealDriver(VmDealDriverBase):
     ) -> Any:
         reserved = storefront_admin_client.admin_reserve_capacity(
             required_attributes=claim_attributes(
-                {"gpu_model": E2E_DEAL_GPU_MODEL, "gpu_count": E2E_DEAL_GPU_COUNT},
-                resource_id=E2E_RESOURCE_ID,
+                {"gpu_model": self.gpu_model, "gpu_count": E2E_DEAL_GPU_COUNT},
+                resource_id=self.reserved_resource_id,
             ),
             listing_id=listing_id,
             escrow_uid=escrow_uid,

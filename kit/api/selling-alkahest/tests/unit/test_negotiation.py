@@ -64,8 +64,8 @@ def test_the_accepted_artifacts_settle_under_the_listings_condition_between_the_
         and obligation["claimant_principal"] == SELLER.identity.model_dump(mode="json")
         for obligation in plan["obligations"]
     )
-    assert artifacts["settlement_selection"]["mechanism"] == ALKAHEST_MECHANISM_ID
-    assert artifacts["_agreement_settlement_option"]["asset"] == TOKEN
+    assert artifacts["settlement_selection"]["settlement"] == {"schema": ALKAHEST_MECHANISM_ID}
+    assert artifacts["_agreement_settlement_option"]["price"]["asset"] == TOKEN
 
 
 def test_the_accepted_artifacts_refuse_a_listing_authorizing_no_condition():

@@ -15,7 +15,7 @@ from arkhai_api_contracts.carriers import (
 KINDS = ("api_credits.v1", "inference.v1")
 # A deterministic development key for this test only; never used on any network.
 PRINCIPAL = Ed25519Signer(bytes(range(32))).identity.model_dump(mode="json")
-SELECTION = {"mechanism": "alkahest.v1", "option_id": "a" * 64}
+SELECTION = {"settlement": {"schema": "alkahest.v1"}, "option_id": "a" * 64}
 OBLIGATION_REF = "b" * 64
 
 
@@ -60,7 +60,7 @@ def test_message_records_selection_and_principals_together():
         buyer_principal=PRINCIPAL,
         seller_principal=PRINCIPAL,
     )
-    assert complete.settlement_selection.mechanism == "alkahest.v1"
+    assert complete.settlement_selection.settlement_schema == "alkahest.v1"
     with pytest.raises(ValidationError, match="recorded together"):
         message_model(kind)(kind=kind, payload=_payload(), settlement_selection=SELECTION)
 

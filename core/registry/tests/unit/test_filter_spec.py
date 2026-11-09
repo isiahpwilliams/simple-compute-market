@@ -18,7 +18,9 @@ from core_registry.api.filter_spec import (
     _spec_body,
     compute_etag,
     load_filter_spec,
+    resolve_spec_path,
 )
+from core_registry.config import Settings, load_settings
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +30,42 @@ def _isolate_filter_spec_cache():
     fs_mod.reset_cache()
     yield
     fs_mod.reset_cache()
+
+
+def _settings_naming(path: Path) -> Settings:
+    """Settings that read no file and name ``path`` as the served specification."""
+    return Settings(_env_file=None, REGISTRY_FILTER_SPEC_PATH=str(path))
+
+
+def test_the_spec_a_profile_names_is_loaded_with_no_process_variable(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("REGISTRY_FILTER_SPEC_PATH", raising=False)
+    path = _write(
+        tmp_path,
+        """
+        version: 1
+        schema:
+          id: profile.selected
+        listing_shape:
+          type: object
+        filters:
+          - {name: region, path: $.listing_resource.region, op: in, value_type: string}
+        """,
+    )
+    (tmp_path / "config-lane.env").write_text(f"REGISTRY_FILTER_SPEC_PATH={path}\n")
+
+    settings = load_settings({"CONFIG_DIRECTORY": str(tmp_path), "ACTIVE_PROFILES": "lane"})
+
+    assert resolve_spec_path(settings) == path
+    assert load_filter_spec(settings=settings).schema_identity.id == "profile.selected"
+
+
+def test_unset_the_packaged_spec_is_loaded(monkeypatch) -> None:
+    monkeypatch.delenv("REGISTRY_FILTER_SPEC_PATH", raising=False)
+    unset = Settings(_env_file=None)
+    assert resolve_spec_path(unset).name == "filter-spec.yaml"
+    assert load_filter_spec(settings=unset).schema_identity.id == "compute.market"
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -237,9 +275,12 @@ def test_the_compute_listing_resource_requires_only_its_region() -> None:
     listing vocabulary, which is unchanged."""
     spec = load_filter_spec()
 
-    assert spec.version == 7
+    assert spec.version == 8
     assert spec.schema_identity is not None
-    assert (spec.schema_identity.id, spec.schema_identity.version) == ("compute.market", 2)
+    assert (spec.schema_identity.id, spec.schema_identity.version) == (
+        "compute.market",
+        3,
+    )
     listing_resource = spec.listing_shape["properties"]["listing_resource"]
     assert listing_resource["required"] == ["region"]
     by_name = {declaration.name: declaration for declaration in spec.filters}
@@ -582,7 +623,6 @@ def _assert_signed_filter_response(response, request, registry_principals) -> No
 
 
 def test_etag_present_on_endpoint(
-    monkeypatch,
     tmp_path: Path,
     db_session,
 ) -> None:
@@ -598,10 +638,9 @@ def test_etag_present_on_endpoint(
           - {name: region, path: $.listing_resource.region, op: in, value_type: string, on_missing: fail}
         """,
     )
-    monkeypatch.setenv("REGISTRY_FILTER_SPEC_PATH", str(path))
     from core_registry.api import filter_spec as fs_mod
 
-    fs_mod.reset_cache()
+    fs_mod.reset_cache(_settings_naming(path))
 
     from fastapi import FastAPI
 
@@ -622,7 +661,6 @@ def test_etag_present_on_endpoint(
 
 
 def test_endpoint_serves_schema_identity(
-    monkeypatch,
     tmp_path: Path,
     db_session,
 ) -> None:
@@ -639,10 +677,9 @@ def test_endpoint_serves_schema_identity(
           - {name: region, path: $.listing_resource.region, op: in, value_type: string}
         """,
     )
-    monkeypatch.setenv("REGISTRY_FILTER_SPEC_PATH", str(path))
     from core_registry.api import filter_spec as fs_mod
 
-    fs_mod.reset_cache()
+    fs_mod.reset_cache(_settings_naming(path))
 
     from fastapi import FastAPI
 

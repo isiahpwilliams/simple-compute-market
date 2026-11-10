@@ -67,7 +67,6 @@ from inference_storefront.services.fulfillment_service import (
     build_inference_failure_policy,
 )
 from inference_storefront.services.keys_lookup import lookup_key_record
-from inference_storefront.startup import preflight_credits_service
 from inference_storefront.startup_refusal import require_startable_storefront
 from inference_storefront.settlement_composition import (
     build_inference_settlement_composition,
@@ -80,7 +79,6 @@ from inference_storefront.utils.config import (
     chain_address_books,
     capacity_sites,
     resolve_admin_identities,
-    resolve_evm_wallet,
     resolve_identity_signer,
     resolve_registry_authorities,
     round_settings,
@@ -129,7 +127,6 @@ class InferenceStorefrontServices:
     domain: MarketDomainContract
     sqlite_client: Any
     marketplace_signer: Any
-    seller_wallet: str | None
     alkahest_clients: dict[str, Any]
     alkahest_chain_probe: AlkahestChainProbe | None
     settlement_repository: Any
@@ -244,15 +241,14 @@ async def _startup_tasks(
         loops,
         sqlite_client=_container.resolved_sqlite_client,
         storefront_url=BASE_URL_OVERRIDE or f"http://localhost:{settings.port}",
-        startup_steps=(
-            *mechanism_startup_steps(_container.SELLER_STAGES),
-            preflight_credits_service,
-        ),
+        startup_steps=mechanism_startup_steps(_container.SELLER_STAGES),
         capacity_runtime=capacity_runtime,
     )
 
 
-def _alkahest_client_policy(private_key: str) -> AlkahestClientPolicy:
+def _alkahest_client_policy() -> AlkahestClientPolicy:
+    private_key = (settings.wallet.private_key or "").strip()
+    missing = () if private_key else ("wallet.private_key",)
     books = chain_address_books()
     return AlkahestClientPolicy(
         private_key=private_key,
@@ -264,6 +260,7 @@ def _alkahest_client_policy(private_key: str) -> AlkahestClientPolicy:
             )
             for name, chain in CHAINS.items()
         ),
+        missing_requirements=missing,
     )
 
 
@@ -271,7 +268,6 @@ def _build_alkahest_chain_probe(
     section: Any,
     alkahest_clients: dict[str, Any],
     *,
-    private_key: str,
     constructor: AlkahestClientConstructor,
     json_rpc: JsonRpcCall,
 ) -> AlkahestChainProbe:
@@ -286,7 +282,7 @@ def _build_alkahest_chain_probe(
             ProbedChain.from_config(name, chain, address_book=books[name])
             for name, chain in CHAINS.items()
         ],
-        build_client=constructor(_alkahest_client_policy(private_key)),
+        build_client=constructor(_alkahest_client_policy()),
         clients=alkahest_clients,
         interval_seconds=section.probe_interval_seconds,
         rpc_timeout_seconds=section.rpc_timeout_seconds,
@@ -314,18 +310,14 @@ def _build_inference_services(
     # the client map, empty until its first step constructs each client,
     # bounded: a websocket client connects while it is built, and startup must
     # not wait on a chain. Every consumer below is handed this one dict, which
-    # the probe updates in place. The chain clients sign with, and escrows
-    # release to, the one resolved wallet.
+    # the probe updates in place.
     alkahest_section = settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY)
-    seller_wallet: str | None = None
     alkahest_clients: dict[str, Any] = {}
     alkahest_chain_probe: AlkahestChainProbe | None = None
     if alkahest_section is not None:
-        seller_wallet, private_key = resolve_evm_wallet()
         alkahest_chain_probe = _build_alkahest_chain_probe(
             alkahest_section,
             alkahest_clients,
-            private_key=private_key,
             constructor=seams.alkahest_client_constructor,
             json_rpc=seams.alkahest_json_rpc,
         )
@@ -379,7 +371,6 @@ def _build_inference_services(
         domain=domain,
         sqlite_client=sqlite_client,
         marketplace_signer=marketplace_signer,
-        seller_wallet=seller_wallet,
         alkahest_clients=alkahest_clients,
         alkahest_chain_probe=alkahest_chain_probe,
         settlement_repository=settlement_repository,
@@ -421,11 +412,10 @@ async def _start_inference_services(
     _container.resolved_issuance_evidence_service = services.issuance_evidence_service
     _container.resolved_private_result_repository = services.private_result_repository
     _container.resolved_marketplace_signer = services.marketplace_signer
-    _container.resolved_seller_wallet = services.seller_wallet
     _container.resolved_failure_policy = services.failure_policy
     _container.resolved_listing_service = services.listing_service
     # The seed is created by its loop step, never here: the authority it
-    # registers with may not answer yet.
+    # registers with, or a mechanism it uses, may not have been reached yet.
     _container.resolved_listing_seed = listing_seed().progress(seed_settings())
     _container.resolved_negotiation_runtime = services.negotiation_runtime
     _container.resolved_negotiation_service = services.negotiation_service

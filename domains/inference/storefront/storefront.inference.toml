@@ -61,9 +61,7 @@ identities = [
 [credits]
 # The inference authority this storefront sells for; it also hosts the quota
 # ledger selected below.
-service_url         = "http://inference-service:8086"
-preflight_timeout   = 60
-fail_on_unreachable = true
+service_url = "http://inference-service:8086"
 
 [capacity]
 poll_interval = 1

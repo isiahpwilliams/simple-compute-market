@@ -151,7 +151,7 @@ def alkahest_stage(**collaborators: Any) -> AlkahestSellerStage:
         "rate_unit": "credit",
         "chains": lambda: config.CHAINS,
         "address_books": config.chain_address_books,
-        "seller_wallet": lambda: resolved_seller_wallet or str(config.settings.get("wallet.address", "") or ""),
+        "seller_wallet": config.seller_wallet_address,
         "seller_wallet_key": lambda: str(config.settings.get("wallet.private_key", "") or ""),
         "chain_probe": lambda: resolved_alkahest_chain_probe,
         "composition": lambda: resolved_settlement_composition,
@@ -245,8 +245,6 @@ resolved_negotiation_service: "NegotiationService | None" = None
 resolved_negotiation_runtime: "NegotiationRuntime | None" = None
 resolved_system_service: "SystemService | None" = None
 resolved_marketplace_signer: "Signer | None" = None
-#: The wallet address resolved with the private key the chain clients sign with.
-resolved_seller_wallet: str | None = None
 resolved_loop_controller: "StorefrontLoopController | None" = None
 
 #: Whether this process opens new negotiations. Process-local and kept across
@@ -280,7 +278,6 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     global resolved_negotiation_service
     global resolved_system_service
     global resolved_marketplace_signer
-    global resolved_seller_wallet
     global resolved_loop_controller
 
     if resolved_market_domain is not None and resolved_market_domain is not domain:
@@ -304,7 +301,6 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     resolved_negotiation_service = None
     resolved_system_service = None
     resolved_marketplace_signer = None
-    resolved_seller_wallet = None
     if resolved_loop_controller is not None:
         resolved_loop_controller.clear_loops()
     resolved_loop_controller = None

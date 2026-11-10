@@ -159,8 +159,6 @@ def storefront(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path
         wallet={"address": SELLER_WALLET, "private_key": SELLER_WALLET_KEY},
         credits={
             "service_url": AUTHORITY_URL,
-            "preflight_timeout": 1,
-            "fail_on_unreachable": True,
             "expected_authorities": {
                 "identities": [AUTHORITY_SIGNER.identity.model_dump(mode="json")]
             },

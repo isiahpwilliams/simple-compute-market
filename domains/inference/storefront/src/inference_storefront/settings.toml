@@ -43,6 +43,7 @@ priority = []
 
 [wallet]
 # Sensitive — populated by Secret overlay in k8s, by local file otherwise.
+# address is optional: unset, the seller is the account private_key signs as.
 address     = ""
 private_key = ""
 
@@ -68,9 +69,7 @@ root_path = ""
 # with the marketplace identity and every answer verified against
 # [credits.expected_authorities]; startup refuses without both. Capacity trust
 # is configured independently below.
-service_url       = "http://localhost:8086"
-preflight_timeout = 30
-fail_on_unreachable = true
+service_url = "http://localhost:8086"
 
 [credits.expected_authorities]
 # 1-2 ordered principals of the inference authority.

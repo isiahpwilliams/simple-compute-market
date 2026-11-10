@@ -31,12 +31,12 @@ from market_alkahest import (
     alkahest_address_book,
     retired_address_book_keys,
     retired_address_book_refusal,
+    wallet_account_address,
 )
 from market_identity import Identity, IdentityScheme, Signer, TrustedIdentitySet
 from market_config.config_loader import (
     ChainConfig,
     chains_from_config,
-    derive_wallet_address,
     storefront_config_files,
 )
 from market_config.registry_url import normalize_registry_url
@@ -64,21 +64,15 @@ def _build_settings() -> Dynaconf:
     return s
 
 
-def resolve_evm_wallet() -> tuple[str, str]:
-    """Resolve explicit, matching Alkahest mechanism credentials."""
-    address = str(settings.get("wallet.address", "") or "").strip()
-    private_key = str(settings.get("wallet.private_key", "") or "").strip()
-    if not address or not private_key:
-        raise RuntimeError(
-            "inference Alkahest settlement requires wallet.address and "
-            "wallet.private_key",
-        )
-    derived = derive_wallet_address(private_key)
-    if not derived:
-        raise RuntimeError("configured Alkahest wallet private key is not a valid key")
-    if derived.lower() != address.lower():
-        raise RuntimeError("configured Alkahest wallet address/private key mismatch")
-    return address, private_key
+def seller_wallet_address() -> str:
+    """The seller's EVM address: `[wallet].address`, else the account its key
+    signs as, so every place naming the seller names one account."""
+    return wallet_account_address(
+        {
+            "address": str(settings.get("wallet.address", "") or ""),
+            "private_key": str(settings.get("wallet.private_key", "") or ""),
+        }
+    )
 
 
 def _coerce_chains_table(raw: Any) -> dict[str, dict[str, Any]]:

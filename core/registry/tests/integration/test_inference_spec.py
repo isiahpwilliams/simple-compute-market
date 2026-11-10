@@ -18,6 +18,7 @@ import pytest
 from registry_client import ListingRequest, RegistryClientError, ValidatePublishRequest
 from core_registry.api import filter_spec as filter_spec_module
 from core_registry.api import validate_routes
+from core_registry.config import load_settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,10 +32,11 @@ _ESCROW = {
 }
 _OPTION = {
     "option_id": "a" * 64,
-    "mechanism": "alkahest.v1",
-    "asset": _ASSET,
-    "rates": [{"field": "amount", "per": "credit", "value": "1"}],
-    "params": {},
+    "price": {
+        "asset": _ASSET,
+        "rates": [{"field": "amount", "per": "credit", "value": "1"}],
+    },
+    "settlement": {"schema": "alkahest.v1"},
 }
 
 # One query per declared filter, each matching `inference-1` as published
@@ -87,14 +89,17 @@ def _card(**overrides):
 
 
 @pytest.fixture
-def served_inference_spec(monkeypatch):
-    # The loader and the dry-run validator cache independently; both must be
-    # cleared or a later test validates against this specification.
-    monkeypatch.setenv("REGISTRY_FILTER_SPEC_PATH", str(_INFERENCE_SPEC))
-    filter_spec_module.reset_cache()
+def served_inference_spec(monkeypatch, tmp_path):
+    # Named by a profile env file, as a lane registry's profile names its
+    # specification. The loader and the dry-run validator cache independently;
+    # both must be cleared or a later test validates against this specification.
+    monkeypatch.delenv("REGISTRY_FILTER_SPEC_PATH", raising=False)
+    (tmp_path / "config-spec.env").write_text(f"REGISTRY_FILTER_SPEC_PATH={_INFERENCE_SPEC}\n")
+    filter_spec_module.reset_cache(
+        load_settings({"CONFIG_DIRECTORY": str(tmp_path), "ACTIVE_PROFILES": "spec"})
+    )
     validate_routes._reset_cache()
     yield filter_spec_module.get_loaded_spec()
-    monkeypatch.delenv("REGISTRY_FILTER_SPEC_PATH", raising=False)
     filter_spec_module.reset_cache()
     validate_routes._reset_cache()
 
@@ -148,6 +153,8 @@ async def test_a_model_card_publishes_and_each_filter_finds_it(
     assert await _ids(registry_client, completion_credits_max="3000", rate_card_asset=_ASSET) == {"inference-1", "inference-2"}
     assert await _ids(registry_client, prompt_credits_max="600", rate_card_asset="0x" + "33" * 20) == set()
     assert await _ids(registry_client, token_exclude=f"not_in:[{_ASSET}]") == set()
+    assert await _ids(registry_client, settlement_mechanism="arkhai.payments.v1") == set()
+    assert await _ids(registry_client, settlement_asset="0x" + "33" * 20) == set()
 
     fetched = await registry_client.get_listing("inference-1")
     assert fetched.listing_resource["rate_card"]["prompt_credits_per_million"] == "500"

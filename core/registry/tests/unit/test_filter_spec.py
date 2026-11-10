@@ -354,7 +354,7 @@ def test_repo_inference_spec_loads() -> None:
             {"chain_name": "anvil", "escrow_address": "0x" + "11" * 20, "literal_fields": {"token": "0x" + "22" * 20}}
         ],
         "settlement_options": [
-            {"option_id": "a" * 64, "mechanism": "alkahest.v1", "asset": "0x" + "22" * 20, "rates": [], "params": {}}
+            {"option_id": "a" * 64, "price": {"asset": "0x" + "22" * 20, "rates": []}, "settlement": {"schema": "alkahest.v1"}}
         ],
     }
     validator = Draft202012Validator(spec.listing_shape)

@@ -130,21 +130,32 @@ listing_shape:
       type: array
       items:
         type: object
-        required: [option_id, mechanism, asset, rates, params]
         additionalProperties: false
+        required: [option_id, settlement]
         properties:
-          option_id: {type: string, minLength: 64, maxLength: 64}
-          mechanism: {type: string}
-          asset: {type: string}
-          rates: {type: array}
-          params:
+          option_id: {type: string, pattern: "^[0-9a-f]{64}$"}
+          price:
             type: object
-            additionalProperties: true
+            additionalProperties: false
+            required: [asset, rates]
             properties:
-              interaction: {type: string}
-              country: {type: string}
-              authority_id: {type: string}
-              environment: {type: string}
+              asset: {type: string, minLength: 1}
+              rates:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [field, per, value]
+                  properties:
+                    field: {type: string, minLength: 1}
+                    per: {type: string, minLength: 1}
+                    value: {type: string, pattern: "^[0-9]+$"}
+          settlement:
+            type: object
+            required: [schema]
+            properties:
+              schema: {type: string, minLength: 1}
+          lifecycle: {type: object}
 
 filters:
   # Exact matches on the fields a buyer compares on. `op: in` covers eq via
@@ -174,5 +185,5 @@ filters:
   - {name: token_exclude, path: "$.accepted_escrows[*].literal_fields.token", op: not_in, value_type: string, on_missing: pass}
 
   # Mechanism-neutral option projections are independent of escrow entries.
-  - {name: settlement_mechanism, path: "$.settlement_options[*].mechanism", op: in, value_type: string, on_missing: pass}
-  - {name: settlement_asset, path: "$.settlement_options[*].asset", op: in, value_type: string, on_missing: pass}
+  - {name: settlement_mechanism, path: "$.settlement_options[*].settlement.schema", op: in, value_type: string, on_missing: pass}
+  - {name: settlement_asset, path: "$.settlement_options[*].price.asset", op: in, value_type: string, on_missing: pass}

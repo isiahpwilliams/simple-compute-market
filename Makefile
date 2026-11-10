@@ -284,7 +284,7 @@ build-e2e-inference: build-e2e-base ## Build the inference end-to-end lane's ima
 
 # The previous service release, built from the pinned base commit's own
 # wheelhouse in a temporary worktree.
-APICREDITS_SERVICE_PREKIT_COMMIT := 9720ac59697a132f48913b91448c8224ece35cde
+APICREDITS_SERVICE_PREKIT_COMMIT := 74ca93ba0aec130e435a04745aa903d6198ffa8c
 APICREDITS_SERVICE_PREKIT_WORKTREE := $(CURDIR)/.worktrees/apicredits-service-prekit
 
 build-apicredits-service-prekit: ## Build arkhai:apicredits-service-prekit, the previous service release, from the pinned base commit

@@ -38,14 +38,13 @@ priority = ["alkahest.v1"]
 
 [settlement.alkahest]
 enabled = true
-address_config_path = "/app/alkahest_anvil_addresses.json"
-oracle_gated = false
+address_books = { anvil = "/app/alkahest_anvil_addresses.json" }
+release_models = ["recipient"]
 trusted_oracle_addresses = []
 
 [chains.anvil]
 rpc_url  = "ws://anvil:8545"
 chain_id = 31337
-alkahest_address_config_path = "/app/alkahest_anvil_addresses.json"
 
 [registry]
 # Only the inference registry: this seller's listings speak the inference

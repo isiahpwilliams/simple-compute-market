@@ -180,7 +180,9 @@ def _credentials_app(settlement: BuyerSettlementComposition) -> typer.Typer:
         """Show the API key a run delivered, secret included."""
         credentials, source = _delivered_credential(settlement, run_id)
         if as_json:
+            # Whatever else the seller delivered beside the key is the buyer's to read.
             shown = {
+                **{key: value for key, value in credentials.items() if value is not None},
                 "run_id": run_id,
                 "key_id": credentials.get("key_id"),
                 "secret": credentials.get("secret"),
@@ -188,8 +190,6 @@ def _credentials_app(settlement: BuyerSettlementComposition) -> typer.Typer:
                 "balance": credentials.get("balance"),
                 "source": source,
             }
-            if credentials.get("service_name") is not None:
-                shown["service_name"] = credentials["service_name"]
             typer.echo(json.dumps(shown, separators=(",", ":"), sort_keys=True))
             return
         table = common.credentials_table(

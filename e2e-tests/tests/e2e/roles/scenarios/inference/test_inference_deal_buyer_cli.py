@@ -19,7 +19,6 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Iterator
 from typing import Any
 
 import asyncio
@@ -91,18 +90,6 @@ def _chat(base_url: str, secret: str, *, model: str, stream: bool = False) -> ht
 def _reply(response: httpx.Response) -> str:
     assert response.status_code == 200, f"{response.status_code}: {response.text}"
     return response.json()["choices"][0]["message"]["content"]
-
-
-def _found(value: Any, key: str) -> Iterator[Any]:
-    """Every value under ``key`` anywhere in ``value``."""
-    if isinstance(value, dict):
-        for name, item in value.items():
-            if name == key:
-                yield item
-            yield from _found(item, key)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _found(item, key)
 
 
 async def _publish_other_listing() -> str:
@@ -224,9 +211,10 @@ def test_inference_full_deal(
     log.info("[inference] issued key %s, base_url %s", key_id, base_url)
 
     # --- c. The public result materializes the listing it was sold under -----
-    materializations = list(_found(events, "materialization"))
-    assert materializations, f"no materialization in the run's events: {[e.get('event') for e in events]}"
-    materialization = InferenceMaterialization.model_validate(materializations[-1])
+    # Delivery results stay behind the buyer's private result boundary, so the
+    # materialization is read from the saved delivery, not the run log.
+    assert "materialization" in creds, f"the saved delivery holds no materialization: {sorted(creds)}"
+    materialization = InferenceMaterialization.model_validate(creds["materialization"])
     assert materialization.listing_resource.served_model_name == served_model
     assert materialization.rate_card.request_credits == 1
     assert materialization.key_id == key_id

@@ -46,8 +46,9 @@ priority = []
 address     = ""
 private_key = ""
 
-# [chains.<name>] tables, one per chain: rpc_url required; chain_id and
-# alkahest_address_config_path optional.
+# [chains.<name>] tables, one per chain: rpc_url required; chain_id optional.
+# A chain's Alkahest address book is named under
+# [settlement.alkahest.address_books].
 
 [registry]
 urls              = []

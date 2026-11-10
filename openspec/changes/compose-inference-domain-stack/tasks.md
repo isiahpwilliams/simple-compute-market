@@ -2115,8 +2115,10 @@ every end-to-end run").
 (a)'s routing proof is the buyer's own report that it skipped the compute and
 API-credit registries for serving another schema, with the table widened so
 the model id prints whole; the CLI has no machine-readable listing output. The
-materialization (c) is read from the buy run's events and validated as
-`InferenceMaterialization`. Step (f) runs last, so a failure in it cannot hide
+materialization (c) is read from the buyer's saved delivery, through
+`credentials show --json`, and validated as `InferenceMaterialization`: a
+delivery result is not public run evidence, so the run log does not carry it,
+and `--json` emits every field the seller delivered beside the key. Step (f) runs last, so a failure in it cannot hide
 (g)–(i): it registers a second model's quota with the inference service and
 publishes its listing through the storefront's seller route, both signed as the
 storefront's seller, buys it onto a second key, and shows the gateway refuse

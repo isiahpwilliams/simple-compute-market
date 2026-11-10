@@ -1,17 +1,63 @@
-"""Inference storefront admin CLI — the `inference-storefront` console script."""
+"""Inference storefront admin CLI — the `inference-storefront` console script.
+
+``publish`` and ``listings`` are clients of a running storefront: a listing
+created with no storefront serving it is one no buyer can negotiate, so neither
+command builds the storefront's services or opens its database.
+"""
 
 from __future__ import annotations
 
-import asyncio
+import dataclasses
 import json
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+import httpx
 import typer
+from arkhai_api_selling.publish_route import SyncListingClient
 from market_config.config_loader import set_user_config_path
+from market_identity import Signer, TrustedIdentitySet
+from storefront_client import StorefrontClientError, SyncStorefrontClient
 
 app = typer.Typer(no_args_is_help=True)
+
+_STOREFRONT_URL_HELP = (
+    "The running storefront's origin; the configured base_url, else "
+    "http://localhost:<port>, when omitted."
+)
+
+
+def _open_storefront(url: str, signer: Signer | None) -> SyncStorefrontClient:
+    """The typed client the listing commands reach the storefront through,
+    signing as the storefront's own principal when ``signer`` is given."""
+    if signer is None:
+        return SyncStorefrontClient(url)
+    return SyncStorefrontClient(
+        url,
+        signer=signer,
+        caller_role="seller",
+        expected_publishers=TrustedIdentitySet(identities=(signer.identity,)),
+    )
+
+
+def _storefront_url(explicit: str | None) -> str:
+    # Imported when a command runs, after the root `--config` option: the
+    # storefront's settings resolve when its config module is first imported.
+    from inference_storefront.utils.config import BASE_URL_OVERRIDE, settings
+
+    return explicit or BASE_URL_OVERRIDE or f"http://localhost:{settings.port}"
+
+
+def _refused(url: str, exc: Exception) -> typer.Exit:
+    """Report a refusal or an unreachable storefront, naming where it was sent."""
+    if isinstance(exc, httpx.HTTPError):
+        typer.echo(
+            f"no storefront answered at {url} ({type(exc).__name__})", err=True
+        )
+    else:
+        typer.echo(f"the storefront at {url} refused: {exc}", err=True)
+    return typer.Exit(code=1)
 
 
 def version_callback(value: bool) -> None:
@@ -102,8 +148,11 @@ def publish_cmd(
         help="Alkahest escrow contract; resolved from the chain config when omitted.",
     ),
     paused: bool = typer.Option(False, "--paused"),
+    storefront_url: str | None = typer.Option(
+        None, "--storefront-url", "-a", help=_STOREFRONT_URL_HELP
+    ),
 ) -> None:
-    """Create + publish a model-card listing backed by a quota resource.
+    """Create + publish a model-card listing backed by a quota resource, through the running storefront.
 
     Pass the Alkahest rate, token, and chain together to publish an escrow
     option. Omit all three to publish the configured settlement clauses.
@@ -111,9 +160,12 @@ def publish_cmd(
     """
     # Imported only once ``--config`` has run, as in ``serve``.
     import inference_storefront.container as _container
-    from inference_storefront.domain_runtime import get_market_domain_contract
-    from inference_storefront.server import _build_inference_services
-    from inference_storefront.utils.config import CHAINS, chain_address_books
+    from inference_storefront.model_card import PublishFromQuotaRequest
+    from inference_storefront.utils.config import (
+        CHAINS,
+        chain_address_books,
+        resolve_identity_signer,
+    )
 
     escrow_requested = any(
         value is not None for value in (price_per_token, token, chain)
@@ -155,42 +207,48 @@ def publish_cmd(
             )
         ]
 
-    # The same services the running storefront composes, including the signer
-    # its capacity runtime reads.
-    services = _build_inference_services(get_market_domain_contract())
-    _container.resolved_marketplace_signer = services.marketplace_signer
-    _container.resolved_sqlite_client = services.sqlite_client
-    result = asyncio.run(
-        services.listing_service.publish_from_quota(
-            resource_id=resource_id,
-            accepted_escrows=accepted_escrows,
-            model_card=json.loads(model_card.read_text(encoding="utf-8")),
-            paused=paused,
-        )
-    )
-    typer.echo(json.dumps(result, indent=2))
+    signer = resolve_identity_signer()
+    url = _storefront_url(storefront_url)
+    request = {
+        "resource_id": resource_id,
+        "accepted_escrows": accepted_escrows,
+        "model_card": json.loads(model_card.read_text(encoding="utf-8")),
+        "paused": paused,
+    }
+    try:
+        with _open_storefront(url, signer) as client:
+            result = SyncListingClient(
+                client, seller=signer.identity, request_model=PublishFromQuotaRequest
+            ).publish_from_quota(request)
+    except (StorefrontClientError, httpx.HTTPError) as exc:
+        raise _refused(url, exc) from exc
+    typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
 
 
 @app.command("listings")
 def listings_cmd(
     status: str | None = typer.Option(None, "--status"),
     limit: int = typer.Option(50, "--limit"),
+    storefront_url: str | None = typer.Option(
+        None, "--storefront-url", "-a", help=_STOREFRONT_URL_HELP
+    ),
 ) -> None:
-    """List the storefront's local listings."""
+    """List the running storefront's local listings."""
     # Imported only once ``--config`` has run, as in ``publish``.
-    from inference_storefront.utils.config import (
-        BASE_URL_OVERRIDE,
-        resolve_identity_config,
-    )
-    from inference_storefront.container import get_sqlite_client
+    from inference_storefront.model_card import PublishFromQuotaRequest
+    from inference_storefront.utils.config import resolve_identity_config
 
-    rows = asyncio.run(
-        get_sqlite_client(
-            local_listing_principal=resolve_identity_config().principal,
-            expected_legacy_sellers=(BASE_URL_OVERRIDE,),
-        ).list_listings(status=status, limit=limit),
-    )
-    typer.echo(json.dumps(rows, indent=2, default=str))
+    seller = resolve_identity_config().principal
+    url = _storefront_url(storefront_url)
+    try:
+        # The listing route is public, so the read needs no credential.
+        with _open_storefront(url, None) as client:
+            page = SyncListingClient(
+                client, seller=seller, request_model=PublishFromQuotaRequest
+            ).list_listings(status=status, limit=limit)
+    except (StorefrontClientError, httpx.HTTPError) as exc:
+        raise _refused(url, exc) from exc
+    typer.echo(json.dumps(dataclasses.asdict(page), indent=2, default=str))
 
 
 if __name__ == "__main__":

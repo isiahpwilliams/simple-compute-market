@@ -149,8 +149,6 @@ def storefront(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path
     # The process's database client is created by the first startup; each test
     # starts from none and leaves none behind.
     monkeypatch.setattr(container, "_sqlite_client", None)
-    # No chain answers at the fake RPC; a test that settles supplies its own clients.
-    monkeypatch.setattr(server, "_build_alkahest_clients", lambda private_key: {})
     identity = SELLER_SIGNER.identity
     with replaced(
         identity={
@@ -208,9 +206,17 @@ def registries(monkeypatch: pytest.MonkeyPatch) -> Registries:
     return recorded
 
 
-def app() -> Any:
+def deployed_chain(rpc_url: str, method: str, params: Any, timeout: float) -> str:
+    """The chain's JSON-RPC endpoint, answering as the deployed development chain."""
+    return hex(31337) if method == "eth_chainId" else "0x6080"
+
+
+def app(seams: server.InferenceCompositionSeams | None = None) -> Any:
+    # The probe's JSON-RPC transport is the composition's seam to the chain; the
+    # SDK builds its clients over the HTTP rpc_url without calling it.
     return server.build_inference_storefront_app(
-        registry=server.build_inference_storefront_registry(domain=get_market_domain_contract())
+        registry=server.build_inference_storefront_registry(domain=get_market_domain_contract()),
+        seams=seams or server.InferenceCompositionSeams(alkahest_json_rpc=deployed_chain),
     )
 
 
@@ -230,6 +236,8 @@ async def running(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Clients]:
     monkeypatch.setattr(server, "_startup_tasks", no_startup_tasks)
     served = app()
     async with served.router.lifespan_context(served):
+        # Publishing waits for a reached chain, so the probe steps once.
+        await container.resolved_alkahest_chain_probe.step()
         transport = httpx.ASGITransport(app=served)
         publishers = TrustedIdentitySet(identities=(SELLER_SIGNER.identity,))
         async with StorefrontClient(

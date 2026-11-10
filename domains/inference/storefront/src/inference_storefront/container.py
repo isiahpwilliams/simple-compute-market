@@ -44,6 +44,7 @@ from inference_storefront.rate_card_guard import request_priced_guard
 from inference_storefront.utils import config
 
 if TYPE_CHECKING:
+    from market_alkahest import AlkahestChainProbe
     from market_core import MarketDomainContract
     from core_storefront.services.negotiation_service import NegotiationService
     from market_negotiation_runtime import NegotiationRuntime
@@ -152,8 +153,7 @@ def alkahest_stage(**collaborators: Any) -> AlkahestSellerStage:
         "address_books": config.chain_address_books,
         "seller_wallet": lambda: resolved_seller_wallet or str(config.settings.get("wallet.address", "") or ""),
         "seller_wallet_key": lambda: str(config.settings.get("wallet.private_key", "") or ""),
-        # The chain clients are built at startup, so no probe is composed.
-        "chain_probe": lambda: None,
+        "chain_probe": lambda: resolved_alkahest_chain_probe,
         "composition": lambda: resolved_settlement_composition,
         "sqlite_client": lambda: resolved_sqlite_client,
         "backfill_escrows": backfill_escrow_obligation_records,
@@ -235,6 +235,9 @@ resolved_failure_policy: "FailurePolicy | None" = None
 resolved_settlement_composition: "SellingSettlementComposition | None" = None
 resolved_issuance_evidence_service: "IssuanceEvidenceService | None" = None
 resolved_private_result_repository: "PrivateResultRepository | None" = None
+#: The probe over each configured chain, owning the live chain-client map;
+#: None while no Alkahest section is configured.
+resolved_alkahest_chain_probe: "AlkahestChainProbe | None" = None
 resolved_listing_service: "ListingService | None" = None
 #: The configured seed listing's progress; None without a ``[seed]`` table.
 resolved_listing_seed: ListingSeedProgress | None = None
@@ -271,6 +274,7 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     global resolved_settlement_composition
     global resolved_issuance_evidence_service
     global resolved_private_result_repository
+    global resolved_alkahest_chain_probe
     global resolved_listing_service
     global resolved_listing_seed
     global resolved_negotiation_service
@@ -294,6 +298,7 @@ def clear_lifespan_state(*, domain: "MarketDomainContract") -> None:
     resolved_settlement_composition = None
     resolved_issuance_evidence_service = None
     resolved_private_result_repository = None
+    resolved_alkahest_chain_probe = None
     resolved_listing_service = None
     resolved_listing_seed = None
     resolved_negotiation_service = None

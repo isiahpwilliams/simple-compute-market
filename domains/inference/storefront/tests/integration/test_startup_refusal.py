@@ -19,6 +19,7 @@ from tests.integration.conftest import (
     SELLER_WALLET,
     SELLER_WALLET_KEY,
     app,
+    deployed_chain,
     replaced,
     settlement,
 )
@@ -85,16 +86,19 @@ async def test_a_wallet_address_its_key_does_not_derive_fails_startup(storefront
 async def test_the_chain_clients_and_the_release_recipient_share_one_wallet(storefront, monkeypatch):
     signing_keys: list[str] = []
 
-    def chain_clients(private_key: str) -> dict[str, Any]:
-        signing_keys.append(private_key)
-        return {}
+    def constructor(policy: Any) -> Any:
+        signing_keys.append(policy.private_key)
+        return lambda chain_name: object()
 
     async def no_startup_tasks(*, domain: Any) -> None:
         return None
 
-    monkeypatch.setattr(server, "_build_alkahest_clients", chain_clients)
     monkeypatch.setattr(server, "_startup_tasks", no_startup_tasks)
-    served = app()
+    served = app(
+        server.InferenceCompositionSeams(
+            alkahest_client_constructor=constructor, alkahest_json_rpc=deployed_chain
+        )
+    )
     async with served.router.lifespan_context(served):
         assert signing_keys == [SELLER_WALLET_KEY]
         assert container.resolved_seller_wallet == SELLER_WALLET

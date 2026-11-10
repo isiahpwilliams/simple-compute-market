@@ -31,7 +31,14 @@ from inference_storefront import container, server
 from inference_storefront.model_card import PublishFromQuotaRequest
 from inference_storefront.services import credits_service_client
 from tests.cards import model_card
-from tests.integration.conftest import ADMIN_SIGNER, ESCROW, SELLER_SIGNER, QuotaSite, app
+from tests.integration.conftest import (
+    ADMIN_SIGNER,
+    ESCROW,
+    SELLER_SIGNER,
+    QuotaSite,
+    app,
+    deployed_chain,
+)
 from tests.integration.issuance_authority import ESCROW_UID, ScriptedAuthority
 
 BUYER_SIGNER = Ed25519Signer(bytes.fromhex("11" * 32))
@@ -98,11 +105,16 @@ async def running(monkeypatch, chain: ScriptedChain, authority: ScriptedAuthorit
     monkeypatch.setattr(server, "_startup_tasks", no_startup_tasks)
     quota = NegotiableQuotaSite({"svc-quota": 42})
     monkeypatch.setattr(container.QUOTA_CAPACITY, "runtime", lambda factory: quota)
-    monkeypatch.setattr(server, "_build_alkahest_clients", lambda private_key: {"anvil": chain.client})
     monkeypatch.setattr(container.ALKAHEST_STAGE, "_verify_escrow", chain.verify_escrow)
     monkeypatch.setattr(credits_service_client, "_client", authority.client())
-    served = app()
+    served = app(
+        server.InferenceCompositionSeams(
+            alkahest_client_constructor=lambda _policy: lambda _chain: chain.client,
+            alkahest_json_rpc=deployed_chain,
+        )
+    )
     async with served.router.lifespan_context(served):
+        await container.resolved_alkahest_chain_probe.step()
         transport = httpx.ASGITransport(app=served)
         publishers = TrustedIdentitySet(identities=(SELLER_SIGNER.identity,))
 

@@ -6,6 +6,7 @@ The lifespan resolves the container's singletons and starts the background tasks
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -36,7 +37,13 @@ from core_storefront.domain_registry import (
 )
 from core_storefront.services.negotiation_service import NegotiationService
 from core_storefront.stage_log import set_stage_event_db_path, stage_event
-from market_alkahest import ALKAHEST_CONFIG_KEY
+from market_alkahest import (
+    ALKAHEST_CONFIG_KEY,
+    AlkahestChainProbe,
+    JsonRpcCall,
+    ProbedChain,
+    json_rpc_call,
+)
 from market_core import MarketDomainContract
 from market_settlement_runtime import SettlementJobCoordinator
 from market_storefront_kit import (
@@ -45,7 +52,7 @@ from market_storefront_kit import (
     StorefrontComposition,
     StorefrontRouteHooks,
     StorefrontServiceHooks,
-    build_alkahest_clients,
+    alkahest_client_constructor,
     build_composed_storefront_app,
 )
 
@@ -97,6 +104,24 @@ def run_serve(host: str = "0.0.0.0", port: int | None = None) -> None:
     )
 
 
+AlkahestClientConstructor = Callable[
+    [AlkahestClientPolicy], Callable[[str], Any] | None
+]
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceCompositionSeams:
+    """What the composition root reaches its Alkahest chains through.
+
+    The defaults are production's: the SDK's per-chain client construction and
+    JSON-RPC over each chain's ``rpc_url``. A test of the root's wiring supplies
+    compatible objects instead of patching the module.
+    """
+
+    alkahest_client_constructor: AlkahestClientConstructor = alkahest_client_constructor
+    alkahest_json_rpc: JsonRpcCall = json_rpc_call
+
+
 @dataclass(frozen=True, slots=True)
 class InferenceStorefrontServices:
     """Lifespan-owned inference services bound to one domain contract."""
@@ -106,6 +131,7 @@ class InferenceStorefrontServices:
     marketplace_signer: Any
     seller_wallet: str | None
     alkahest_clients: dict[str, Any]
+    alkahest_chain_probe: AlkahestChainProbe | None
     settlement_repository: Any
     settlement_runtime: Any
     settlement_worker: Any
@@ -226,27 +252,51 @@ async def _startup_tasks(
     )
 
 
-def _build_alkahest_clients(private_key: str) -> dict[str, Any]:
+def _alkahest_client_policy(private_key: str) -> AlkahestClientPolicy:
     books = chain_address_books()
-    return build_alkahest_clients(
-        AlkahestClientPolicy(
-            private_key=private_key,
-            chains=tuple(
-                AlkahestChain(
-                    name=name,
-                    rpc_url=chain.rpc_url,
-                    address_book=books[name],
-                )
-                for name, chain in CHAINS.items()
-            ),
-            warn_if_no_chains=True,
+    return AlkahestClientPolicy(
+        private_key=private_key,
+        chains=tuple(
+            AlkahestChain(
+                name=name,
+                rpc_url=chain.rpc_url,
+                address_book=books[name],
+            )
+            for name, chain in CHAINS.items()
         ),
-        logger=logger,
+    )
+
+
+def _build_alkahest_chain_probe(
+    section: Any,
+    alkahest_clients: dict[str, Any],
+    *,
+    private_key: str,
+    constructor: AlkahestClientConstructor,
+    json_rpc: JsonRpcCall,
+) -> AlkahestChainProbe:
+    """The chain probe over every configured chain, owning ``alkahest_clients``.
+
+    ``constructor`` and ``json_rpc`` are its two boundaries, the SDK and the
+    chain's JSON-RPC endpoint.
+    """
+    books = chain_address_books()
+    return AlkahestChainProbe(
+        [
+            ProbedChain.from_config(name, chain, address_book=books[name])
+            for name, chain in CHAINS.items()
+        ],
+        build_client=constructor(_alkahest_client_policy(private_key)),
+        clients=alkahest_clients,
+        interval_seconds=section.probe_interval_seconds,
+        rpc_timeout_seconds=section.rpc_timeout_seconds,
+        json_rpc=json_rpc,
     )
 
 
 def _build_inference_services(
     domain: MarketDomainContract,
+    seams: InferenceCompositionSeams = InferenceCompositionSeams(),
 ) -> InferenceStorefrontServices:
     require_startable_storefront()
     validate_mechanism_configuration()
@@ -260,13 +310,25 @@ def _build_inference_services(
         role="seller",
     )
     # A configured section services the deals accepted under it whether or not
-    # it publishes, so its chain clients are built either way. The chain
-    # clients sign with, and escrows release to, the one resolved wallet.
+    # it publishes, so its chain probe is composed either way. The probe owns
+    # the client map, empty until its first step constructs each client,
+    # bounded: a websocket client connects while it is built, and startup must
+    # not wait on a chain. Every consumer below is handed this one dict, which
+    # the probe updates in place. The chain clients sign with, and escrows
+    # release to, the one resolved wallet.
+    alkahest_section = settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY)
     seller_wallet: str | None = None
     alkahest_clients: dict[str, Any] = {}
-    if settlement_config.mechanism_config(ALKAHEST_CONFIG_KEY) is not None:
+    alkahest_chain_probe: AlkahestChainProbe | None = None
+    if alkahest_section is not None:
         seller_wallet, private_key = resolve_evm_wallet()
-        alkahest_clients = _build_alkahest_clients(private_key)
+        alkahest_chain_probe = _build_alkahest_chain_probe(
+            alkahest_section,
+            alkahest_clients,
+            private_key=private_key,
+            constructor=seams.alkahest_client_constructor,
+            json_rpc=seams.alkahest_json_rpc,
+        )
     sqlite_client = get_sqlite_client(
         local_listing_principal=marketplace_signer.identity,
         expected_legacy_sellers=(BASE_URL_OVERRIDE,),
@@ -279,6 +341,7 @@ def _build_inference_services(
         chain_clients=alkahest_clients,
         marketplace_signer=marketplace_signer,
         failure_policy=failure_policy,
+        chain_probe=alkahest_chain_probe,
     )
     negotiation_runtime = build_inference_negotiation_runtime(
         domain,
@@ -318,6 +381,7 @@ def _build_inference_services(
         marketplace_signer=marketplace_signer,
         seller_wallet=seller_wallet,
         alkahest_clients=alkahest_clients,
+        alkahest_chain_probe=alkahest_chain_probe,
         settlement_repository=settlement_repository,
         settlement_runtime=settlement_runtime,
         settlement_worker=settlement_worker,
@@ -348,6 +412,7 @@ async def _start_inference_services(
 
     _container.resolved_market_domain = services.domain
     _container.resolved_sqlite_client = services.sqlite_client
+    _container.resolved_alkahest_chain_probe = services.alkahest_chain_probe
     _container.resolved_settlement_repository = services.settlement_repository
     _container.resolved_settlement_runtime = services.settlement_runtime
     _container.resolved_settlement_worker = services.settlement_worker
@@ -423,8 +488,13 @@ def build_inference_storefront_registry(
 def build_inference_storefront_app(
     *,
     registry: StorefrontDomainRegistry,
+    seams: InferenceCompositionSeams = InferenceCompositionSeams(),
 ) -> Any:
-    """Build the inference app from one frozen domain registration."""
+    """Build the inference app from one frozen domain registration.
+
+    ``seams`` defaults to production's Alkahest client construction and chain
+    transport.
+    """
 
     registration = registry.resolve_mode(INFERENCE_OFFERING_MODE)
     domain = registration.contract
@@ -434,7 +504,7 @@ def build_inference_storefront_app(
             raise RuntimeError(
                 "storefront kit supplied a domain outside the inference registration"
             )
-        return _build_inference_services(selected)
+        return _build_inference_services(selected, seams)
 
     return build_composed_storefront_app(
         StorefrontComposition(

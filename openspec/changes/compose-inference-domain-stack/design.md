@@ -357,6 +357,38 @@ therefore this change's proof, not only its cheapest one, and the plan's
 sections assume it; a third-party seller or buyer, when one appears, is
 `package-inference-seller`'s and `qualify-inference-market`'s to answer.
 
+### D19. The storefront starts without its dependencies
+
+*Added 2026-11-10, on merging `dev`.* The storefront follows the API-credits
+storefront wherever inference's market does not require a difference, which
+`ARCHITECTURE.md` asks of two domains handling one concern, and the
+deployment-state requirement "A deployment does not wait on a service's
+dependencies" governs its startup. Four outcomes of implementation reviews 08,
+09, and 12 are replaced, at the owner's direction:
+
+- **No authority preflight.** Startup no longer waits for a signed probe of the
+  inference authority. The listing seed waits for the authority and each call
+  to it is retried. `credits.fail_on_unreachable` and
+  `credits.preflight_timeout` are removed, and a configuration still stating
+  either is refused at startup by name, since ignoring it would change
+  behaviour silently.
+- **Configuration is still refused.** What waiting cannot repair stops startup
+  before the database opens: an unset `[credits].service_url`, a missing
+  signing credential, a missing authority trust set, an unreadable capacity
+  configuration, and a settlement priority naming another mechanism.
+- **The chain probe owns the chain clients.** The storefront composes
+  `AlkahestChainProbe`; no client is built at startup, and readiness reports a
+  chain that does not answer. The `publish` and `listings` commands are
+  therefore clients of the running storefront, since a service set composed
+  for one command reaches no chain.
+- **The seller is one account.** `[wallet].address` is optional and defaults to
+  the account the key signs as. An address naming another account does not
+  refuse startup; Alkahest readiness reports
+  `alkahest.wallet_address_mismatch` and no Alkahest option publishes.
+
+No dispute policy is composed: inference settles through Alkahest alone, and
+nothing on that path reads one.
+
 ### F4 (design review 01). A key is scoped to its first grant
 
 The family authority binds a key to the `(service, resource_id)` of the grant

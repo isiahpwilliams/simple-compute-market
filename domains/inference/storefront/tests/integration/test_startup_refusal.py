@@ -5,12 +5,15 @@ from __future__ import annotations
 import pytest
 
 from inference_storefront import container
+from inference_storefront.retired_settings import RETIRED_SETTINGS_HEADING
 from inference_storefront.startup_refusal import (
     AUTHORITY_HEADING,
+    CREDITS_HEADING,
     MECHANISM_HEADING,
     StorefrontStartupError,
 )
 from tests.integration.conftest import (
+    AUTHORITY_SIGNER,
     AUTHORITY_URL,
     app,
     replaced,
@@ -61,3 +64,42 @@ async def test_every_problem_is_reported_together(storefront, monkeypatch):
 
     assert MECHANISM_HEADING in refusal
     assert AUTHORITY_HEADING in refusal
+
+
+async def test_an_unset_authority_url_fails_startup(storefront):
+    # The signer, trust set, and capacity are all valid; only the URL is empty.
+    with replaced(
+        credits={
+            "service_url": "",
+            "expected_authorities": {
+                "identities": [AUTHORITY_SIGNER.identity.model_dump(mode="json")]
+            },
+        }
+    ):
+        refusal = await _refused(storefront)
+
+    assert refusal == f"{CREDITS_HEADING}: [credits].service_url is not configured"
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("fail_on_unreachable", True),
+        ("fail_on_unreachable", False),
+        ("preflight_timeout", 30),
+    ],
+)
+async def test_a_removed_preflight_setting_fails_startup_naming_it(storefront, key, value):
+    with replaced(
+        credits={
+            "service_url": AUTHORITY_URL,
+            key: value,
+            "expected_authorities": {
+                "identities": [AUTHORITY_SIGNER.identity.model_dump(mode="json")]
+            },
+        }
+    ):
+        refusal = await _refused(storefront)
+
+    assert refusal.startswith(f"{RETIRED_SETTINGS_HEADING}: credits.{key} was removed: ")
+    assert "starts without waiting for its inference authority" in refusal

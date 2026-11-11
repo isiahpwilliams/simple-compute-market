@@ -969,6 +969,9 @@ cards are publishable without metered consumption").
       because they must follow `--config`, as each says, and the one that does
       not resolve settings moved to module level. The API-credits root's
       retired-settings refusal is not copied: this storefront renamed nothing.
+      *Amended (design D19):* the storefront now has a retired-settings
+      catalogue, `retired_settings.py`, for the two preflight settings it
+      removed.
       `rich` and `alkahest-py`, declared by the precedent without an import,
       are not declared (the Alkahest kit declares `alkahest-py`).
 - [x] 5.2 `src/inference_storefront/container.py`: `SELLING_CONTRIBUTIONS =
@@ -1302,6 +1305,19 @@ cards are publishable without metered consumption").
       off at the deadline counts as unreachable. Evidence: the storefront
       suite passes (49), with a test that a probe which never answers ends
       within the configured one-second deadline; it fails before the fix.
+      *Superseded (design D19, on merging `dev`):* the preflight, its two
+      settings, the wallet-mismatch startup refusal, and the chain clients
+      built at startup are gone; the storefront starts without its
+      dependencies, composes the Alkahest chain probe, refuses the two removed
+      settings and an unset `[credits].service_url`, and its `publish` and
+      `listings` commands call the running storefront. Evidence: `make -C
+      domains/inference test-storefront` passes (56), with tests for the shared probe
+      and client map, a chain client that never finishes building, startup
+      with its loops while the authority and site do not answer, a key-only
+      wallet, a mismatched address, each removed setting, an unset authority
+      URL, and the listing commands composing no services; the inference lane's
+      `e2e_inference_deal` passed on a local arm64 host before the last two
+      refusals were added.
 
 *Fix (found bringing the stack up in section 10):* the family's Alkahest
 seller stage published every escrow rate `per: "token"`, API credits' unit,
@@ -2262,4 +2278,5 @@ part that would need a code edit returns the change to implementation.
 | plan review 06 F1 — the gateway discovers the listing it fronts by resource and served model, retrying until published | the `inference` capability's `spec.md` — "The gateway admits only paid requests for listed models"; its `architecture.md` — "Role composition over the family kit" |
 | plan review 06 F3 — the request charge is positive and ledger-bounded | the `inference` capability's `spec.md` — "Only request-priced rate cards are publishable without metered consumption"; the `api-family` capability's `spec.md` — "The issuance subject may carry accepted terms" |
 | review 01 F2 — a top-up is admitted after the gate's verification TTL | the `inference` capability's `spec.md` — "The gateway admits only paid requests for listed models"; its `architecture.md` — "Current limits" |
+| D19 — the storefront starts without its dependencies, refuses what waiting cannot repair, reaches chains through the probe, and names the seller by its key's account | the `inference` capability's `architecture.md` — "Role composition over the family kit" |
 | Roadmap and index currency (closeout parts 5 and 6) | `docs/development/ROADMAP.md` — Goal 9 current state and gap table; `openspec/changes/README.md` — this change's row and the Goal 9 campaign graph |

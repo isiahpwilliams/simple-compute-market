@@ -1,9 +1,9 @@
 """Configuration the storefront refuses to start under.
 
-Checked before the signer, database, or any loop starts, so a malformed
-capacity site, poll interval, `[settlement].priority`, or authority trust
-cannot stop startup partway, and every problem is reported together under its
-heading.
+Checked before the signer, database, or any loop starts, so a removed setting,
+an unset `[credits].service_url`, or a malformed capacity site, poll interval,
+`[settlement].priority`, or authority trust cannot stop startup partway, and
+every problem is reported together under its heading.
 
 Only the configuration is judged here. Whether the inference authority, a site,
 or a chain answers is not: the storefront starts while any is unreachable, and
@@ -15,14 +15,20 @@ from __future__ import annotations
 from dynaconf import Dynaconf
 
 from inference_storefront.container import SELLER_STAGES
+from inference_storefront.retired_settings import (
+    RETIRED_SETTINGS_HEADING,
+    retired_setting_problems,
+)
 from inference_storefront.utils.config import (
     capacity_poll_interval,
     configured_site_ids,
     credits_expected_authorities,
+    credits_service_url,
     resolve_identity_signer,
     settlement_config_mapping,
 )
 
+CREDITS_HEADING = "the storefront has no inference authority to sell for"
 CAPACITY_HEADING = "the storefront cannot read its capacity configuration"
 MECHANISM_HEADING = "the storefront is configured for a settlement mechanism it does not compose"
 AUTHORITY_HEADING = "the storefront cannot authenticate to its inference authority"
@@ -30,6 +36,13 @@ AUTHORITY_HEADING = "the storefront cannot authenticate to its inference authori
 
 class StorefrontStartupError(RuntimeError):
     """The storefront's configuration states a setting it cannot read or honour."""
+
+
+def credits_configuration_problems() -> list[str]:
+    """Why the storefront has no inference authority to sell for, if it has none."""
+    if not credits_service_url():
+        return ["[credits].service_url is not configured"]
+    return []
 
 
 def capacity_configuration_problems() -> list[str]:
@@ -86,6 +99,8 @@ def require_startable_storefront(source: Dynaconf | None = None) -> None:
     sections = [
         f"{heading}: " + "; ".join(problems)
         for heading, problems in (
+            (RETIRED_SETTINGS_HEADING, retired_setting_problems(source)),
+            (CREDITS_HEADING, credits_configuration_problems()),
             (CAPACITY_HEADING, capacity_configuration_problems()),
             (MECHANISM_HEADING, mechanism_configuration_problems(source)),
             (AUTHORITY_HEADING, authority_configuration_problems()),
@@ -99,10 +114,12 @@ def require_startable_storefront(source: Dynaconf | None = None) -> None:
 __all__ = [
     "AUTHORITY_HEADING",
     "CAPACITY_HEADING",
+    "CREDITS_HEADING",
     "MECHANISM_HEADING",
     "StorefrontStartupError",
     "authority_configuration_problems",
     "capacity_configuration_problems",
+    "credits_configuration_problems",
     "mechanism_configuration_problems",
     "require_startable_storefront",
 ]

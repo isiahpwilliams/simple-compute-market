@@ -12,7 +12,9 @@ from typing import Any
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from apicredits_service.container import bootstrap
+from arkhai_api_authority import migrate_database
+
+from apicredits_service.migrate import CHAIN
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "baseline" / "schema.json"
 
@@ -23,7 +25,7 @@ def _fresh_database() -> sqlite3.Connection:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    bootstrap(engine)
+    migrate_database(engine, CHAIN)
     return engine.raw_connection().driver_connection
 
 

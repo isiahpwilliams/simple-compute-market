@@ -1,5 +1,6 @@
-"""Each capacity reconciliation starts with its source pass and ends by converging,
-and publishes only the domain's own listings."""
+"""Each capacity reconciliation starts with its source pass and ends by converging
+the registries, then retiring the listings it does not hold, and publishes only
+the domain's own listings."""
 
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from tests.bundles import EXAMPLE
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["reserved", "released", None])
-async def test_every_reconciliation_ends_by_converging_the_registries(
+async def test_every_reconciliation_ends_by_converging_then_sweeping_the_registries(
     monkeypatch, kind
 ):
     db = object()
@@ -38,6 +39,7 @@ async def test_every_reconciliation_ends_by_converging_the_registries(
     monkeypatch.setattr(publication, "close_after_capacity_change", await record("close"))
     monkeypatch.setattr(publication, "reopen_after_capacity_change", await record("reopen"))
     monkeypatch.setattr(publication, "converge", await record("converge"))
+    monkeypatch.setattr(publication, "retire_unheld", await record("retire"))
 
     await publication.reconciler(lambda: db)(
         CapacityReconcileContext(
@@ -52,8 +54,11 @@ async def test_every_reconciliation_ends_by_converging_the_registries(
     # A pool move is fed as a release, so the source pass cannot wait for a
     # consuming event.
     assert calls[0] == "source"
-    assert calls[-1] == "converge"
+    # Convergence repairs what the storefront records; the sweep then closes
+    # what it does not hold, so it runs last.
+    assert calls[-2:] == ["converge", "retire"]
     assert calls.count("converge") == 1
+    assert calls.count("retire") == 1
 
 
 def _candidate(listing_resource, mode="example"):
@@ -62,7 +67,7 @@ def _candidate(listing_resource, mode="example"):
 
 
 def test_a_candidate_must_be_the_domains_listing_under_its_offering_mode():
-    hooks = QuotaPublicationHooks(EXAMPLE, db=object())
+    hooks = QuotaPublicationHooks(EXAMPLE, db=object(), publisher=lambda: None)
 
     hooks.validate_candidate(_candidate('{"product": "Example", "quota": "quota-a"}'))
     with pytest.raises(CapacityBindingError, match="not the domain's"):

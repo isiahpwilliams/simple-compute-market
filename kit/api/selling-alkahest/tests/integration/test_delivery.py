@@ -20,6 +20,7 @@ from arkhai_api.issuance import IssuanceRequest, accepted_terms_digest, issuance
 from arkhai_api_client import AuthorityError
 from arkhai_api_selling.evidence_store import IssuanceEvidenceRepository, IssuanceEvidenceService
 from arkhai_api_selling.issuance import fulfill_from_hold, project_progress
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.persistence import StorefrontSQLiteClient
 from arkhai_api_selling.settlement_composition import persist_settlement_outcome
 from market_alkahest import RECIPIENT_RELEASE
@@ -36,7 +37,7 @@ from arkhai_api_selling_alkahest.stage import (
     AlkahestFulfillmentInput,
     AlkahestSellerStage,
 )
-from tests.bundles import BUYER, ESCROW_UID, EXAMPLE, LISTING, NEGOTIATION, SELLER, accepted_deal, obligation
+from tests.bundles import BUYER, CHAIN, ESCROW_UID, EXAMPLE, LISTING, NEGOTIATION, SELLER, accepted_deal, obligation
 
 IssuanceResult = issuance_result_model(EXAMPLE.label)
 
@@ -95,8 +96,9 @@ class Chain:
 
 class Harness:
     def __init__(self, tmp_path, authority: Authority, contributions=EXAMPLE) -> None:
+        migrate_storefront_database(CHAIN, tmp_path / "storefront.db")
         self.db = StorefrontSQLiteClient(str(tmp_path / "storefront.db"), EXAMPLE)
-        self.repository = SettlementSQLiteRepository(self.db.db_path, apply_migrations=False)
+        self.repository = SettlementSQLiteRepository(self.db.db_path)
         self.runtime = SettlementRuntime(self.repository, {})
         self.authority = authority
         self.events: list[tuple[str, str]] = []

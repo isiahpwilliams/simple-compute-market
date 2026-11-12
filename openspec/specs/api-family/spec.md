@@ -291,7 +291,7 @@ client cannot be built MUST NOT stop startup.
 ### Requirement: Each domain composes the authority kit in its own service root
 
 The authority library MUST own the key service, the prepaid ledger, the
-quota-as-capacity composition, the models and in-process migration chain, the
+quota-as-capacity composition, the models and migration chain, the
 framework-free route services, and the route-declaration adapter, and MUST NOT
 construct an application, install authentication, or mount routes. Each
 API-selling domain MUST have a service composition root that creates the

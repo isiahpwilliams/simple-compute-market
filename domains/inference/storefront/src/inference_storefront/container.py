@@ -39,6 +39,7 @@ from market_storefront_kit import TradingPause
 
 from inference_storefront.issuance import issuance_projection
 from inference_storefront.materialization import public_result_extension
+from inference_storefront.migrate import TABLE_PREFIX
 from inference_storefront.model_card import publication_mapping
 from inference_storefront.rate_card_guard import request_priced_guard
 from inference_storefront.utils import config
@@ -65,7 +66,7 @@ SELLING_CONTRIBUTIONS = SellingContributions(
     kind=INFERENCE_KIND,
     offering_mode=INFERENCE_OFFERING_MODE,
     contribution_id="inference",
-    table_prefix="inference",
+    table_prefix=TABLE_PREFIX,
     listing_schema=InferenceListing,
     publication_mapping=publication_mapping,
     issuance_projection=issuance_projection,
@@ -76,33 +77,19 @@ SELLING_CONTRIBUTIONS = SellingContributions(
 )
 
 
-def storefront_sqlite_client(db_path: str, **options: Any) -> StorefrontSQLiteClient:
+def storefront_sqlite_client(db_path: str) -> StorefrontSQLiteClient:
     """The storefront's persistence over ``db_path``, under the inference bundle."""
-    return StorefrontSQLiteClient(db_path, SELLING_CONTRIBUTIONS, **options)
+    return StorefrontSQLiteClient(db_path, SELLING_CONTRIBUTIONS)
 
 
 _sqlite_client: StorefrontSQLiteClient | None = None
 
 
-def get_sqlite_client(
-    *,
-    local_listing_principal: Identity | None = None,
-    expected_legacy_sellers: tuple[str, ...] | None = None,
-) -> StorefrontSQLiteClient:
+def get_sqlite_client() -> StorefrontSQLiteClient:
     """The process's one client over the configured database, composed on first use."""
     global _sqlite_client
-    if _sqlite_client is None and (
-        local_listing_principal is None or expected_legacy_sellers is None
-    ):
-        raise RuntimeError(
-            "initial SQLite composition requires local listing migration context",
-        )
     if _sqlite_client is None:
-        _sqlite_client = storefront_sqlite_client(
-            config.settings.db_path,
-            local_listing_principal=local_listing_principal,
-            expected_legacy_sellers=expected_legacy_sellers,
-        )
+        _sqlite_client = storefront_sqlite_client(config.settings.db_path)
     return _sqlite_client
 
 
@@ -121,12 +108,20 @@ def _registry_client() -> MultiRegistryClient:
     )
 
 
+def _registry_publisher() -> Identity:
+    signer = resolved_marketplace_signer
+    if signer is None:
+        raise RuntimeError("storefront marketplace signer is not initialized")
+    return signer.identity
+
+
 def _registry_publication() -> RegistryPublication:
     return RegistryPublication(
         enabled=config.settings.enable_registry_discovery,
         registry_urls=tuple(config.settings.registry.urls),
         storefront_url=config.BASE_URL_OVERRIDE,
         client_factory=_registry_client,
+        publisher=_registry_publisher,
     )
 
 

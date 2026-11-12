@@ -1,0 +1,34 @@
+"""The storefront's migration chain and its command, ``apicredits-storefront-migrate [--check]``.
+
+The chain is the family selling library's under this storefront's table prefix,
+named for this storefront. The command loads the layered settings alone, so it
+runs without the storefront's chains or identity; Compose runs it before
+``serve`` in the storefront's container, and ``make migrate`` runs it for local
+development.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from arkhai_api_selling.migrate import main as run_migration_command
+from arkhai_api_selling.migrations import storefront_chain
+
+from apicredits_storefront.settings_source import settings_source
+
+TABLE_PREFIX = "api_credit"
+"""Names this storefront's family tables; its selling bundle carries the same."""
+
+CHAIN = storefront_chain(
+    TABLE_PREFIX,
+    service="the API-credit storefront",
+    command="apicredits-storefront-migrate",
+)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    run_migration_command(CHAIN, settings_source, argv)
+
+
+if __name__ == "__main__":
+    main()

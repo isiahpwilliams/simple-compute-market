@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 
+from core_database import core_database
 from market_core import DomainIdentity
 from market_identity import Identity, IdentityScheme
 
@@ -30,7 +31,7 @@ _CREATED_AT = "2026-08-15T00:00:00Z"
 
 
 async def _store(tmp_path, count: int) -> SQLiteClient:
-    client = SQLiteClient(str(tmp_path / "storefront.db"))
+    client = SQLiteClient(core_database(tmp_path / "storefront.db"))
     for index in range(count):
         listing_id = f"listing-{index:03d}"
         source = {"pool_id": "pool-a", "listing": listing_id}

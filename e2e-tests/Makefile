@@ -94,25 +94,27 @@ test-container-module:
 # passes its own.
 NETWORK ?= simple-market-service_default
 BUYER_MODULE ?= e2e_deal_buyer_cli or e2e_buy
-# The engine socket to mount into the test container; empty mounts none.
-BUYER_MACHINE_DOCKER_SOCKET ?=
 # The VM lane's scenarios. `e2e_alkahest_escrow_codecs` and
 # `e2e_alkahest_trusted_oracle` need only the chain and its funded buyer and
 # seller wallets, and stay here; `multi_registry` reads VM's two registries;
 # `e2e_non_erc20_settlement` settles native-token and ERC1155 escrows against
 # the dev chain's own deployments. `e2e_vm_real_provisioning` is in no lane: it
 # provisions on a real KVM host an operator provides, which the pipeline never
-# has, and runs from the operator's machine through `test-module`.
+# has, and runs from the operator's machine through `test-module`. The six
+# `e2e_vm_dispute_*` scenarios each run on a deal of their own, and each removes
+# its rules from the lane's doubles and resets their clocks when it ends, so
+# they need no order among themselves.
 E2E_MODULE ?= e2e_vm_payment_deal or e2e_vm_payment_purchase or e2e_deal or e2e_deal_buyer_cli or e2e_buy or multi_registry \
+              or e2e_vm_dispute_ruled_end or e2e_vm_dispute_discount or e2e_vm_dispute_lost_filing \
+              or e2e_vm_dispute_mediation_unavailable or e2e_vm_dispute_payments_hold \
+              or e2e_vm_dispute_hold_passed \
               or e2e_compute_dynamic_listings or e2e_alkahest_escrow_codecs \
               or e2e_alkahest_trusted_oracle \
               or e2e_listing_shapes or e2e_vm_introduction \
               or e2e_non_erc20_settlement
 # The API-credit lane's scenarios. The payment deal runs against the lane's
-# payments double; the upgrade/rollback scenario runs last over the database the
-# deal scenarios wrote.
-E2E_APICREDITS_MODULE ?= e2e_credits_deal or e2e_credits_payment_deal \
-                         or e2e_credits_service_rollback
+# payments double.
+E2E_APICREDITS_MODULE ?= e2e_credits_deal or e2e_credits_payment_deal
 # The inference lane's scenario.
 E2E_INFERENCE_MODULE ?= e2e_inference_deal
 # The bare-metal lane's scenarios. `e2e_bare_metal_deal` is in neither lane: it
@@ -123,10 +125,11 @@ E2E_BARE_METAL_MODULE ?= e2e_bare_metal_publication or e2e_bare_metal_introducti
 
 # The runner's profiles, from config/: each lane target layers the shared
 # payments profile and its own, `docker,payments-lane,<lane>-lane`, so the
-# payment scenarios reach the lane's payments double; unset, the runner has no
-# payments target, as a run against none does. A rerun against a lane's stack
-# passes that lane's list. The lane CA is mounted where config-payments-lane.yml's
-# ca_bundle_path names it; nothing else reaches the runner's environment.
+# payment scenarios reach the lane's payments and mediation doubles; unset, the
+# runner has neither target, as a run against none does. A rerun against a lane's
+# stack passes that lane's list. The lane CA, which issues both doubles'
+# certificates, is mounted where config-payments-lane.yml's ca_bundle_paths name
+# it; nothing else reaches the runner's environment.
 RUNNER_PROFILES ?= docker
 
 test-buyer-machine:
@@ -134,13 +137,12 @@ test-buyer-machine:
 		--network=$(NETWORK) \
 		-e ACTIVE_PROFILES=$(RUNNER_PROFILES) \
 		-e CONFIG_DIRECTORY=/app/config \
-		-v $(abspath $(CURDIR)/../tools/payments-lane-double/tls/lane-ca.pem):/run/payments-lane-double/lane-ca.pem:ro \
+		-v $(abspath $(CURDIR)/../tools/lane-double-controls/tls/lane-ca.pem):/run/lane-doubles/lane-ca.pem:ro \
 		-v $(CURDIR)/tests:/app/tests:ro \
 		-v $(CURDIR)/src:/app/src:ro \
 		-v $(CURDIR)/config:/app/config:ro \
 		-v $(CURDIR)/conftest.py:/app/conftest.py:ro \
 		-v $(CURDIR)/pyproject.toml:/app/pyproject.toml:ro \
-		$(if $(BUYER_MACHINE_DOCKER_SOCKET),-v $(BUYER_MACHINE_DOCKER_SOCKET):/var/run/docker.sock,) \
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		.venv/bin/pytest -m "$(BUYER_MODULE)" $(PYTEST_ARGS)
 
@@ -298,7 +300,7 @@ test-e2e-apicredits:
 	cd .. && $(call e2e_up,$(E2E_APICREDITS_COMPOSE))
 	cd .. && $(call e2e_check_payments,$(E2E_APICREDITS_COMPOSE),credits-storefront,apicredits-storefront)
 	$(MAKE) test-buyer-machine NETWORK=$(E2E_APICREDITS_PROJECT)_default BUYER_MODULE="$(E2E_APICREDITS_MODULE)" \
-		RUNNER_PROFILES=docker,payments-lane,apicredits-lane BUYER_MACHINE_DOCKER_SOCKET=/var/run/docker.sock
+		RUNNER_PROFILES=docker,payments-lane,apicredits-lane
 
 e2e-apicredits-down:
 	cd .. && docker compose $(E2E_APICREDITS_COMPOSE) down -v --remove-orphans
@@ -307,18 +309,20 @@ e2e-apicredits-logs:
 	@cd .. && docker compose $(E2E_APICREDITS_COMPOSE) logs --no-color
 
 # Inference lane: the inference registry, service, gateway, model stub, and
-# storefront, the lane's own compute and API-credit registries, and the dev
-# chain; see compose.inference-lane.yml. Inference settles through Alkahest
-# alone, so the lane runs no payments double and its runner no payments profile.
+# storefront, the lane's own compute and API-credit registries, the lane doubles,
+# and the dev chain; see compose.inference-lane.yml. Inference settles through
+# Alkahest alone, so no scenario pays through the payments double; the lane runs
+# both doubles so its registries recommend the dispute authority every lane does.
 E2E_INFERENCE_PROJECT := simple-market-inference
 E2E_INFERENCE_COMPOSE := -p $(E2E_INFERENCE_PROJECT) -f compose.inference.yml \
-	-f compose.inference-local.yml -f compose.inference-lane.yml
+	-f compose.inference-local.yml -f compose.payments-double.yml -f compose.inference-lane.yml
 
 test-e2e-inference:
 	cd .. && docker compose $(E2E_INFERENCE_COMPOSE) down -v --remove-orphans
 	cd .. && $(MAKE) build-e2e-inference
 	cd .. && $(call e2e_up,$(E2E_INFERENCE_COMPOSE))
-	$(MAKE) test-buyer-machine NETWORK=$(E2E_INFERENCE_PROJECT)_default BUYER_MODULE="$(E2E_INFERENCE_MODULE)"
+	$(MAKE) test-buyer-machine NETWORK=$(E2E_INFERENCE_PROJECT)_default BUYER_MODULE="$(E2E_INFERENCE_MODULE)" \
+		RUNNER_PROFILES=docker,payments-lane
 
 e2e-inference-down:
 	cd .. && docker compose $(E2E_INFERENCE_COMPOSE) down -v --remove-orphans

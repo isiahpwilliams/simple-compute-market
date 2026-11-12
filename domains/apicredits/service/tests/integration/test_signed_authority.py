@@ -32,6 +32,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from arkhai_api.issuance import KeyDisposition, fulfillment_id, issuance_request
+from arkhai_api_authority import IncompatibleDatabase
 from arkhai_api_client import AuthorityAuthenticationError, AuthorityClient, AuthorityError
 from arkhai_api_contracts.models import ConsumeOutcome, ConsumeRefusal, VerifyResponse
 from arkhai_api_contracts.refusals import CONSUME_REFUSALS
@@ -49,6 +50,8 @@ from market_identity import (
 )
 from market_resource_pools import read_site_declarations
 from market_resource_pools_contracts import BACKED
+
+from tests.integration.signed_service import migrate_service_database
 
 AUTHORITY_SEED = b"credits-authority-seed-32-byte!!"
 STOREFRONT_SIGNER = Ed25519Signer(b"credits-storefront-seed-32-byte!")
@@ -121,6 +124,8 @@ def _load_app(directory: Path, monkeypatch, *, with_identity: bool):
     for name in _MODULES:
         sys.modules.pop(name, None)
     main = importlib.import_module("apicredits_service.main")
+    # The service starts only on a database its migration command built.
+    migrate_service_database(directory / "credits.db")
     # `main` imports the container under an alias, so the module is reached
     # directly rather than through it.
     importlib.import_module("apicredits_service.container").init()
@@ -145,6 +150,32 @@ def signed_app(tmp_path: Path, monkeypatch) -> Iterator[Any]:
     yield main.app
     for name in _MODULES:
         sys.modules.pop(name, None)
+
+
+def test_the_service_refuses_to_start_on_a_database_it_has_not_migrated(
+    tmp_path: Path, monkeypatch,
+):
+    """The composition's startup checks the database before building anything,
+    and leaves no file where none was migrated."""
+    _write_config(tmp_path, with_identity=False)
+    database = tmp_path / "credits.db"
+    monkeypatch.setenv("CONFIG_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("APICREDITS_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.delenv("APICREDITS_SITE_SIGNING_KEY_FILE", raising=False)
+    monkeypatch.delenv("APICREDITS_TRUSTED_PRINCIPALS", raising=False)
+    for name in _MODULES:
+        sys.modules.pop(name, None)
+    try:
+        container = importlib.import_module("apicredits_service.container")
+        with pytest.raises(IncompatibleDatabase) as refused:
+            container.init()
+    finally:
+        for name in _MODULES:
+            sys.modules.pop(name, None)
+
+    assert "`apicredits-service-migrate`" in str(refused.value)
+    assert container.resolved_keys_service is None
+    assert not database.exists()
 
 
 @pytest_asyncio.fixture

@@ -47,8 +47,8 @@ BUILT_HERE = "arkhai"
 BUILT_IMAGES = ("apicredits-sample-app", "apicredits-service", "apicredits-storefront",
                 "bare-metal-storefront", "compute-provisioning", "dev-env", "e2e-tests",
                 "frp-grant-admission", "inference-gateway", "inference-model-stub",
-                "inference-service", "inference-storefront", "payments-lane-double",
-                "registry", "storefront")
+                "inference-service", "inference-storefront", "mediation-lane-double",
+                "payments-lane-double", "registry", "storefront")
 _CHANGE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _KEY = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z0-9_.-]+):(?P<value>.*)$")
 

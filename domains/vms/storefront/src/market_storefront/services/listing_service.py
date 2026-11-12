@@ -34,7 +34,7 @@ from core_storefront.stage_log import stage_event
 from market_core.schemas import settlement_option_schema
 from arkhai_vms_listings.models import Listing
 from arkhai_vms_listings.resources import parse_resource_from_dict
-from arkhai_vms_negotiation.policies import _amount_from_proposal
+from arkhai_vms_negotiation.policies import amount_from_proposal
 from market_capacity_publication import (
     CapacityRuntime,
     PublicationBinding,
@@ -98,7 +98,7 @@ class DerivedVmListing:
     clauses: tuple[SettlementPublicationClause, ...]
     binding: Any
     #: A shape-priced listing's resolved family rates, recorded beside the
-    #: listing as a term of sale and never sent to a registry; ``None`` for a
+    #: listing as a published term of sale; ``None`` for a
     #: flat-priced listing.
     rate_structure: Mapping[str, Any] | None = None
 
@@ -803,6 +803,7 @@ class ListingService:
             )
             return CreateListingResponse(status="created", listing_id=listing_id)
 
+        listing_dict["rate_structure"] = derived.rate_structure
         publish_result = await self._publish_to_registries(listing_dict)
         return CreateListingResponse(
             status="created",

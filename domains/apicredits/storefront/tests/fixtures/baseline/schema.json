@@ -1,25 +1,11 @@
 {
   "migrations": [
-    "20260604_000_listing_resource_timestamps",
-    "20260604_004_negotiation_amount_text_columns",
-    "20260604_005_escrows_and_listings",
-    "20260722_001_capacity_holds_reservation_id",
-    "20260810_003_negotiation_provision_terms",
-    "20260811_001_marketplace_principals_v2",
-    "20260811_002_replay_attempt_leases",
-    "20260815_001_storefront_domain_bindings",
-    "20260911_001_listing_resource_column",
-    "20260923_001_listing_binding_capacity_backing",
-    "20260923_002_listing_binding_capacity_backing_required",
-    "20260923_003_listing_closed_by",
-    "20261001_001_listing_rate_structure",
-    "20260810_001_settlement_obligation_lifecycle",
-    "20260810_002_settlement_servicing_runtime",
-    "20260811_003_settlement_principal_authorization",
-    "20260815_004_settlement_mechanism_materialization_params",
-    "20261028_005_settlement_operation_awaiting_delivery",
-    "20260810_001_escrow_settlement_identity",
-    "20260815_002_issuance_evidence"
+    "v0_3_0_baseline_core_storefront",
+    "v0_3_0_baseline_settlement_runtime",
+    "v0_3_0_baseline_apicredits_storefront",
+    "20261106_001_negotiation_message_terms",
+    "20261111_001_publication_published_payload",
+    "20261111_002_negotiation_negotiated_scalar"
   ],
   "tables": {
     "api_credit_issuance_evidence": {
@@ -410,7 +396,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE auth_replay_reservations (\n                  principal_scheme TEXT NOT NULL,\n                  principal_identifier TEXT NOT NULL,\n                  request_id TEXT NOT NULL,\n                  request_hash TEXT NOT NULL,\n                  response_status INTEGER,\n                  response_body TEXT,\n                  attempt_token TEXT,\n                  lease_until INTEGER,\n                  created_at TEXT NOT NULL,\n                  PRIMARY KEY (principal_scheme, principal_identifier, request_id)\n                )",
+      "sql": "CREATE TABLE auth_replay_reservations (\n      principal_scheme TEXT NOT NULL,\n      principal_identifier TEXT NOT NULL,\n      request_id TEXT NOT NULL,\n      request_hash TEXT NOT NULL,\n      response_status INTEGER,\n      response_body TEXT,\n      attempt_token TEXT,\n      lease_until INTEGER,\n      created_at TEXT NOT NULL,\n      PRIMARY KEY (principal_scheme, principal_identifier, request_id)\n    )",
       "triggers": []
     },
     "capacity_holds": {
@@ -470,7 +456,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE capacity_holds (\n                  negotiation_id TEXT PRIMARY KEY,\n                  listing_id TEXT,\n                  capacity_reservation_id TEXT NOT NULL,\n                  payload TEXT,\n                  expires_at TEXT,\n                  created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))\n                )",
+      "sql": "CREATE TABLE capacity_holds (\n      negotiation_id TEXT PRIMARY KEY,\n      listing_id TEXT,\n      capacity_reservation_id TEXT NOT NULL,\n      payload TEXT,\n      expires_at TEXT,\n      created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))\n    )",
       "triggers": []
     },
     "credentials": {
@@ -570,7 +556,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE credentials (\n                  id TEXT PRIMARY KEY,\n                  listing_id TEXT NOT NULL,\n                  role TEXT NOT NULL,\n                  granted_to TEXT NOT NULL,\n                  password TEXT,\n                  ssh_commands TEXT,\n                  ssh_key_path_host TEXT,\n                  key_type TEXT,\n                  created_at TEXT NOT NULL\n                )",
+      "sql": "CREATE TABLE credentials (\n      id TEXT PRIMARY KEY,\n      listing_id TEXT NOT NULL,\n      role TEXT NOT NULL,\n      granted_to TEXT NOT NULL,\n      password TEXT,\n      ssh_commands TEXT,\n      ssh_key_path_host TEXT,\n      key_type TEXT,\n      created_at TEXT NOT NULL\n    )",
       "triggers": []
     },
     "credit_deal_terms": {
@@ -623,7 +609,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE credit_deal_terms (\n              negotiation_id TEXT PRIMARY KEY,\n              quantity INTEGER NOT NULL,\n              key_mode TEXT NOT NULL DEFAULT 'new',\n              key_id TEXT,\n              created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))\n            )",
+      "sql": "CREATE TABLE credit_deal_terms (\n          negotiation_id TEXT PRIMARY KEY,\n          quantity INTEGER NOT NULL,\n          key_mode TEXT NOT NULL DEFAULT 'new',\n          key_id TEXT,\n          created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))\n        )",
       "triggers": []
     },
     "deal_heartbeats": {
@@ -705,7 +691,7 @@
           "unique": false
         }
       ],
-      "sql": "CREATE TABLE deal_heartbeats (\n                  id INTEGER PRIMARY KEY AUTOINCREMENT,\n                  deal_ref TEXT NOT NULL,\n                  buyer_scheme TEXT NOT NULL,\n                  buyer_identifier TEXT NOT NULL,\n                  seller_scheme TEXT NOT NULL,\n                  seller_identifier TEXT NOT NULL,\n                  sent_at_unix REAL NOT NULL,\n                  payload TEXT,\n                  received_at_unix REAL NOT NULL\n                )",
+      "sql": "CREATE TABLE deal_heartbeats (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      deal_ref TEXT NOT NULL,\n      buyer_scheme TEXT NOT NULL,\n      buyer_identifier TEXT NOT NULL,\n      seller_scheme TEXT NOT NULL,\n      seller_identifier TEXT NOT NULL,\n      sent_at_unix REAL NOT NULL,\n      payload TEXT,\n      received_at_unix REAL NOT NULL\n    )",
       "triggers": []
     },
     "escrows": {
@@ -914,7 +900,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE escrows (\n                  escrow_uid TEXT PRIMARY KEY,\n                  negotiation_id TEXT NOT NULL,\n                  status TEXT NOT NULL,\n                  chain_name TEXT,\n                  escrow_address TEXT,\n                  is_primary INTEGER NOT NULL DEFAULT 1,\n                  fulfillment_uid TEXT,\n                  provisioning_job_id TEXT,\n                  connection_details TEXT,\n                  tenant_credentials TEXT,\n                  reason TEXT,\n                  -- A physical fulfillment's identity, distinct from\n                  -- fulfillment_uid above (the on-chain settlement-claim\n                  -- identity) -- see ARCHITECTURE.md's \"Shared vocabulary and\n                  -- identities\". VM restart convergence reads the identity\n                  -- from its delivery record, not from these columns.\n                  capacity_reservation_id TEXT,\n                  settlement_resource_id TEXT,\n                  fulfillment_id TEXT,\n                  fulfillment_context TEXT,\n                  fulfillment_phase TEXT,\n                  processing_owner TEXT,\n                  processing_lease_until TEXT,\n                  created_at TEXT NOT NULL,\n                  updated_at TEXT NOT NULL\n                , obligation_ref TEXT, obligation_index INTEGER)",
+      "sql": "CREATE TABLE escrows (\n      escrow_uid TEXT PRIMARY KEY,\n      negotiation_id TEXT NOT NULL,\n      status TEXT NOT NULL,\n      chain_name TEXT,\n      escrow_address TEXT,\n      is_primary INTEGER NOT NULL DEFAULT 1,\n      fulfillment_uid TEXT,\n      provisioning_job_id TEXT,\n      connection_details TEXT,\n      tenant_credentials TEXT,\n      reason TEXT,\n      capacity_reservation_id TEXT,\n      settlement_resource_id TEXT,\n      fulfillment_id TEXT,\n      fulfillment_context TEXT,\n      fulfillment_phase TEXT,\n      processing_owner TEXT,\n      processing_lease_until TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    , obligation_ref TEXT, obligation_index INTEGER)",
       "triggers": []
     },
     "identity_audit": {
@@ -1003,7 +989,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE identity_audit (\n                  id INTEGER PRIMARY KEY AUTOINCREMENT,\n                  authority TEXT NOT NULL,\n                  subject TEXT NOT NULL,\n                  action TEXT NOT NULL,\n                  actor_scheme TEXT NOT NULL,\n                  actor_identifier TEXT NOT NULL,\n                  target_scheme TEXT,\n                  target_identifier TEXT,\n                  operation_id TEXT NOT NULL,\n                  created_at INTEGER NOT NULL,\n                  UNIQUE (authority, operation_id)\n                )",
+      "sql": "CREATE TABLE identity_audit (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      authority TEXT NOT NULL,\n      subject TEXT NOT NULL,\n      action TEXT NOT NULL,\n      actor_scheme TEXT NOT NULL,\n      actor_identifier TEXT NOT NULL,\n      target_scheme TEXT,\n      target_identifier TEXT,\n      operation_id TEXT NOT NULL,\n      created_at INTEGER NOT NULL,\n      UNIQUE (authority, operation_id)\n    )",
       "triggers": []
     },
     "identity_bindings": {
@@ -1086,7 +1072,7 @@
           ],
           "name": "idx_identity_binding_active_owner",
           "origin": "c",
-          "sql": "CREATE UNIQUE INDEX idx_identity_binding_active_owner\n                ON identity_bindings (\n                  authority, principal_scheme, principal_identifier\n                )\n                WHERE status IN ('primary', 'overlap')\n                ",
+          "sql": "CREATE UNIQUE INDEX idx_identity_binding_active_owner\n    ON identity_bindings (\n      authority, principal_scheme, principal_identifier\n    )\n    WHERE status IN ('primary', 'overlap')\n    ",
           "unique": true
         },
         {
@@ -1102,7 +1088,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE identity_bindings (\n                  authority TEXT NOT NULL,\n                  subject TEXT NOT NULL,\n                  principal_scheme TEXT NOT NULL,\n                  principal_identifier TEXT NOT NULL,\n                  status TEXT NOT NULL CHECK (\n                    status IN ('primary', 'overlap', 'disabled', 'retired')\n                  ),\n                  overlap_until INTEGER,\n                  created_at INTEGER NOT NULL,\n                  updated_at INTEGER NOT NULL,\n                  PRIMARY KEY (\n                    authority, subject, principal_scheme, principal_identifier\n                  ),\n                  FOREIGN KEY (authority, subject)\n                    REFERENCES identity_subjects(authority, subject)\n                )",
+      "sql": "CREATE TABLE identity_bindings (\n      authority TEXT NOT NULL,\n      subject TEXT NOT NULL,\n      principal_scheme TEXT NOT NULL,\n      principal_identifier TEXT NOT NULL,\n      status TEXT NOT NULL CHECK (\n        status IN ('primary', 'overlap', 'disabled', 'retired')\n      ),\n      overlap_until INTEGER,\n      created_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL,\n      PRIMARY KEY (\n        authority, subject, principal_scheme, principal_identifier\n      ),\n      FOREIGN KEY (authority, subject)\n        REFERENCES identity_subjects(authority, subject)\n    )",
       "triggers": []
     },
     "identity_claims": {
@@ -1187,7 +1173,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE identity_claims (\n                  claim_id TEXT PRIMARY KEY,\n                  resource_id TEXT NOT NULL,\n                  role TEXT NOT NULL,\n                  principal_scheme TEXT NOT NULL,\n                  principal_identifier TEXT NOT NULL,\n                  operation_id TEXT NOT NULL,\n                  status TEXT NOT NULL,\n                  created_at TEXT NOT NULL,\n                  UNIQUE (resource_id, role, operation_id)\n                )",
+      "sql": "CREATE TABLE identity_claims (\n      claim_id TEXT PRIMARY KEY,\n      resource_id TEXT NOT NULL,\n      role TEXT NOT NULL,\n      principal_scheme TEXT NOT NULL,\n      principal_identifier TEXT NOT NULL,\n      operation_id TEXT NOT NULL,\n      status TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      UNIQUE (resource_id, role, operation_id)\n    )",
       "triggers": []
     },
     "identity_rotations": {
@@ -1277,7 +1263,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE identity_rotations (\n                  authority TEXT NOT NULL,\n                  subject TEXT NOT NULL,\n                  nonce TEXT NOT NULL,\n                  intent_hash TEXT NOT NULL,\n                  current_scheme TEXT NOT NULL,\n                  current_identifier TEXT NOT NULL,\n                  replacement_scheme TEXT NOT NULL,\n                  replacement_identifier TEXT NOT NULL,\n                  overlap_until INTEGER NOT NULL,\n                  applied_at INTEGER NOT NULL,\n                  PRIMARY KEY (authority, subject, nonce)\n                )",
+      "sql": "CREATE TABLE identity_rotations (\n      authority TEXT NOT NULL,\n      subject TEXT NOT NULL,\n      nonce TEXT NOT NULL,\n      intent_hash TEXT NOT NULL,\n      current_scheme TEXT NOT NULL,\n      current_identifier TEXT NOT NULL,\n      replacement_scheme TEXT NOT NULL,\n      replacement_identifier TEXT NOT NULL,\n      overlap_until INTEGER NOT NULL,\n      applied_at INTEGER NOT NULL,\n      PRIMARY KEY (authority, subject, nonce)\n    )",
       "triggers": []
     },
     "identity_subjects": {
@@ -1331,7 +1317,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE identity_subjects (\n                  authority TEXT NOT NULL,\n                  subject TEXT NOT NULL,\n                  role TEXT NOT NULL,\n                  created_at INTEGER NOT NULL,\n                  updated_at INTEGER NOT NULL,\n                  PRIMARY KEY (authority, subject)\n                )",
+      "sql": "CREATE TABLE identity_subjects (\n      authority TEXT NOT NULL,\n      subject TEXT NOT NULL,\n      role TEXT NOT NULL,\n      created_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL,\n      PRIMARY KEY (authority, subject)\n    )",
       "triggers": []
     },
     "listings": {
@@ -1502,23 +1488,23 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE listings (\n                  listing_id TEXT PRIMARY KEY,\n                  status TEXT NOT NULL,\n                  created_at TEXT NOT NULL,\n                  updated_at TEXT NOT NULL,\n                  listing_resource TEXT NOT NULL,\n                  fulfillment_resource TEXT,\n                  max_duration_seconds INTEGER,\n                  seller_scheme TEXT NOT NULL,\n                  seller_identifier TEXT NOT NULL,\n                  oracle_address TEXT,\n                  paused INTEGER NOT NULL DEFAULT 0,\n                  accepted_escrows TEXT,\n                  settlement_options TEXT,\n                  publication_clauses TEXT,\n                  demands TEXT\n                , storefront_url TEXT, closed_by TEXT CHECK (closed_by IN ('seller', 'reconciliation')), rate_structure TEXT)",
+      "sql": "CREATE TABLE listings (\n      listing_id TEXT PRIMARY KEY,\n      status TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      listing_resource TEXT NOT NULL,\n      fulfillment_resource TEXT,\n      max_duration_seconds INTEGER,\n      seller_scheme TEXT NOT NULL,\n      seller_identifier TEXT NOT NULL,\n      oracle_address TEXT,\n      paused INTEGER NOT NULL DEFAULT 0,\n      accepted_escrows TEXT,\n      settlement_options TEXT,\n      publication_clauses TEXT,\n      demands TEXT,\n      storefront_url TEXT,\n      closed_by TEXT CHECK (closed_by IN ('seller', 'reconciliation')),\n      rate_structure TEXT\n    )",
       "triggers": [
         {
           "name": "listing_closed_by_consistent_insert",
-          "sql": "CREATE TRIGGER listing_closed_by_consistent_insert\n            BEFORE INSERT ON listings\n            WHEN (NEW.status = 'closed' AND NEW.closed_by IS NULL)\n              OR (NEW.status IS NOT 'closed' AND NEW.closed_by IS NOT NULL)\n            BEGIN\n              SELECT RAISE(\n                ABORT, 'a closed listing records closed_by; an open one does not'\n              );\n            END"
+          "sql": "CREATE TRIGGER listing_closed_by_consistent_insert\n    BEFORE INSERT ON listings\n    WHEN (NEW.status = 'closed' AND NEW.closed_by IS NULL)\n      OR (NEW.status IS NOT 'closed' AND NEW.closed_by IS NOT NULL)\n    BEGIN\n      SELECT RAISE(\n        ABORT, 'a closed listing records closed_by; an open one does not'\n      );\n    END"
         },
         {
           "name": "listing_closed_by_consistent_update",
-          "sql": "CREATE TRIGGER listing_closed_by_consistent_update\n            BEFORE UPDATE ON listings\n            WHEN (NEW.status = 'closed' AND NEW.closed_by IS NULL)\n              OR (NEW.status IS NOT 'closed' AND NEW.closed_by IS NOT NULL)\n            BEGIN\n              SELECT RAISE(\n                ABORT, 'a closed listing records closed_by; an open one does not'\n              );\n            END"
+          "sql": "CREATE TRIGGER listing_closed_by_consistent_update\n    BEFORE UPDATE ON listings\n    WHEN (NEW.status = 'closed' AND NEW.closed_by IS NULL)\n      OR (NEW.status IS NOT 'closed' AND NEW.closed_by IS NOT NULL)\n    BEGIN\n      SELECT RAISE(\n        ABORT, 'a closed listing records closed_by; an open one does not'\n      );\n    END"
         },
         {
           "name": "listings_principal_insert",
-          "sql": "CREATE TRIGGER listings_principal_insert\n            BEFORE INSERT ON listings\n            WHEN NEW.storefront_url IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n            BEGIN\n              SELECT RAISE(ABORT, 'canonical principal fields are required');\n            END"
+          "sql": "CREATE TRIGGER listings_principal_insert\n    BEFORE INSERT ON listings\n    WHEN NEW.storefront_url IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'canonical principal fields are required');\n    END"
         },
         {
           "name": "listings_principal_update",
-          "sql": "CREATE TRIGGER listings_principal_update\n            BEFORE UPDATE ON listings\n            WHEN NEW.storefront_url IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n            BEGIN\n              SELECT RAISE(ABORT, 'canonical principal fields are required');\n            END"
+          "sql": "CREATE TRIGGER listings_principal_update\n    BEFORE UPDATE ON listings\n    WHEN NEW.storefront_url IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'canonical principal fields are required');\n    END"
         }
       ]
     },
@@ -1572,7 +1558,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE negotiation_local_state (\n                  negotiation_id TEXT NOT NULL,\n                  owner_id TEXT NOT NULL,\n                  our_initial_price TEXT,\n                  our_strategy TEXT,\n                  PRIMARY KEY(negotiation_id, owner_id),\n                  FOREIGN KEY(negotiation_id) REFERENCES negotiation_threads(negotiation_id)\n                )",
+      "sql": "CREATE TABLE negotiation_local_state (\n      negotiation_id TEXT NOT NULL,\n      owner_id TEXT NOT NULL,\n      our_initial_price TEXT,\n      our_strategy TEXT,\n      PRIMARY KEY(negotiation_id, owner_id),\n      FOREIGN KEY(negotiation_id) REFERENCES negotiation_threads(negotiation_id)\n    )",
       "triggers": []
     },
     "negotiation_messages": {
@@ -1660,6 +1646,13 @@
           "not_null": true,
           "primary_key": 0,
           "type": "TEXT"
+        },
+        {
+          "default": null,
+          "name": "provision_terms",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "TEXT"
         }
       ],
       "foreign_keys": [
@@ -1700,15 +1693,15 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE negotiation_messages (\n                  message_id INTEGER PRIMARY KEY AUTOINCREMENT,\n                  negotiation_id TEXT NOT NULL,\n                  round INTEGER NOT NULL,\n                  sender_role TEXT NOT NULL,\n                  sender_scheme TEXT NOT NULL,\n                  sender_identifier TEXT NOT NULL,\n                  our_price TEXT,\n                  their_price TEXT,\n                  proposed_price TEXT,\n                  action_taken TEXT NOT NULL,\n                  message_type TEXT NOT NULL,\n                  timestamp TEXT NOT NULL,\n                  FOREIGN KEY(negotiation_id) REFERENCES negotiation_threads(negotiation_id),\n                  UNIQUE(negotiation_id, round)\n                )",
+      "sql": "CREATE TABLE negotiation_messages (\n      message_id INTEGER PRIMARY KEY AUTOINCREMENT,\n      negotiation_id TEXT NOT NULL,\n      round INTEGER NOT NULL,\n      sender_role TEXT NOT NULL,\n      sender_scheme TEXT NOT NULL,\n      sender_identifier TEXT NOT NULL,\n      our_price TEXT,\n      their_price TEXT,\n      proposed_price TEXT,\n      action_taken TEXT NOT NULL,\n      message_type TEXT NOT NULL,\n      timestamp TEXT NOT NULL, provision_terms TEXT,\n      FOREIGN KEY(negotiation_id) REFERENCES negotiation_threads(negotiation_id),\n      UNIQUE(negotiation_id, round)\n    )",
       "triggers": [
         {
           "name": "negotiation_messages_principal_insert",
-          "sql": "CREATE TRIGGER negotiation_messages_principal_insert\n            BEFORE INSERT ON negotiation_messages\n            WHEN NEW.sender_role IS NULL OR NEW.sender_scheme IS NULL OR NEW.sender_identifier IS NULL\n            BEGIN\n              SELECT RAISE(ABORT, 'canonical principal fields are required');\n            END"
+          "sql": "CREATE TRIGGER negotiation_messages_principal_insert\n    BEFORE INSERT ON negotiation_messages\n    WHEN NEW.sender_role IS NULL OR NEW.sender_scheme IS NULL OR NEW.sender_identifier IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'canonical principal fields are required');\n    END"
         },
         {
           "name": "negotiation_messages_principal_update",
-          "sql": "CREATE TRIGGER negotiation_messages_principal_update\n            BEFORE UPDATE ON negotiation_messages\n            WHEN NEW.sender_role IS NULL OR NEW.sender_scheme IS NULL OR NEW.sender_identifier IS NULL\n            BEGIN\n              SELECT RAISE(ABORT, 'canonical principal fields are required');\n            END"
+          "sql": "CREATE TRIGGER negotiation_messages_principal_update\n    BEFORE UPDATE ON negotiation_messages\n    WHEN NEW.sender_role IS NULL OR NEW.sender_scheme IS NULL OR NEW.sender_identifier IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'canonical principal fields are required');\n    END"
         }
       ]
     },
@@ -1814,7 +1807,7 @@
         },
         {
           "default": null,
-          "name": "agreed_price",
+          "name": "negotiated_scalar",
           "not_null": false,
           "primary_key": 0,
           "type": "TEXT"
@@ -2003,31 +1996,31 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE negotiation_threads (\n                  negotiation_id TEXT PRIMARY KEY,\n                  our_listing_id TEXT,\n                  their_listing_id TEXT,\n                  our_agent_id TEXT,\n                  their_agent_id TEXT,\n                  status TEXT DEFAULT 'active',\n                  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),\n                  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),\n                  terminal_state TEXT,\n                  -- Buyer's duration ask, captured at /negotiate/new and validated\n                  -- against the listing's max_duration_seconds (NULL there means\n                  -- unlimited). Stays for the lifetime of the thread; the agreed\n                  -- value below is just an echo when the negotiation succeeds.\n                  requested_duration_seconds INTEGER,\n                  requested_start_utc TEXT,\n                  -- Buyer's escrow shape proposal \u2014 opaque JSON blob captured at\n                  -- /negotiate/new (validated against the listing's acceptance\n                  -- set). Persisted because settlement-time verification\n                  -- reconstructs the expected on-chain obligation_data from\n                  -- this; reading from the thread instead of re-deriving from\n                  -- the listing means the negotiated artifact is the literal\n                  -- source of truth.\n                  buyer_escrow_proposal TEXT,\n                  -- Accepted schema-owned delivery input, reloaded server-side\n                  -- rather than trusted from a later settlement request.\n                  provision_terms TEXT,\n                  -- Immutable accepted settlement plan pinned at seller acceptance.\n                  settlement_plan TEXT,\n                  -- Committed agreement artifact: populated when terminal_state='success'.\n                  -- Captures the negotiation's output as queryable state so settlement\n                  -- can run (or be retried) as a separate step without replaying rounds.\n                  agreed_price TEXT,\n                  agreed_duration_seconds INTEGER,\n                  agreed_at TEXT,\n                  agreement_bytes BLOB,\n                  settlement_data TEXT,\n                  buyer_scheme TEXT,\n                  buyer_identifier TEXT,\n                  seller_scheme TEXT,\n                  seller_identifier TEXT,\n                  matched_offer_id TEXT, domain_listing_id TEXT, site_id TEXT, offering_mode TEXT, domain_identity TEXT, contract_major INTEGER, contract_minor INTEGER,\n                  CHECK ((buyer_scheme IS NULL) = (buyer_identifier IS NULL)),\n                  CHECK ((seller_scheme IS NULL) = (seller_identifier IS NULL))\n                )",
+      "sql": "CREATE TABLE negotiation_threads (\n      negotiation_id TEXT PRIMARY KEY,\n      our_listing_id TEXT,\n      their_listing_id TEXT,\n      our_agent_id TEXT,\n      their_agent_id TEXT,\n      status TEXT DEFAULT 'active',\n      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),\n      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),\n      terminal_state TEXT,\n      requested_duration_seconds INTEGER,\n      requested_start_utc TEXT,\n      buyer_escrow_proposal TEXT,\n      provision_terms TEXT,\n      settlement_plan TEXT,\n      negotiated_scalar TEXT,\n      agreed_duration_seconds INTEGER,\n      agreed_at TEXT,\n      agreement_bytes BLOB,\n      settlement_data TEXT,\n      buyer_scheme TEXT,\n      buyer_identifier TEXT,\n      seller_scheme TEXT,\n      seller_identifier TEXT,\n      matched_offer_id TEXT,\n      domain_listing_id TEXT,\n      site_id TEXT,\n      offering_mode TEXT,\n      domain_identity TEXT,\n      contract_major INTEGER,\n      contract_minor INTEGER,\n      CHECK ((buyer_scheme IS NULL) = (buyer_identifier IS NULL)),\n      CHECK ((seller_scheme IS NULL) = (seller_identifier IS NULL))\n    )",
       "triggers": [
         {
           "name": "negotiation_domain_binding_complete_insert",
-          "sql": "CREATE TRIGGER negotiation_domain_binding_complete_insert\n        BEFORE INSERT ON negotiation_threads\n        WHEN (\n          NEW.domain_listing_id IS NULL\n          OR NEW.site_id IS NULL\n          OR NEW.offering_mode IS NULL\n          OR NEW.domain_identity IS NULL\n          OR NEW.contract_major IS NULL\n          OR NEW.contract_minor IS NULL\n        ) AND NOT (\n          NEW.domain_listing_id IS NULL\n          AND NEW.site_id IS NULL\n          AND NEW.offering_mode IS NULL\n          AND NEW.domain_identity IS NULL\n          AND NEW.contract_major IS NULL\n          AND NEW.contract_minor IS NULL\n        )\n        BEGIN\n          SELECT RAISE(ABORT, 'negotiation domain binding is incomplete');\n        END"
+          "sql": "CREATE TRIGGER negotiation_domain_binding_complete_insert\n    BEFORE INSERT ON negotiation_threads\n    WHEN (\n      NEW.domain_listing_id IS NULL\n      OR NEW.site_id IS NULL\n      OR NEW.offering_mode IS NULL\n      OR NEW.domain_identity IS NULL\n      OR NEW.contract_major IS NULL\n      OR NEW.contract_minor IS NULL\n    ) AND NOT (\n      NEW.domain_listing_id IS NULL\n      AND NEW.site_id IS NULL\n      AND NEW.offering_mode IS NULL\n      AND NEW.domain_identity IS NULL\n      AND NEW.contract_major IS NULL\n      AND NEW.contract_minor IS NULL\n    )\n    BEGIN\n      SELECT RAISE(ABORT, 'negotiation domain binding is incomplete');\n    END"
         },
         {
           "name": "negotiation_domain_binding_immutable",
-          "sql": "CREATE TRIGGER negotiation_domain_binding_immutable\n        BEFORE UPDATE OF\n          domain_listing_id, site_id, offering_mode, domain_identity,\n          contract_major, contract_minor\n        ON negotiation_threads\n        WHEN OLD.domain_identity IS NOT NULL\n          AND (\n            NOT (OLD.domain_listing_id IS NEW.domain_listing_id)\n            OR NOT (OLD.site_id IS NEW.site_id)\n            OR NOT (OLD.offering_mode IS NEW.offering_mode)\n            OR NOT (OLD.domain_identity IS NEW.domain_identity)\n            OR NOT (OLD.contract_major IS NEW.contract_major)\n            OR NOT (OLD.contract_minor IS NEW.contract_minor)\n          )\n        BEGIN\n          SELECT RAISE(ABORT, 'negotiation domain binding is immutable');\n        END"
+          "sql": "CREATE TRIGGER negotiation_domain_binding_immutable\n    BEFORE UPDATE OF\n      domain_listing_id, site_id, offering_mode, domain_identity,\n      contract_major, contract_minor\n    ON negotiation_threads\n    WHEN OLD.domain_identity IS NOT NULL\n      AND (\n        NOT (OLD.domain_listing_id IS NEW.domain_listing_id)\n        OR NOT (OLD.site_id IS NEW.site_id)\n        OR NOT (OLD.offering_mode IS NEW.offering_mode)\n        OR NOT (OLD.domain_identity IS NEW.domain_identity)\n        OR NOT (OLD.contract_major IS NEW.contract_major)\n        OR NOT (OLD.contract_minor IS NEW.contract_minor)\n      )\n    BEGIN\n      SELECT RAISE(ABORT, 'negotiation domain binding is immutable');\n    END"
         },
         {
           "name": "negotiation_domain_binding_owner_insert",
-          "sql": "CREATE TRIGGER negotiation_domain_binding_owner_insert\n        BEFORE INSERT ON negotiation_threads\n        WHEN NEW.domain_identity IS NOT NULL\n          AND NOT EXISTS (\n            SELECT 1\n            FROM storefront_listing_bindings binding\n            WHERE binding.listing_id = NEW.domain_listing_id\n              AND binding.site_id = NEW.site_id\n              AND binding.offering_mode = NEW.offering_mode\n              AND binding.domain_identity = NEW.domain_identity\n              AND binding.contract_major = NEW.contract_major\n              AND binding.contract_minor = NEW.contract_minor\n          )\n        BEGIN\n          SELECT RAISE(ABORT, 'negotiation domain binding disagrees with listing');\n        END"
+          "sql": "CREATE TRIGGER negotiation_domain_binding_owner_insert\n    BEFORE INSERT ON negotiation_threads\n    WHEN NEW.domain_identity IS NOT NULL\n      AND NOT EXISTS (\n        SELECT 1\n        FROM storefront_listing_bindings binding\n        WHERE binding.listing_id = NEW.domain_listing_id\n          AND binding.site_id = NEW.site_id\n          AND binding.offering_mode = NEW.offering_mode\n          AND binding.domain_identity = NEW.domain_identity\n          AND binding.contract_major = NEW.contract_major\n          AND binding.contract_minor = NEW.contract_minor\n      )\n    BEGIN\n      SELECT RAISE(ABORT, 'negotiation domain binding disagrees with listing');\n    END"
         },
         {
           "name": "negotiation_domain_binding_owner_update",
-          "sql": "CREATE TRIGGER negotiation_domain_binding_owner_update\n        BEFORE UPDATE OF\n          domain_listing_id, site_id, offering_mode, domain_identity,\n          contract_major, contract_minor\n        ON negotiation_threads\n        WHEN NEW.domain_identity IS NOT NULL\n          AND NOT EXISTS (\n            SELECT 1\n            FROM storefront_listing_bindings binding\n            WHERE binding.listing_id = NEW.domain_listing_id\n              AND binding.site_id = NEW.site_id\n              AND binding.offering_mode = NEW.offering_mode\n              AND binding.domain_identity = NEW.domain_identity\n              AND binding.contract_major = NEW.contract_major\n              AND binding.contract_minor = NEW.contract_minor\n          )\n        BEGIN\n          SELECT RAISE(ABORT, 'negotiation domain binding disagrees with listing');\n        END"
+          "sql": "CREATE TRIGGER negotiation_domain_binding_owner_update\n    BEFORE UPDATE OF\n      domain_listing_id, site_id, offering_mode, domain_identity,\n      contract_major, contract_minor\n    ON negotiation_threads\n    WHEN NEW.domain_identity IS NOT NULL\n      AND NOT EXISTS (\n        SELECT 1\n        FROM storefront_listing_bindings binding\n        WHERE binding.listing_id = NEW.domain_listing_id\n          AND binding.site_id = NEW.site_id\n          AND binding.offering_mode = NEW.offering_mode\n          AND binding.domain_identity = NEW.domain_identity\n          AND binding.contract_major = NEW.contract_major\n          AND binding.contract_minor = NEW.contract_minor\n      )\n    BEGIN\n      SELECT RAISE(ABORT, 'negotiation domain binding disagrees with listing');\n    END"
         },
         {
           "name": "negotiation_threads_principal_insert",
-          "sql": "CREATE TRIGGER negotiation_threads_principal_insert\n            BEFORE INSERT ON negotiation_threads\n            WHEN NEW.buyer_scheme IS NULL OR NEW.buyer_identifier IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n            BEGIN\n              SELECT RAISE(ABORT, 'canonical principal fields are required');\n            END"
+          "sql": "CREATE TRIGGER negotiation_threads_principal_insert\n    BEFORE INSERT ON negotiation_threads\n    WHEN NEW.buyer_scheme IS NULL OR NEW.buyer_identifier IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'canonical principal fields are required');\n    END"
         },
         {
           "name": "negotiation_threads_principal_update",
-          "sql": "CREATE TRIGGER negotiation_threads_principal_update\n            BEFORE UPDATE ON negotiation_threads\n            WHEN NEW.buyer_scheme IS NULL OR NEW.buyer_identifier IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n            BEGIN\n              SELECT RAISE(ABORT, 'canonical principal fields are required');\n            END"
+          "sql": "CREATE TRIGGER negotiation_threads_principal_update\n    BEFORE UPDATE ON negotiation_threads\n    WHEN NEW.buyer_scheme IS NULL OR NEW.buyer_identifier IS NULL OR NEW.seller_scheme IS NULL OR NEW.seller_identifier IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'canonical principal fields are required');\n    END"
         }
       ]
     },
@@ -2081,6 +2074,13 @@
           "not_null": false,
           "primary_key": 0,
           "type": "TEXT"
+        },
+        {
+          "default": null,
+          "name": "published_payload_json",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "TEXT"
         }
       ],
       "foreign_keys": [],
@@ -2114,7 +2114,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE publications (\n                  listing_id TEXT NOT NULL,\n                  registry_url TEXT NOT NULL,\n                  payload_json TEXT NOT NULL,\n                  published_at INTEGER NOT NULL,\n                  registry_assigned_id TEXT,\n                  status TEXT NOT NULL,\n                  last_error TEXT,\n                  PRIMARY KEY (listing_id, registry_url)\n                )",
+      "sql": "CREATE TABLE publications (\n      listing_id TEXT NOT NULL,\n      registry_url TEXT NOT NULL,\n      payload_json TEXT NOT NULL,\n      published_at INTEGER NOT NULL,\n      registry_assigned_id TEXT,\n      status TEXT NOT NULL,\n      last_error TEXT, published_payload_json TEXT,\n      PRIMARY KEY (listing_id, registry_url)\n    )",
       "triggers": []
     },
     "schema_migrations": {
@@ -2124,14 +2124,14 @@
           "name": "id",
           "not_null": false,
           "primary_key": 1,
-          "type": "TEXT"
+          "type": "VARCHAR(255)"
         },
         {
-          "default": "STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')",
+          "default": "CURRENT_TIMESTAMP",
           "name": "applied_at",
           "not_null": true,
           "primary_key": 0,
-          "type": "TEXT"
+          "type": "TIMESTAMP"
         }
       ],
       "foreign_keys": [],
@@ -2146,7 +2146,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE schema_migrations (\n          id TEXT PRIMARY KEY,\n          applied_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))\n        )",
+      "sql": "CREATE TABLE schema_migrations (id VARCHAR(255) PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
       "triggers": []
     },
     "service_peers": {
@@ -2241,7 +2241,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE service_peers (\n                  peer_id TEXT PRIMARY KEY,\n                  role TEXT NOT NULL,\n                  site_id TEXT NOT NULL,\n                  principal_scheme TEXT NOT NULL,\n                  principal_identifier TEXT NOT NULL,\n                  status TEXT NOT NULL CHECK (status IN ('active', 'disabled', 'retired')),\n                  created_at TEXT NOT NULL,\n                  updated_at TEXT NOT NULL,\n                  UNIQUE (role, site_id),\n                  UNIQUE (role, principal_scheme, principal_identifier)\n                )",
+      "sql": "CREATE TABLE service_peers (\n      peer_id TEXT PRIMARY KEY,\n      role TEXT NOT NULL,\n      site_id TEXT NOT NULL,\n      principal_scheme TEXT NOT NULL,\n      principal_identifier TEXT NOT NULL,\n      status TEXT NOT NULL CHECK (status IN ('active', 'disabled', 'retired')),\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      UNIQUE (role, site_id),\n      UNIQUE (role, principal_scheme, principal_identifier)\n    )",
       "triggers": []
     },
     "settlement_obligations": {
@@ -2470,7 +2470,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE settlement_obligations (\n          obligation_ref TEXT PRIMARY KEY,\n          agreement_ref TEXT NOT NULL,\n          obligation_index INTEGER NOT NULL CHECK (obligation_index >= 0),\n          obligation_hash TEXT NOT NULL,\n          obligation TEXT NOT NULL,\n          mechanism_params TEXT NOT NULL DEFAULT '{}',\n          payer_principal TEXT NOT NULL,\n          claimant_principal TEXT NOT NULL,\n          mechanism_ref TEXT,\n          mechanism_status TEXT,\n          mechanism_state TEXT NOT NULL DEFAULT '{}',\n          buyer_action TEXT,\n          condition_anchor TEXT,\n          fulfillment_ref TEXT,\n          materialization_state TEXT NOT NULL DEFAULT 'pending',\n          condition_state TEXT NOT NULL DEFAULT 'pending',\n          collection_state TEXT NOT NULL DEFAULT 'pending',\n          reclaim_state TEXT NOT NULL DEFAULT 'pending',\n          materialization_receipt TEXT,\n          status_receipt TEXT,\n          collection_receipt TEXT,\n          reclaim_receipt TEXT,\n          last_error TEXT,\n          version INTEGER NOT NULL DEFAULT 0,\n          created_at TEXT NOT NULL,\n          updated_at TEXT NOT NULL,\n          UNIQUE (agreement_ref, obligation_index)\n        )",
+      "sql": "CREATE TABLE settlement_obligations (\n      obligation_ref TEXT PRIMARY KEY,\n      agreement_ref TEXT NOT NULL,\n      obligation_index INTEGER NOT NULL CHECK (obligation_index >= 0),\n      obligation_hash TEXT NOT NULL,\n      obligation TEXT NOT NULL,\n      mechanism_params TEXT NOT NULL DEFAULT '{}',\n      payer_principal TEXT NOT NULL,\n      claimant_principal TEXT NOT NULL,\n      mechanism_ref TEXT,\n      mechanism_status TEXT,\n      mechanism_state TEXT NOT NULL DEFAULT '{}',\n      buyer_action TEXT,\n      condition_anchor TEXT,\n      fulfillment_ref TEXT,\n      materialization_state TEXT NOT NULL DEFAULT 'pending',\n      condition_state TEXT NOT NULL DEFAULT 'pending',\n      collection_state TEXT NOT NULL DEFAULT 'pending',\n      reclaim_state TEXT NOT NULL DEFAULT 'pending',\n      materialization_receipt TEXT,\n      status_receipt TEXT,\n      collection_receipt TEXT,\n      reclaim_receipt TEXT,\n      last_error TEXT,\n      version INTEGER NOT NULL DEFAULT 0,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      UNIQUE (agreement_ref, obligation_index)\n    )",
       "triggers": [
         {
           "name": "settlement_principals_insert_required",
@@ -2613,7 +2613,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE settlement_operations (\n          obligation_ref TEXT NOT NULL,\n          operation TEXT NOT NULL,\n          request_hash TEXT NOT NULL,\n          state TEXT NOT NULL DEFAULT 'pending',\n          attempts INTEGER NOT NULL DEFAULT 0,\n          uncertain_acknowledgement INTEGER NOT NULL DEFAULT 0,\n          receipt TEXT,\n          last_error TEXT,\n          lease_owner TEXT,\n          lease_until_unix REAL,\n          next_attempt_unix REAL,\n          created_at TEXT NOT NULL,\n          updated_at TEXT NOT NULL, awaiting_delivery INTEGER NOT NULL DEFAULT 0,\n          PRIMARY KEY (obligation_ref, operation),\n          FOREIGN KEY (obligation_ref) REFERENCES settlement_obligations(obligation_ref)\n        )",
+      "sql": "CREATE TABLE settlement_operations (\n      obligation_ref TEXT NOT NULL,\n      operation TEXT NOT NULL,\n      request_hash TEXT NOT NULL,\n      state TEXT NOT NULL DEFAULT 'pending',\n      attempts INTEGER NOT NULL DEFAULT 0,\n      uncertain_acknowledgement INTEGER NOT NULL DEFAULT 0,\n      receipt TEXT,\n      last_error TEXT,\n      lease_owner TEXT,\n      lease_until_unix REAL,\n      next_attempt_unix REAL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      awaiting_delivery INTEGER NOT NULL DEFAULT 0,\n      PRIMARY KEY (obligation_ref, operation),\n      FOREIGN KEY (obligation_ref) REFERENCES settlement_obligations(obligation_ref)\n    )",
       "triggers": []
     },
     "stage_events": {
@@ -2705,7 +2705,7 @@
           "unique": false
         }
       ],
-      "sql": "CREATE TABLE stage_events (\n                  id INTEGER PRIMARY KEY AUTOINCREMENT,\n                  ts TEXT NOT NULL,\n                  stage TEXT NOT NULL,\n                  event TEXT NOT NULL,\n                  negotiation_id TEXT,\n                  listing_id TEXT,\n                  escrow_uid TEXT,\n                  data TEXT NOT NULL\n                )",
+      "sql": "CREATE TABLE stage_events (\n      id INTEGER PRIMARY KEY AUTOINCREMENT,\n      ts TEXT NOT NULL,\n      stage TEXT NOT NULL,\n      event TEXT NOT NULL,\n      negotiation_id TEXT,\n      listing_id TEXT,\n      escrow_uid TEXT,\n      data TEXT NOT NULL\n    )",
       "triggers": []
     },
     "storefront_domain_artifacts": {
@@ -2798,15 +2798,15 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE storefront_domain_artifacts (\n          negotiation_id TEXT NOT NULL,\n          artifact_slot TEXT NOT NULL,\n          offering_mode TEXT NOT NULL,\n          domain_identity TEXT NOT NULL,\n          contract_major INTEGER NOT NULL CHECK (contract_major >= 1),\n          contract_minor INTEGER NOT NULL CHECK (contract_minor >= 0),\n          artifact_json TEXT NOT NULL,\n          created_at TEXT NOT NULL DEFAULT (\n            STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')\n          ),\n          PRIMARY KEY (negotiation_id, artifact_slot),\n          FOREIGN KEY (negotiation_id)\n            REFERENCES negotiation_threads(negotiation_id)\n        )",
+      "sql": "CREATE TABLE storefront_domain_artifacts (\n      negotiation_id TEXT NOT NULL,\n      artifact_slot TEXT NOT NULL,\n      offering_mode TEXT NOT NULL,\n      domain_identity TEXT NOT NULL,\n      contract_major INTEGER NOT NULL CHECK (contract_major >= 1),\n      contract_minor INTEGER NOT NULL CHECK (contract_minor >= 0),\n      artifact_json TEXT NOT NULL,\n      created_at TEXT NOT NULL DEFAULT (\n        STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')\n      ),\n      PRIMARY KEY (negotiation_id, artifact_slot),\n      FOREIGN KEY (negotiation_id)\n        REFERENCES negotiation_threads(negotiation_id)\n    )",
       "triggers": [
         {
           "name": "storefront_domain_artifact_immutable",
-          "sql": "CREATE TRIGGER storefront_domain_artifact_immutable\n        BEFORE UPDATE ON storefront_domain_artifacts\n        WHEN NOT (OLD.negotiation_id IS NEW.negotiation_id)\n          OR NOT (OLD.artifact_slot IS NEW.artifact_slot)\n          OR NOT (OLD.offering_mode IS NEW.offering_mode)\n          OR NOT (OLD.domain_identity IS NEW.domain_identity)\n          OR NOT (OLD.contract_major IS NEW.contract_major)\n          OR NOT (OLD.contract_minor IS NEW.contract_minor)\n          OR NOT (OLD.artifact_json IS NEW.artifact_json)\n        BEGIN\n          SELECT RAISE(ABORT, 'storefront domain artifact is immutable');\n        END"
+          "sql": "CREATE TRIGGER storefront_domain_artifact_immutable\n    BEFORE UPDATE ON storefront_domain_artifacts\n    WHEN NOT (OLD.negotiation_id IS NEW.negotiation_id)\n      OR NOT (OLD.artifact_slot IS NEW.artifact_slot)\n      OR NOT (OLD.offering_mode IS NEW.offering_mode)\n      OR NOT (OLD.domain_identity IS NEW.domain_identity)\n      OR NOT (OLD.contract_major IS NEW.contract_major)\n      OR NOT (OLD.contract_minor IS NEW.contract_minor)\n      OR NOT (OLD.artifact_json IS NEW.artifact_json)\n    BEGIN\n      SELECT RAISE(ABORT, 'storefront domain artifact is immutable');\n    END"
         },
         {
           "name": "storefront_domain_artifact_owner_insert",
-          "sql": "CREATE TRIGGER storefront_domain_artifact_owner_insert\n        BEFORE INSERT ON storefront_domain_artifacts\n        WHEN NOT EXISTS (\n          SELECT 1\n          FROM negotiation_threads thread\n          WHERE thread.negotiation_id = NEW.negotiation_id\n            AND thread.offering_mode = NEW.offering_mode\n            AND thread.domain_identity = NEW.domain_identity\n            AND thread.contract_major = NEW.contract_major\n            AND thread.contract_minor = NEW.contract_minor\n        )\n        BEGIN\n          SELECT RAISE(ABORT, 'domain artifact disagrees with negotiation binding');\n        END"
+          "sql": "CREATE TRIGGER storefront_domain_artifact_owner_insert\n    BEFORE INSERT ON storefront_domain_artifacts\n    WHEN NOT EXISTS (\n      SELECT 1\n      FROM negotiation_threads thread\n      WHERE thread.negotiation_id = NEW.negotiation_id\n        AND thread.offering_mode = NEW.offering_mode\n        AND thread.domain_identity = NEW.domain_identity\n        AND thread.contract_major = NEW.contract_major\n        AND thread.contract_minor = NEW.contract_minor\n    )\n    BEGIN\n      SELECT RAISE(ABORT, 'domain artifact disagrees with negotiation binding');\n    END"
         }
       ]
     },
@@ -2945,11 +2945,11 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE storefront_listing_bindings (\n          listing_id TEXT PRIMARY KEY,\n          site_id TEXT NOT NULL,\n          pool_id TEXT,\n          physical_resource_id TEXT,\n          offering_mode TEXT NOT NULL,\n          domain_identity TEXT NOT NULL,\n          contract_major INTEGER NOT NULL CHECK (contract_major >= 1),\n          contract_minor INTEGER NOT NULL CHECK (contract_minor >= 0),\n          derivation_key TEXT NOT NULL UNIQUE,\n          source_envelope_json TEXT NOT NULL,\n          last_reconciled_at TEXT NOT NULL, capacity_backing TEXT CHECK (capacity_backing IN ('backed', 'unbacked')),\n          FOREIGN KEY (listing_id) REFERENCES listings(listing_id)\n        )",
+      "sql": "CREATE TABLE storefront_listing_bindings (\n      listing_id TEXT PRIMARY KEY,\n      site_id TEXT NOT NULL,\n      pool_id TEXT,\n      physical_resource_id TEXT,\n      offering_mode TEXT NOT NULL,\n      domain_identity TEXT NOT NULL,\n      contract_major INTEGER NOT NULL CHECK (contract_major >= 1),\n      contract_minor INTEGER NOT NULL CHECK (contract_minor >= 0),\n      derivation_key TEXT NOT NULL UNIQUE,\n      source_envelope_json TEXT NOT NULL,\n      last_reconciled_at TEXT NOT NULL,\n      capacity_backing TEXT CHECK (capacity_backing IN ('backed', 'unbacked')),\n      FOREIGN KEY (listing_id) REFERENCES listings(listing_id)\n    )",
       "triggers": [
         {
           "name": "storefront_listing_binding_backing_required",
-          "sql": "CREATE TRIGGER storefront_listing_binding_backing_required\n        BEFORE INSERT ON storefront_listing_bindings\n        WHEN NEW.capacity_backing IS NULL\n        BEGIN\n          SELECT RAISE(ABORT, 'listing binding requires capacity_backing');\n        END"
+          "sql": "CREATE TRIGGER storefront_listing_binding_backing_required\n    BEFORE INSERT ON storefront_listing_bindings\n    WHEN NEW.capacity_backing IS NULL\n    BEGIN\n      SELECT RAISE(ABORT, 'listing binding requires capacity_backing');\n    END"
         },
         {
           "name": "storefront_listing_binding_immutable",
@@ -2957,7 +2957,7 @@
         },
         {
           "name": "storefront_listing_binding_insert_owner",
-          "sql": "CREATE TRIGGER storefront_listing_binding_insert_owner\n        BEFORE INSERT ON storefront_listing_bindings\n        WHEN NOT EXISTS (\n          SELECT 1 FROM listings WHERE listing_id = NEW.listing_id\n        )\n        BEGIN\n          SELECT RAISE(ABORT, 'listing binding requires an existing listing');\n        END"
+          "sql": "CREATE TRIGGER storefront_listing_binding_insert_owner\n    BEFORE INSERT ON storefront_listing_bindings\n    WHEN NOT EXISTS (\n      SELECT 1 FROM listings WHERE listing_id = NEW.listing_id\n    )\n    BEGIN\n      SELECT RAISE(ABORT, 'listing binding requires an existing listing');\n    END"
         }
       ]
     }

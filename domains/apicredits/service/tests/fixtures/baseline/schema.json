@@ -1,14 +1,10 @@
 {
   "migrations": [
-    "20260731_001_apicredits_schema_baseline",
-    "20260811_002_canonical_owner_principals",
-    "20260815_003_fulfillment_grants",
-    "20260922_004_pool_advertisement_and_backing",
-    "20261005_005_reservation_release_requested_at",
-    "20261028_006_retired_reservation_states",
-    "20261106_007_reservation_activated_at",
-    "20261106_008_reservation_placement_key",
-    "20261109_009_grant_terms"
+    "v0_3_0_baseline_resource_pools",
+    "v0_3_0_baseline_apicredits_service",
+    "v0_3_0_baseline_site",
+    "20261106_002_reservation_placement_key",
+    "20261109_001_grant_terms"
   ],
   "tables": {
     "api_keys": {
@@ -82,7 +78,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE api_keys (\n\tkey_id VARCHAR NOT NULL, \n\tsecret_hash VARCHAR NOT NULL, \n\towner_scheme VARCHAR, \n\towner_id VARCHAR, \n\tstatus VARCHAR NOT NULL, \n\tbalance INTEGER NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tupdated_at DATETIME NOT NULL, \n\tPRIMARY KEY (key_id)\n)",
+      "sql": "CREATE TABLE api_keys (\n        key_id VARCHAR NOT NULL,\n        secret_hash VARCHAR NOT NULL,\n        owner_scheme VARCHAR,\n        owner_id VARCHAR,\n        status VARCHAR NOT NULL,\n        balance INTEGER NOT NULL,\n        created_at DATETIME NOT NULL,\n        updated_at DATETIME NOT NULL,\n        PRIMARY KEY (key_id)\n    )",
       "triggers": []
     },
     "capacity_buckets": {
@@ -218,9 +214,18 @@
           "origin": "u",
           "sql": null,
           "unique": true
+        },
+        {
+          "columns": [
+            "host_id"
+          ],
+          "name": "uq_capacity_buckets_host_id",
+          "origin": "c",
+          "sql": "CREATE UNIQUE INDEX uq_capacity_buckets_host_id ON capacity_buckets (host_id)",
+          "unique": true
         }
       ],
-      "sql": "CREATE TABLE capacity_buckets (\n\tcapacity_bucket_id VARCHAR NOT NULL, \n\tbacking_resource_id VARCHAR NOT NULL, \n\tpool_id VARCHAR, \n\thost_id VARCHAR, \n\tresource_type VARCHAR NOT NULL, \n\tresource_subtype VARCHAR, \n\ttotal_units INTEGER, \n\tcapacity JSON NOT NULL, \n\tattributes JSON NOT NULL, \n\tenabled BOOLEAN NOT NULL, \n\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tupdated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (capacity_bucket_id), \n\tCONSTRAINT uq_capacity_buckets_backing_resource UNIQUE (backing_resource_id), \n\tUNIQUE (host_id)\n)",
+      "sql": "CREATE TABLE capacity_buckets (\n        capacity_bucket_id VARCHAR NOT NULL,\n        backing_resource_id VARCHAR NOT NULL,\n        pool_id VARCHAR,\n        host_id VARCHAR,\n        resource_type VARCHAR NOT NULL,\n        resource_subtype VARCHAR,\n        total_units INTEGER,\n        capacity JSON NOT NULL,\n        attributes JSON NOT NULL,\n        enabled BOOLEAN NOT NULL,\n        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        PRIMARY KEY (capacity_bucket_id),\n        CONSTRAINT uq_capacity_buckets_backing_resource UNIQUE (backing_resource_id),\n        UNIQUE (host_id)\n    )",
       "triggers": []
     },
     "capacity_events": {
@@ -280,7 +285,7 @@
           "unique": false
         }
       ],
-      "sql": "CREATE TABLE capacity_events (\n\tversion INTEGER NOT NULL, \n\tkind VARCHAR NOT NULL, \n\tresource_id VARCHAR, \n\tdimensions JSON, \n\tclaim_attributes JSON, \n\toccurred_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (version)\n)",
+      "sql": "CREATE TABLE capacity_events (\n        version INTEGER NOT NULL,\n        kind VARCHAR NOT NULL,\n        resource_id VARCHAR,\n        dimensions JSON,\n        claim_attributes JSON,\n        occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        PRIMARY KEY (version)\n    )",
       "triggers": []
     },
     "capacity_reservation_debits": {
@@ -353,7 +358,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE capacity_reservation_debits (\n\tcapacity_reservation_id VARCHAR NOT NULL, \n\tcapacity_bucket_id VARCHAR NOT NULL, \n\tdimensions JSON NOT NULL, \n\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tupdated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (capacity_reservation_id), \n\tCONSTRAINT uq_capacity_reservation_debits_reservation UNIQUE (capacity_reservation_id), \n\tFOREIGN KEY(capacity_reservation_id) REFERENCES capacity_reservations (capacity_reservation_id) ON DELETE CASCADE, \n\tFOREIGN KEY(capacity_bucket_id) REFERENCES capacity_buckets (capacity_bucket_id) ON DELETE RESTRICT\n)",
+      "sql": "CREATE TABLE capacity_reservation_debits (\n        capacity_reservation_id VARCHAR NOT NULL,\n        capacity_bucket_id VARCHAR NOT NULL,\n        dimensions JSON NOT NULL,\n        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        PRIMARY KEY (capacity_reservation_id),\n        CONSTRAINT uq_capacity_reservation_debits_reservation UNIQUE (capacity_reservation_id),\n        FOREIGN KEY(capacity_reservation_id)\n            REFERENCES capacity_reservations (capacity_reservation_id) ON DELETE CASCADE,\n        FOREIGN KEY(capacity_bucket_id)\n            REFERENCES capacity_buckets (capacity_bucket_id) ON DELETE RESTRICT\n    )",
       "triggers": []
     },
     "capacity_reservations": {
@@ -413,20 +418,6 @@
           "not_null": false,
           "primary_key": 0,
           "type": "VARCHAR"
-        },
-        {
-          "default": null,
-          "name": "placement_key",
-          "not_null": false,
-          "primary_key": 0,
-          "type": "VARCHAR"
-        },
-        {
-          "default": null,
-          "name": "placement_request",
-          "not_null": false,
-          "primary_key": 0,
-          "type": "JSON"
         },
         {
           "default": null,
@@ -532,6 +523,20 @@
           "not_null": true,
           "primary_key": 0,
           "type": "DATETIME"
+        },
+        {
+          "default": null,
+          "name": "placement_key",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "VARCHAR"
+        },
+        {
+          "default": null,
+          "name": "placement_request",
+          "not_null": false,
+          "primary_key": 0,
+          "type": "JSON"
         }
       ],
       "foreign_keys": [],
@@ -582,7 +587,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE capacity_reservations (\n\tcapacity_reservation_id VARCHAR NOT NULL, \n\tsettlement_resource_id VARCHAR, \n\tunits INTEGER NOT NULL, \n\tdimensions JSON, \n\tclaim_attributes JSON, \n\tstate VARCHAR NOT NULL, \n\tdeal_ref JSON, \n\tescrow_uid VARCHAR, \n\tplacement_key VARCHAR, \n\tplacement_request JSON, \n\thold_expires_at VARCHAR, \n\toffering_mode VARCHAR, \n\texecutor_target VARCHAR, \n\trelease_job_id VARCHAR, \n\texecutor_ref JSON, \n\tlease_start_utc VARCHAR, \n\tlease_end_utc VARCHAR, \n\tcreate_job_id VARCHAR, \n\tfailure_reason VARCHAR, \n\tfailure_message TEXT, \n\treleased_at VARCHAR, \n\trelease_requested_at VARCHAR, \n\tactivated_at_utc VARCHAR, \n\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tupdated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (capacity_reservation_id)\n)",
+      "sql": "CREATE TABLE capacity_reservations (\n        capacity_reservation_id VARCHAR NOT NULL,\n        settlement_resource_id VARCHAR,\n        units INTEGER NOT NULL,\n        dimensions JSON,\n        claim_attributes JSON,\n        state VARCHAR NOT NULL,\n        deal_ref JSON,\n        escrow_uid VARCHAR,\n        hold_expires_at VARCHAR,\n        offering_mode VARCHAR,\n        executor_target VARCHAR,\n        release_job_id VARCHAR,\n        executor_ref JSON,\n        lease_start_utc VARCHAR,\n        lease_end_utc VARCHAR,\n        create_job_id VARCHAR,\n        failure_reason VARCHAR,\n        failure_message TEXT,\n        released_at VARCHAR,\n        release_requested_at VARCHAR,\n        activated_at_utc VARCHAR,\n        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, placement_key VARCHAR, placement_request JSON,\n        PRIMARY KEY (capacity_reservation_id)\n    )",
       "triggers": []
     },
     "consumption_events": {
@@ -651,7 +656,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE consumption_events (\n\tid INTEGER NOT NULL, \n\tkey_id VARCHAR NOT NULL, \n\tamount INTEGER NOT NULL, \n\tidempotency_key VARCHAR, \n\toccurred_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT uq_consumption_idem UNIQUE (key_id, idempotency_key), \n\tFOREIGN KEY(key_id) REFERENCES api_keys (key_id)\n)",
+      "sql": "CREATE TABLE consumption_events (\n        id INTEGER NOT NULL,\n        key_id VARCHAR NOT NULL,\n        amount INTEGER NOT NULL,\n        idempotency_key VARCHAR,\n        occurred_at DATETIME NOT NULL,\n        PRIMARY KEY (id),\n        CONSTRAINT uq_consumption_idem UNIQUE (key_id, idempotency_key),\n        FOREIGN KEY(key_id) REFERENCES api_keys (key_id)\n    )",
       "triggers": []
     },
     "credit_grants": {
@@ -805,7 +810,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE credit_grants (\n\tid INTEGER NOT NULL, \n\tkey_id VARCHAR NOT NULL, \n\tfulfillment_id VARCHAR, \n\tnegotiation_id VARCHAR, \n\tservice VARCHAR, \n\tresource_id VARCHAR, \n\tkey_mode VARCHAR, \n\tkey_target_id VARCHAR, \n\towner_scheme VARCHAR, \n\towner_id VARCHAR, \n\trequest_digest VARCHAR, \n\tcapacity_reservation_id VARCHAR, \n\tresult_balance INTEGER, \n\tquantity INTEGER NOT NULL, \n\treason VARCHAR NOT NULL, \n\tgranted_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tFOREIGN KEY(key_id) REFERENCES api_keys (key_id), \n\tUNIQUE (fulfillment_id), \n\tUNIQUE (negotiation_id)\n)",
+      "sql": "CREATE TABLE credit_grants (\n        id INTEGER NOT NULL,\n        key_id VARCHAR NOT NULL,\n        fulfillment_id VARCHAR,\n        negotiation_id VARCHAR,\n        service VARCHAR,\n        resource_id VARCHAR,\n        key_mode VARCHAR,\n        key_target_id VARCHAR,\n        owner_scheme VARCHAR,\n        owner_id VARCHAR,\n        request_digest VARCHAR,\n        capacity_reservation_id VARCHAR,\n        result_balance INTEGER,\n        quantity INTEGER NOT NULL,\n        reason VARCHAR NOT NULL,\n        granted_at DATETIME NOT NULL,\n        PRIMARY KEY (id),\n        FOREIGN KEY(key_id) REFERENCES api_keys (key_id),\n        UNIQUE (fulfillment_id),\n        UNIQUE (negotiation_id)\n    )",
       "triggers": []
     },
     "grant_terms": {
@@ -847,7 +852,7 @@
         }
       ],
       "indexes": [],
-      "sql": "CREATE TABLE grant_terms (\n\tgrant_id INTEGER NOT NULL, \n\taccepted_terms TEXT NOT NULL, \n\tterms_digest VARCHAR NOT NULL, \n\trequest_charge INTEGER NOT NULL, \n\tPRIMARY KEY (grant_id), \n\tFOREIGN KEY(grant_id) REFERENCES credit_grants (id)\n)",
+      "sql": "CREATE TABLE grant_terms (\n        grant_id INTEGER NOT NULL,\n        accepted_terms TEXT NOT NULL,\n        terms_digest VARCHAR NOT NULL,\n        request_charge INTEGER NOT NULL,\n        PRIMARY KEY (grant_id),\n        FOREIGN KEY(grant_id) REFERENCES credit_grants (id)\n    )",
       "triggers": []
     },
     "resource_pools": {
@@ -914,7 +919,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE resource_pools (\n\tid VARCHAR NOT NULL, \n\tlabel VARCHAR NOT NULL, \n\tprovider VARCHAR NOT NULL, \n\tenabled BOOLEAN NOT NULL, \n\tpolicy_tags JSON NOT NULL, \n\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tupdated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, \n\tPRIMARY KEY (id)\n)",
+      "sql": "CREATE TABLE resource_pools (\n        id VARCHAR NOT NULL,\n        label VARCHAR NOT NULL,\n        provider VARCHAR NOT NULL,\n        enabled BOOLEAN NOT NULL,\n        policy_tags JSON NOT NULL,\n        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n        PRIMARY KEY (id)\n    )",
       "triggers": []
     },
     "schema_migrations": {
@@ -924,7 +929,7 @@
           "name": "id",
           "not_null": false,
           "primary_key": 1,
-          "type": "VARCHAR"
+          "type": "VARCHAR(255)"
         },
         {
           "default": "CURRENT_TIMESTAMP",
@@ -946,7 +951,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE schema_migrations (\n                id VARCHAR PRIMARY KEY,\n                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n            )",
+      "sql": "CREATE TABLE schema_migrations (id VARCHAR(255) PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
       "triggers": []
     },
     "site_lease_ended_events": {
@@ -1011,7 +1016,7 @@
           "unique": true
         }
       ],
-      "sql": "CREATE TABLE site_lease_ended_events (\n\tevent_id VARCHAR NOT NULL, \n\tcapacity_reservation_id VARCHAR NOT NULL, \n\ttransition_key VARCHAR NOT NULL, \n\tpayload JSON NOT NULL, \n\tPRIMARY KEY (event_id), \n\tUNIQUE (capacity_reservation_id, transition_key)\n)",
+      "sql": "CREATE TABLE site_lease_ended_events (\n        event_id VARCHAR NOT NULL,\n        capacity_reservation_id VARCHAR NOT NULL,\n        transition_key VARCHAR NOT NULL,\n        payload JSON NOT NULL,\n        PRIMARY KEY (event_id),\n        UNIQUE (capacity_reservation_id, transition_key)\n    )",
       "triggers": []
     }
   }

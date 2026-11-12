@@ -10,7 +10,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+
+from apicredits_storefront.migrate import CHAIN
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "baseline" / "schema.json"
 
@@ -68,8 +70,8 @@ def describe_schema(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def fresh_schema(directory: Path) -> dict[str, Any]:
-    db = storefront_sqlite_client(db_path=str(directory / "baseline.db"))
-    conn = sqlite3.connect(db.db_path)
+    migrate_storefront_database(CHAIN, directory / "baseline.db")
+    conn = sqlite3.connect(directory / "baseline.db")
     try:
         return describe_schema(conn)
     finally:

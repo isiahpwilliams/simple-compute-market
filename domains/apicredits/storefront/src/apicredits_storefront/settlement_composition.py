@@ -78,9 +78,7 @@ def build_api_credit_settlement_composition(
         role="seller",
     )
     validate_mechanism_configuration(settlement_config)
-    repository = SettlementSQLiteRepository(
-        sqlite_client.db_path, apply_migrations=False
-    )
+    repository = SettlementSQLiteRepository(sqlite_client.db_path)
     resources: dict[str, Any] = {
         "marketplace_signer": marketplace_signer,
         "clients": chain_clients,

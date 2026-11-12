@@ -65,4 +65,6 @@ EXPOSE ${PORT}
 HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=10s \
   CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ['PORT'] + '/health')" || exit 1
 
-CMD ["sh", "-c", "exec inference-storefront serve --host 0.0.0.0 --port \"$PORT\""]
+# The migration command runs before the storefront, which refuses a database
+# it has not migrated.
+CMD ["sh", "-c", "inference-storefront-migrate && exec inference-storefront serve --host 0.0.0.0 --port \"$PORT\""]

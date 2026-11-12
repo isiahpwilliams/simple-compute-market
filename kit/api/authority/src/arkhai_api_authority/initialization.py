@@ -15,9 +15,10 @@ from arkhai_api_authority.profile import CapacityProfile
 def initialize(engine: Engine, profile: CapacityProfile) -> None:
     """Seed the profile's pool when absent, then refuse any stored pool without valid declarations.
 
-    Runs after the migration chain on every start, so a pool an operator
-    changed is kept as it is and a pool from before the declarations existed
-    stops the service rather than being served.
+    Runs on every start, after the root has checked the database against the
+    migration chain, so a pool an operator changed is kept as it is and a pool
+    without declarations stops the service rather than being served. No
+    migration seeds the pool: no schema constraint requires it.
     """
 
     with Session(engine) as session, session.begin():

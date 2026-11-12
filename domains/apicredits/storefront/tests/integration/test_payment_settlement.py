@@ -38,6 +38,8 @@ from apicredits_storefront.domain_runtime import get_market_domain_contract
 from apicredits_storefront.services.fulfillment_service import build_api_credit_failure_policy
 from apicredits_storefront.container import SELLER_STAGES
 from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 from arkhai_api_selling.persistence import StorefrontSQLiteClient
 from arkhai_apicredits.negotiation.terms import make_api_credits_provision_terms
 from tests._settings_overrides import settings_overrides
@@ -141,7 +143,7 @@ async def _seed(db: StorefrontSQLiteClient, stage: PaymentSellerStage, *, agreem
     )
     await db.commit_agreed_terms(
         negotiation_id=NEGOTIATION,
-        agreed_price=300,
+        negotiated_scalar=300,
         agreed_duration_seconds=0,
         agreement_bytes=raw,
         accepted_at=now,
@@ -156,6 +158,7 @@ async def _seed(db: StorefrontSQLiteClient, stage: PaymentSellerStage, *, agreem
 @pytest.fixture
 async def harness(tmp_path):
     async def build(*, actions=("emit_event",), enabled=True, agreement_listing=LISTING):
+        migrate_storefront_database(CHAIN, str(tmp_path / "credits.db"))
         db = storefront_sqlite_client(db_path=str(tmp_path / "credits.db"))
         payments = FakePaymentsClient()
         config = ArkhaiPaymentsConfig(
@@ -368,6 +371,7 @@ async def test_a_refund_after_issuance_start_records_both(harness):
 
 def _restart(tmp_path, h, *, approved: bool):
     """A fresh composition over the same SQLite file, as after a process restart."""
+    migrate_storefront_database(CHAIN, str(tmp_path / "credits.db"))
     db = storefront_sqlite_client(db_path=str(tmp_path / "credits.db"))
     payments = FakePaymentsClient()
     if approved:

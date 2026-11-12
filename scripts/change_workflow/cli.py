@@ -31,9 +31,10 @@ documents, or with `common` those every session reads, and `config parts`
 validation's plan for a change, `run` and `openspec`
 the repository's hooks and its OpenSpec command (`hooks`), `check` the
 configuration's, index, task-list, push, skill, and round-view checks, a change's
-default checks (`check change`), and the graph diagram's comparison with the graph
-table, `hook post-compaction` the post-compaction hook, and `wait` the bounded wait
-on a background command's output. `check graph` is internal: it maintains the
+default checks (`check change`), a review's format check on standard input (`check
+review`), and the graph diagram's comparison with the graph table, `hook
+post-compaction` the post-compaction hook, and `wait` the bounded wait on a
+background command's output. `check graph` is internal: it maintains the
 engine's own diagram, and no repository or runner relies on it.
 
 Before a step starts, `start` checks the configuration whole and refuses a step
@@ -68,10 +69,11 @@ from .common import ORCHESTRATOR, SESSION_ID, UNATTENDED_RUN, StepError, reposit
 from .convert import convert_change
 from .find import ChangeNotFound, change_directory, is_archived
 from .graph import KINDS, STEPS
-from .log import (branch_decisions, direction, history_log_path, last_entries, log_path,
-                  note_orchestrator, note_round, open_log, read_log, record_interactive)
+from .log import (Checkout, branch_decisions, direction, git_checkout, history_log_path,
+                  last_entries, log_path, note_orchestrator, note_round, open_log, read_log,
+                  record_interactive, recorded_landing)
 from .records import git_head
-from .review import review_and_log
+from .review import check_review, review_and_log
 from .running import drop_invocations, invocations_directory, kept_invocations, stop
 from .watch import denial_report, watch
 from .wrapper import Wrapper
@@ -116,7 +118,8 @@ ARCHIVED_ONLY = _taking(graph.ARCHIVED)
 def interactive_outcome(change: str, step: str, outcome_text: str, session: str | None,
                         environ: Mapping[str, str], root: Path,
                         head: Callable[[Path], str | None] = git_head,
-                        invocations: Callable[[Path], Path | None] = invocations_directory
+                        invocations: Callable[[Path], Path | None] = invocations_directory,
+                        checkout: Callable[[Path, str], Checkout] = git_checkout
                         ) -> dict:
     """Record the outcome of `step`, run interactively on `change`, and return its line.
 
@@ -141,7 +144,8 @@ def interactive_outcome(change: str, step: str, outcome_text: str, session: str 
     directory = invocations(root)
     invoked = kept_invocations(directory, session, change)
     line = record_interactive(log_path(root, change), step, outcome, session=session,
-                              commit=head(root), invoked=invoked)
+                              commit=head(root), invoked=invoked,
+                              checkout=checkout(root, change))
     drop_invocations(directory, session, invoked)
     return line
 
@@ -406,6 +410,10 @@ def _parser() -> argparse.ArgumentParser:
     checks.add_parser("skills", help="every agent skill loaded from its one source")
     checks.add_parser("round-view", help="fail while a round view is open")
     checks.add_parser("graph", help="where the graph's diagram departs from the graph table")
+    review_ = checks.add_parser(
+        "review", help="a review on standard input, checked as it is before it is published")
+    review_.add_argument("kind", choices=KINDS)
+    review_.add_argument("change")
     waiting = commands.add_parser(
         "wait", help="block until a file holds a line matching a pattern, within a bound")
     waiting.add_argument("file", type=Path)
@@ -451,15 +459,23 @@ _FROM = re.compile(r"from\s+\S")
 
 def merge_arguments(root: Path, change: str, arguments: str) -> str:
     """The merge's arguments, naming the branch it brings in: the one given, `from
-    <branch>`, or else the branch the change lands on, as its clone recorded it;
-    refused, naming the argument, with neither."""
+    <branch>`; else the branch the change's last finished merge recorded in its
+    `landing`, so a merge given another branch than the clone's is followed by merges
+    of that branch; else the branch the change lands on, as its clone recorded it;
+    refused, naming the argument, with none.
+
+    Only the recorded branch is taken, never its remote: a merge after the archive
+    may run in the workspace once the clone that recorded it is gone, where the
+    remote is named otherwise, and it chooses its remote afresh where it runs."""
     if _FROM.match(arguments):
         return arguments
-    base = find.landing_branch(root, change)
+    landing = recorded_landing(read_log(log_path(root, change)))
+    base = landing["branch"] if landing is not None else find.landing_branch(root, change)
     if base is None:
         raise StepError(f"the merge brings in the branch {change} lands on, and none is "
-                        "recorded, since the change has no clone that recorded one: give it "
-                        "with FROM=<branch>, or --arguments 'from <branch>'")
+                        "recorded, since no finished merge recorded one and the change has no "
+                        "clone that recorded one: give it with FROM=<branch>, or --arguments "
+                        "'from <branch>'")
     return " ".join(part for part in (f"from {base}", arguments) if part)
 
 
@@ -698,6 +714,8 @@ def _dispatch(args: argparse.Namespace, root: Path, wrapper: Wrapper,
         except ChangeNotFound as exc:
             raise StepError(str(exc)) from exc
         return 0 if hooks.Hooks(root, configuration, environ).check_change(args.change) else 1
+    if args.command == "check" and args.check == "review":
+        return check_review(sys.stdin.read(), args.kind, args.change)
     if args.command == "wait":
         return _wait(args)
     if (reached := delegated(args)) is not None:
@@ -728,7 +746,8 @@ def _dispatch(args: argparse.Namespace, root: Path, wrapper: Wrapper,
     path = (history_log_path if args.command == "log" else log_path)(wrapper.root, args.change)
     if args.command == "record":
         line = interactive_outcome(args.change, args.step, args.outcome, args.session,
-                                   environ, wrapper.root, wrapper.head, wrapper.invocations)
+                                   environ, wrapper.root, wrapper.head, wrapper.invocations,
+                                   wrapper.checkout)
         print(json.dumps(line, ensure_ascii=False))
         return 0
     if args.command == "convert":

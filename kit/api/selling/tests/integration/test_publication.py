@@ -9,6 +9,7 @@ from core_storefront.sqlite_client import SQLiteClient
 from market_resource_pools import ResolvedPool
 from market_resource_pools_contracts.backing import BACKED
 
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.publication import (
     LISTING_PAGE,
     PublicationRefused,
@@ -17,7 +18,7 @@ from arkhai_api_selling.publication import (
     all_listings,
 )
 from arkhai_api_selling.quota_listing import QuotaPool, prepare_listing_binding
-from tests.bundles import CLAIMANT, DOMAIN, EXAMPLE
+from tests.bundles import CLAIMANT, DOMAIN, EXAMPLE, example_chain
 
 COUNT = LISTING_PAGE + 50
 SITE = "quota"
@@ -69,12 +70,14 @@ def _publication(site: _Site | None = None) -> QuotaPublication:
             registry_urls=(),
             storefront_url="https://seller.example",
             client_factory=lambda: None,
+            publisher=lambda: CLAIMANT,
         ),
     )
 
 
 async def _storefront(tmp_path) -> SQLiteClient:
     """More open listings over one quota resource than one page holds."""
+    migrate_storefront_database(example_chain(), tmp_path / "storefront.db")
     client = SQLiteClient(str(tmp_path / "storefront.db"))
     resource = {"product": "alpha", "quota": "quota-a", "offering_mode": "example"}
     pool = QuotaPool("default", ResolvedPool(BACKED, frozenset({"example"}), True))
@@ -172,6 +175,7 @@ def _guarded(site: _Site | None = None, *, blocked: str = "L-000") -> QuotaPubli
             registry_urls=(),
             storefront_url="https://seller.example",
             client_factory=lambda: None,
+            publisher=lambda: CLAIMANT,
         ),
     )
 
@@ -263,6 +267,7 @@ def _publishing_to(registries: _Registries) -> QuotaPublication:
             registry_urls=registries.urls,
             storefront_url="https://seller.example",
             client_factory=lambda: registries,
+            publisher=lambda: CLAIMANT,
         ),
     )
 

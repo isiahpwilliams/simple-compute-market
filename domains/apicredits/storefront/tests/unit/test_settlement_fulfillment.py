@@ -44,6 +44,8 @@ from arkhai_apicredits.label import API_CREDITS_LABEL
 from apicredits_storefront import container, server
 from apicredits_storefront.container import SELLING_CONTRIBUTIONS
 from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 from apicredits_storefront.utils import config as config_module
 from tests._settings_overrides import replaced_setting
 from tests.integration.credit_negotiation import FakeCapacity
@@ -132,6 +134,7 @@ def _events():
 
 def _private_results(tmp_path):
     db_path = tmp_path / "hosted-private-results.db"
+    migrate_storefront_database(CHAIN, str(db_path))
     storefront_sqlite_client(str(db_path))
     return PrivateResultRepository(db_path, SELLING_CONTRIBUTIONS)
 
@@ -221,8 +224,7 @@ async def test_payment_refusal_releases_hold_using_negotiation_not_transaction(
     tmp_path, monkeypatch,
 ):
     from apicredits_storefront.services import fulfillment_service
-    from apicredits_storefront.container import storefront_sqlite_client
-
+    migrate_storefront_database(CHAIN, str(tmp_path / "failure.db"))
     db = storefront_sqlite_client(str(tmp_path / "failure.db"))
     now = datetime.now().isoformat()
     await upsert_bound_listing(
@@ -283,7 +285,6 @@ async def settled_db(tmp_path, monkeypatch, request):
     import market_policy.negotiation_thread as thread_module
     from apicredits_storefront.domain_runtime import get_market_domain_contract
     from apicredits_storefront.utils import config as config_module
-    from apicredits_storefront.container import storefront_sqlite_client
     from market_core.schemas import EscrowProposal, ProvisionTerms
     from market_policy.identity import Identity
     from market_policy.negotiation_thread import get_thread_store
@@ -325,6 +326,7 @@ async def settled_db(tmp_path, monkeypatch, request):
     # Released whatever the setup below does, so the setting never leaks.
     request.addfinalizer(held.close)
     held.enter_context(replaced_setting("settlement", settlement))
+    migrate_storefront_database(CHAIN, str(tmp_path / "settle.db"))
     client = storefront_sqlite_client(db_path=str(tmp_path / "settle.db"))
     thread_module._thread_store = None
     get_thread_store(
@@ -425,7 +427,7 @@ def _build_settlement_composition(
         async def collect(self, _obligation, **_kwargs):
             return EffectOutcome(receipt={"tx": "collected"})
 
-    repository = SettlementSQLiteRepository(db.db_path, apply_migrations=False)
+    repository = SettlementSQLiteRepository(db.db_path)
     runtime = SettlementRuntime(
         repository,
         {"alkahest.v1": ReadyEscrowClient()},

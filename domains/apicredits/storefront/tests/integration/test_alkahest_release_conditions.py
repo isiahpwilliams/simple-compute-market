@@ -35,6 +35,8 @@ import apicredits_storefront.container as container
 import apicredits_storefront.server as server
 from apicredits_storefront import container
 from apicredits_storefront.domain_runtime import get_market_domain_contract
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 from arkhai_api_selling.publish_route import ListingClient
 from apicredits_storefront.utils import config as storefront_config
 from tests.integration.test_publish_reconcile import _QuotaRuntime
@@ -161,9 +163,13 @@ def _app(seams=None):
 
 
 @asynccontextmanager
-async def _started(settlement: dict, *, probed: bool = True, seams=None):
+async def _started(settlement: dict, *, probed: bool = True, seams=None, migrated=True):
     """The started storefront under ``settlement``, its chain probed once
-    unless ``probed`` is false."""
+    unless ``probed`` is false, on the database its migration command built
+    unless ``migrated`` is false, for a startup refused before any check of
+    the database, which then leaves no file behind."""
+    if migrated:
+        migrate_storefront_database(CHAIN, storefront_config.settings.get("db_path"))
     app = _app(seams)
     with _replaced(settlement=settlement):
         async with app.router.lifespan_context(app):
@@ -285,7 +291,7 @@ async def test_an_unsettleable_section_starts_and_its_status_names_the_blocker(
     Alkahest unready with the configuration blocker."""
     section, _blocker = UNSETTLEABLE[case]
     with pytest.raises(ReleaseModelError, match="cannot deliver"):
-        async with _started(_settlement(**section)):
+        async with _started(_settlement(**section), migrated=False):
             pass
     assert container._sqlite_client is None
     assert not storefront.exists()
@@ -300,7 +306,7 @@ async def test_supplied_escrows_publish_no_alkahest_option_while_it_is_unready(
     option publishes, so a listing whose only option they were is refused."""
     section, _blocker = UNSETTLEABLE[case]
     with pytest.raises(ReleaseModelError, match="cannot deliver"):
-        async with _started(_settlement(**section)):
+        async with _started(_settlement(**section), migrated=False):
             pass
     assert container._sqlite_client is None
     assert not storefront.exists()
@@ -334,7 +340,7 @@ async def test_alkahest_clauses_compile_no_option_while_it_is_unready(storefront
     readiness names the configuration blocker."""
     section, _blocker = UNSETTLEABLE[case]
     with pytest.raises(ReleaseModelError, match="cannot deliver"):
-        async with _started(_settlement(**section)):
+        async with _started(_settlement(**section), migrated=False):
             pass
     assert container._sqlite_client is None
     assert not storefront.exists()
@@ -368,7 +374,7 @@ async def test_a_create_unready_for_configuration_before_the_chain_is_reached_an
     """Not retryable: the configuration blocker stands whatever the chain answers."""
     section, _blocker = UNSETTLEABLE[case]
     with pytest.raises(ReleaseModelError, match="cannot deliver"):
-        async with _started(_settlement(**section), probed=False):
+        async with _started(_settlement(**section), probed=False, migrated=False):
             pass
     assert container._sqlite_client is None
     assert not storefront.exists()
@@ -380,7 +386,7 @@ async def test_a_clause_create_while_alkahest_is_unready_for_configuration_answe
 ):
     section, _blocker = UNSETTLEABLE[case]
     with pytest.raises(ReleaseModelError, match="cannot deliver"):
-        async with _started(_settlement(**section)):
+        async with _started(_settlement(**section), migrated=False):
             pass
     assert container._sqlite_client is None
     assert not storefront.exists()

@@ -8,14 +8,14 @@ dependencies = [
     "arkhai-core>=0.4.0",
     "arkhai-api>=0.2.0",
     "arkhai-api-client>=0.1.0",
-    "arkhai-api-selling>=0.6.0",
+    "arkhai-api-selling>=0.7.0",
     "arkhai-api-selling-alkahest>=0.2.0",
     "arkhai-inference-domain>=0.2.0",
     "arkhai-core-storefront>=0.18.0",
     "arkhai-kit-alkahest>=0.8.0",
     "arkhai-kit-config>=0.4.0",
     "arkhai-kit-identity==0.4.0",
-    "arkhai-kit-settlement-runtime>=0.4.0",
+    "arkhai-kit-settlement-runtime>=0.8.0",
     "arkhai-kit-storefront==0.10.0",
     "arkhai-kit-negotiation-runtime==0.7.0",
     "fastapi~=0.115.8",
@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 inference-storefront = "inference_storefront.cli:app"
+inference-storefront-migrate = "inference_storefront.migrate:main"
 
 [project.entry-points."market.storefront_domains"]
 inference = "inference_storefront.domain_runtime:INFERENCE_STOREFRONT_DOMAIN"

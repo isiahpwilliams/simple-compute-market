@@ -33,10 +33,11 @@ permissions:
 # it fails rather than skips when the image lacks its Ansible or callback, and
 # its output is the job log.
 #
-# The VM, bare-metal and API-credit lanes' stacks also run the payments double
-# (`tools/payments-lane-double`), the stand-in Arkhai Payments service their
-# payment scenarios settle against; the inference lane settles through Alkahest
-# alone.
+# Every lane's stack also runs the lane doubles (`tools/payments-lane-double`,
+# `tools/mediation-lane-double`): the stand-in Arkhai Payments service the VM,
+# bare-metal and API-credit payment scenarios settle against, and the dispute
+# authority each lane's registries recommend. The inference lane settles
+# through Alkahest alone.
 #
 # Each lane's targets name its compose project and files; the log collection
 # and teardown below go through the same targets, so a job names none of them

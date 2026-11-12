@@ -51,6 +51,7 @@ from market_storefront.deal_lifecycle import VmDealLifecycle
 from market_deal_servicing import create_lifecycle_router, PhysicalResult
 from market_storefront_kit.dispute_configuration import RegistryDisputePolicy
 from market_storefront.publication_binding import prepare_vm_listing_binding
+from market_storefront.utils.migrations import migrate_storefront_database
 from market_storefront.utils.sqlite_client import SQLiteClient
 from tests._settings_overrides import settings_overrides
 
@@ -218,7 +219,7 @@ async def _seed(
     )
     await db.commit_agreed_terms(
         negotiation_id=NEGOTIATION,
-        agreed_price=100,
+        negotiated_scalar=100,
         agreed_duration_seconds=3600,
         agreement_bytes=raw,
         accepted_at=now,
@@ -271,6 +272,7 @@ async def _harness(
         fulfillment=ImmutableFulfillmentCapability(fulfill=delivery),
     )
     registry = build_vm_storefront_registry(domain)
+    migrate_storefront_database(tmp_path / "storefront.db")
     db = SQLiteClient(str(tmp_path / "storefront.db"), registry=registry)
     payments = FakePaymentsClient()
     stage = PaymentSellerStage(_config(), client_for_owner=payments)
@@ -350,6 +352,11 @@ async def _status_code(call) -> int:
 @pytest.mark.asyncio
 async def test_settlement_is_pending_until_a_verified_receipt_then_delivers_once(make):
     h = await make()
+    with sqlite3.connect(h.db.db_path) as conn:
+        conn.execute(
+            "UPDATE negotiation_threads SET negotiated_scalar = ? WHERE negotiation_id = ?",
+            ("10000", NEGOTIATION),
+        )
     pending = await h.settle()
     assert pending.pending and pending.retryable
     assert pending.settlement_ref == h.data.transaction_id

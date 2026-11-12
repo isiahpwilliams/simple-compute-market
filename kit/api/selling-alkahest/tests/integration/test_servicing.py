@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.settlement_composition import (
     build_settlement_registry,
     servicing_mechanism_clients,
@@ -18,7 +19,7 @@ from market_settlement_runtime import (
 )
 
 from arkhai_api_selling_alkahest.stage import AlkahestSellerStage
-from tests.bundles import ESCROW_UID, EXAMPLE, NEGOTIATION, SELLER, obligation
+from tests.bundles import CHAIN, ESCROW_UID, EXAMPLE, NEGOTIATION, SELLER, obligation
 
 RESOURCES = {"get_client": lambda _chain: None, "chains": {}, "default_chain": None, "clients": {}}
 
@@ -62,6 +63,7 @@ async def test_an_accepted_obligation_is_collected_after_its_mechanism_is_disabl
     escrow = ReadyEscrow()
     stages = _stages(escrow)
     registry = build_settlement_registry(stages)
+    migrate_storefront_database(CHAIN, tmp_path / "journal.db")
     repository = SettlementSQLiteRepository(str(tmp_path / "journal.db"))
 
     accepting = SettlementRuntime(

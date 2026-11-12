@@ -12,7 +12,11 @@ import httpx
 from market_identity import TrustedIdentitySet
 from storefront_client import StorefrontClient
 
+from arkhai_api_selling.migrations import migrate_storefront_database
+
 from inference_storefront import container, server
+from inference_storefront.migrate import CHAIN
+from inference_storefront.utils import config as storefront_config
 from tests.integration.conftest import (
     ADMIN_SIGNER,
     ANVIL,
@@ -32,6 +36,7 @@ async def _started(monkeypatch, seams: server.InferenceCompositionSeams) -> Asyn
         return None
 
     monkeypatch.setattr(server, "_startup_tasks", no_startup_tasks)
+    migrate_storefront_database(CHAIN, storefront_config.settings.get("db_path"))
     served = app(seams)
     async with served.router.lifespan_context(served):
         transport = httpx.ASGITransport(app=served)

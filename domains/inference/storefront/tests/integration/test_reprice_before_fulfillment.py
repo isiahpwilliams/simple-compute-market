@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 from arkhai_api.issuance import accepted_terms_digest
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.publish_route import ListingClient
 from arkhai_inference.listings import InferenceModelCard, accepted_terms
 from arkhai_inference.negotiation.terms import INFERENCE_PROVISION_KIND, INFERENCE_PROVISION_VERSION
@@ -28,8 +29,10 @@ from storefront_client import StorefrontClient
 from storefront_client.settlement_routes import SETTLE
 
 from inference_storefront import container, server
+from inference_storefront.migrate import CHAIN
 from inference_storefront.model_card import PublishFromQuotaRequest
 from inference_storefront.services import credits_service_client
+from inference_storefront.utils import config as storefront_config
 from tests.cards import model_card
 from tests.integration.conftest import (
     ADMIN_SIGNER,
@@ -107,6 +110,7 @@ async def running(monkeypatch, chain: ScriptedChain, authority: ScriptedAuthorit
     monkeypatch.setattr(container.QUOTA_CAPACITY, "runtime", lambda factory: quota)
     monkeypatch.setattr(container.ALKAHEST_STAGE, "_verify_escrow", chain.verify_escrow)
     monkeypatch.setattr(credits_service_client, "_client", authority.client())
+    migrate_storefront_database(CHAIN, storefront_config.settings.get("db_path"))
     served = app(
         server.InferenceCompositionSeams(
             alkahest_client_constructor=lambda _policy: lambda _chain: chain.client,

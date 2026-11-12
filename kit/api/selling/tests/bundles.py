@@ -32,6 +32,7 @@ from market_core.schemas import Agreement, SettlementOption, derive_settlement_o
 from market_identity import Ed25519Signer
 from pydantic import BaseModel, ConfigDict
 
+from arkhai_api_selling.migrations import migrate_storefront_database, storefront_chain
 from arkhai_api_selling.persistence import StorefrontSQLiteClient
 from arkhai_api_selling.contributions import (
     ConsumptionRule,
@@ -158,6 +159,16 @@ def accepted_agreement(listing_id: str) -> tuple[Agreement, bytes]:
     return agreement, agreement.model_dump_json(exclude_none=True).encode()
 
 
+def example_chain(contributions: SellingContributions = EXAMPLE):
+    """The family's chain under the bundle's prefix, named for a storefront of these tests."""
+    return storefront_chain(
+        contributions.table_prefix,
+        service="the example storefront",
+        command="example-storefront-migrate",
+    )
+
+
 def create_tables(db_path: Path, contributions: SellingContributions = EXAMPLE) -> StorefrontSQLiteClient:
-    """The storefront's schema, migrated by the selling library's own client under the bundle's prefix."""
+    """A client over the storefront's schema, migrated by the family's chain under the bundle's prefix."""
+    migrate_storefront_database(example_chain(contributions), db_path)
     return StorefrontSQLiteClient(str(db_path), contributions)

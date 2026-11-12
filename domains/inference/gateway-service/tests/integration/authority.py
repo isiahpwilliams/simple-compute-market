@@ -9,6 +9,7 @@ from base64 import urlsafe_b64encode
 from pathlib import Path
 from typing import Any
 
+from arkhai_api_authority import create_db_engine, migrate_database
 from market_identity import Ed25519Signer
 
 # Deterministic development seeds for these tests only; never used on any network.
@@ -22,6 +23,7 @@ _MODULES = (
     "inference_service.identity",
     "inference_service.config",
     "inference_service.container",
+    "inference_service.migrate",
 )
 
 
@@ -45,8 +47,19 @@ def load_authority(directory: Path, monkeypatch) -> Any:
     )
     unload_authority()
     main = importlib.import_module("inference_service.main")
+    _migrate(directory / "inference.db")
     importlib.import_module("inference_service.container").init()
     return main.app
+
+
+def _migrate(path: Path) -> None:
+    """Build the database as the service's migration command does; startup refuses any other."""
+    chain = importlib.import_module("inference_service.migrate").CHAIN
+    engine = create_db_engine(f"sqlite:///{path}", is_sqlite=True)
+    try:
+        migrate_database(engine, chain)
+    finally:
+        engine.dispose()
 
 
 def unload_authority() -> None:

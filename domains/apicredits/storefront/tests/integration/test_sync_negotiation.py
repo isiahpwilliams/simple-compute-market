@@ -88,7 +88,7 @@ async def test_listed_price_accept_persists_terms_without_unfunded_hold(
 
     thread = await db.load_negotiation_thread_row(negotiation_id=neg_id)
     assert thread["terminal_state"] == "success"
-    assert int(thread["agreed_price"]) == 300
+    assert int(thread["negotiated_scalar"]) == 300
     assert thread["settlement_plan"] == response["settlement_plan"]
 
     assert fake_capacity.reserved == []
@@ -274,7 +274,7 @@ async def test_bisection_counter_round_scales_by_quantity(
     assert response["action"] == "accept"
     thread = await db.load_negotiation_thread_row(negotiation_id=neg_id)
     assert thread["terminal_state"] == "success"
-    assert int(thread["agreed_price"]) == 275
+    assert int(thread["negotiated_scalar"]) == 275
 
 
 async def test_an_opened_thread_takes_its_listings_binding(db, fake_capacity, key_records):
@@ -333,7 +333,7 @@ async def test_force_accept_records_what_a_negotiated_acceptance_records(
     db, fake_capacity, key_records
 ):
     """Administrative acceptance runs the domain's acceptance hooks: the credit
-    terms and agreed price are recorded, and no unfunded quota hold is granted,
+    terms and negotiated scalar are recorded, and no unfunded quota hold is granted,
     exactly as after a negotiated acceptance."""
     with settings_overrides(**{"negotiation.policies": ["bisection"]}):
         opening = await _start(db, amount=250, quantity=3)
@@ -354,7 +354,7 @@ async def test_force_accept_records_what_a_negotiated_acceptance_records(
     assert response["amount"] == 290
     thread = await db.load_negotiation_thread_row(negotiation_id=neg_id)
     assert thread["terminal_state"] == "success"
-    assert int(thread["agreed_price"]) == 290
+    assert int(thread["negotiated_scalar"]) == 290
     assert await db.load_credit_terms(negotiation_id=neg_id) == {
         "negotiation_id": neg_id,
         "quantity": 3,

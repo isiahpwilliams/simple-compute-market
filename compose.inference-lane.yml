@@ -1,24 +1,33 @@
 # The inference end-to-end lane's own services and bindings: a compute-schema
-# registry, an API-credit-schema registry, and the model stub's streaming pace.
+# registry, an API-credit-schema registry, the lane profile on every registry,
+# and the model stub's streaming pace.
 #
 # The inference scenario's schema filter is shown routing discovery to the
 # inference registry and leaving the other two alone. In the full local stack
 # those registries are VM's and API credits'; the lane runs neither domain, so
-# it runs these, layered after compose.inference.yml and
-# compose.inference-local.yml:
+# it runs these, layered after compose.inference.yml,
+# compose.inference-local.yml and compose.payments-double.yml:
 #
 #     docker compose -p simple-market-inference \
 #       -f compose.inference.yml -f compose.inference-local.yml \
-#       -f compose.inference-lane.yml up -d
+#       -f compose.payments-double.yml -f compose.inference-lane.yml up -d
 #
 # The full local stack never layers this file. Each registry runs its committed
 # profile, with the descriptor it advertises overridden to its address on the
 # lane's network, and reuses the committed signer credential of the registry it
 # stands in for: well-known development values that must never be used on a
-# public network; see dev-env/identities/README.md, "The inference lane". The
-# lane runs no payments double: inference settles through Alkahest alone. Paths
-# are relative to the repository root.
+# public network; see dev-env/identities/README.md, "The inference lane".
+# Inference settles through Alkahest alone, so nothing pays through the payments
+# double; the lane runs both doubles so its registries recommend the mediation
+# double as the dispute authority, as every lane's do. Paths are relative to the
+# repository root.
 services:
+  # Every registry the buyer reads layers the lane's profile recommending its
+  # mediation double as the dispute authority over its own.
+  inference-registry:
+    environment:
+      - ACTIVE_PROFILES=inference-registry,payments-lane
+
   # A pause between streamed chunks long enough that the scenario can tell a
   # relayed stream from a buffered one.
   model-stub:
@@ -32,7 +41,7 @@ services:
       - core/registry/.env.docker-compose
     environment:
       - CONFIG_DIRECTORY=/etc/arkhai/registry
-      - ACTIVE_PROFILES=compute-registry
+      - ACTIVE_PROFILES=compute-registry,payments-lane
       - REGISTRY_DESCRIPTOR_DISPLAY_NAME=Local Inference Lane Compute Registry
     # No host port: the buyer reaches it on the lane's network, at the address
     # its descriptor advertises.
@@ -57,7 +66,7 @@ services:
       - core/registry/.env.docker-compose
     environment:
       - CONFIG_DIRECTORY=/etc/arkhai/registry
-      - ACTIVE_PROFILES=api-credits-registry
+      - ACTIVE_PROFILES=api-credits-registry,payments-lane
       - REGISTRY_DESCRIPTOR_BASE_URL=http://api-credits-registry:8080
       - REGISTRY_DESCRIPTOR_DISPLAY_NAME=Local Inference Lane API-Credit Registry
     volumes:

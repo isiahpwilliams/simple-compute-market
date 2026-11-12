@@ -22,7 +22,7 @@ zerotier_network = ""
 # Persist by default: this is the path the seller compose mounts a named
 # volume at (compose/seller.yml -> .../data/storefront) and the one the
 # quickstart documents, so a config that omits db_path still survives a
-# container recreate. The parent dir is auto-created on first start. An
+# container recreate. `market-storefront-migrate` creates the parent dir. An
 # ephemeral default (e.g. /tmp) silently loses all listing/deal state on
 # restart. Operators running outside the container should set an absolute
 # db_path in storefront.toml.
@@ -201,6 +201,10 @@ policies           = ["has_matching_inventory_guard", "escrow_shape_guard", "bis
 seller_model_path  = "domains/vms/negotiation/src/arkhai_vms_negotiation/rl/models/arkhai_negotiator_seller.pt"
 buyer_model_path   = "domains/vms/negotiation/src/arkhai_vms_negotiation/rl/models/arkhai_negotiator_buyer.pt"
 extra_policy_paths = []
+# One commercial floor for every shape priced by the advertised rate structure,
+# in basis points of the advertised rates: an integer from 0 to 10000, so the
+# advertised rates are always a price the storefront accepts.
+multiplier_floor_bps = 10000
 
 [pricing]
 # Structured settlement option defaults. Each entry is one complete clause;

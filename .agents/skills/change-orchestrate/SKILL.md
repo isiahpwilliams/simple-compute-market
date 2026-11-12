@@ -162,6 +162,10 @@ records them as `granted`, and the step's next run is held to its table again.
 Always start a fresh run through its target, never the script directly: the target
 checks the change, refuses while a round view is open, and passes `SECTIONS`,
 `FRESH`, `SESSION_ID`, and `HELM_ALL_SCENARIOS` on.
+An implementation run's `ARGUMENTS` carries a merge's conflicts to resolve or the
+owner's direction to its sections, in their words, with any routing note beside it
+marked as yours (where a stopped session's work waits, the path a granted rule
+names); the same direction goes in the log through `note` as well.
 Each implementation run starts a fresh session unless the owner directs the work to
 an earlier implementation session: the next section to a session they judge small
 enough, or a fix to the session that made the edits. Then pass that run's `session`
@@ -180,6 +184,16 @@ waiting runs distinct. Never advance with a
 process still running or bypass a guard that refuses. A failed review has no
 published result; an earlier record does not count.
 
+A review whose draft the format check refused was sent back to its reviewer
+automatically, and its line's `sent_back` lists the problems of each send-back.
+When it then passed, tell the owner it was sent back for correction, as its
+`message` says, and go on to its triage: nothing waits on their answer. When the
+refusal survived the send-back, the run stopped with `refused` naming the problems
+and the draft kept as its `rejected`, never a record its triage reads: relay the
+stop, and rerun the review with `make review CHANGE=<change> KIND=<kind>`, which
+continues the refused session with those problems and supersedes the stop, unless
+the owner says otherwise. If that rerun is refused again, wait for the owner.
+
 Start every step run as its own background command of the harness, one run per
 call, so the harness tracks the run and tells you when it exits. Never detach a
 run inside an ordinary command — `( make … & )`, `nohup`, `setsid`, or a trailing
@@ -187,9 +201,11 @@ run inside an ordinary command — `( make … & )`, `nohup`, `setsid`, or a tra
 opening the round view together: the call returns at once, the harness has
 nothing left to track, and a run that finishes is never reported, so the change
 waits on a step that ended long ago. Run the round view, and each of a pair of
-side-by-side runs, in calls of their own. Give each run's background command the
-harness's longest timeout: an implementation session can outlast the default, and
-a run killed at it stops mid-step with its work uncommitted.
+side-by-side runs, in calls of their own. Pass a background step run no timeout at
+all, not even the harness's longest: an implementation session can outlast any
+limit, and a run killed at one stops mid-step with its work uncommitted and its
+denials lost. Where the harness would impose a limit shorter than the step may
+need, tell the owner before starting the run.
 
 For `round`, record the round the computation names, as it names it, just before
 starting its first session — copying the list is routing, not a reading of the
@@ -296,7 +312,11 @@ You direct nothing of your own accord, and never record a step's exit on its
 behalf. A direction checks no exit guard on the way there, so its `reason` says
 what it skips. The log's writer refuses one an unwaivable entry guard of a node it
 names refuses — design, planning, or implementation of an archived change; the
-closeout review, its triage, or archive cleanup of a change not archived; a triage
+closeout review, its triage, or archive cleanup of a change not archived; the merge
+before closeout, `merge`, of an archived change, whose merge after the archive is
+directed as `late-merge`; the merge after the archive before archive cleanup has run
+or without the change's row saying `archived`, and the merge review or its triage of
+a change not archived; a triage
 with no review of its kind awaiting it, nor a validation after the latest review,
 when that review is of its kind;
 a validation naming no target; `done`,
@@ -355,11 +375,16 @@ Never pass a waiver in a validation's `ARGUMENTS`: validation reads waivers only
 from the log, where every later validation, by hand or orchestrated, finds them.
 
 After the pre-closeout triage, the merge step brings the branch the change lands on
-into the change's branch and proposes what follows it. `make merge` merges the
-target's default branch unless given `FROM=<branch>`: pass the branch the change
-was branched from — the `FROM` you created its clone with, or the one the owner
-named — and when you no longer know it, as after compaction, ask the owner rather
-than taking the default. A review of the merge, and closeout without
+into the change's branch and proposes what follows it. Given no `FROM=<branch>`,
+`make merge` brings in the branch the change's last finished merge recorded in its
+outcome's `landing`, else the one its clone recorded, and refuses with neither,
+naming `FROM`. Pass `FROM` only when the owner names another branch than that: the
+merge records the branch it brought in, so every later merge of the change — a
+repair, the merge repeated after its review, a merge after the archive — brings in
+the branch the owner named without your passing it again. For a change worked in
+place, with no clone and no merge recorded yet, the merge refuses until you pass the
+branch the change was branched from, which you ask the owner for when you no longer
+know it. A review of the merge, and closeout without
 validating the merged `HEAD`, are each the owner's to confirm: the merge asks, and
 you relay its question and the owner's answer as with any step. When the owner's
 answer waives the validation, the merge finishes naming closeout and says so;
@@ -372,6 +397,43 @@ scripts/change-workflow note <change> orchestrator --by owner --resolves <merge-
 
 A failed validation of the merged `HEAD` names the merge again, which repairs it;
 an inconclusive one names the owner, as any validation's does.
+
+After the archive the change's branch may need the landing branch again: it moved
+while closeout ran, or while the pull request waits and now conflicts with it. Two
+things start the merge after the archive. Archive cleanup's first exit, when the
+commit it fetched is not in the branch, makes the computation name `merge`, its
+reason beginning `late-merge:`, carrying `done`; run it without asking, as any step
+it names. Otherwise only the owner starts it: on their word — "merge main into the
+change again" — record their direction, and pass `FROM` to `make merge` only if they
+name another branch than the one the last merge recorded:
+
+```text
+scripts/change-workflow note <change> orchestrator --by owner --next late-merge --decision "merge the landing branch after the archive" --reason <the owner's words>
+```
+
+The log's writer refuses it before archive cleanup has run, or while the change
+index has no row for the change saying `archived`: relay the refusal, which names
+the row to restore. Run the merge the computation names as any merge, from the
+change's clone while it has one, else from a checkout of its branch. The merge
+chooses its own exit without asking — the merge review, `{"step": "review", "kind":
+"merge"}`, or archive cleanup — and you follow it, through the validation of the
+merged `HEAD` its guard names. When its message recommends waiving that validation,
+ask the owner; on their word, record the waiver as their direction to the exit the
+merge named, resolving its run, so a review it chose is not skipped with the
+validation; a waiver of the review as well is a direction to archive cleanup, its
+reason saying it skips both:
+
+```text
+scripts/change-workflow note <change> orchestrator --by owner --resolves <merge-seq> --next review --kind merge --decision "the merge review without validating the merged HEAD" --reason <the owner's words>
+```
+
+A merge review's triage advances to archive cleanup or names another merge review;
+archive cleanup runs again on the archived row and ends at `done`. No step after the
+archive returns the change to an earlier phase: where the merge asks because both
+sides cannot hold, relay its question; the owner resolves it, lands the change and
+follows up in a new change, or takes it off the workflow. At `done`, a landing
+branch that has moved since is the owner's to direct another merge for; nothing
+detects it once the pull request is open.
 
 ### Interrupting and revisiting
 
@@ -398,7 +460,7 @@ outcome it reached, routed as any. Recover a stop as the owner says, as any stop
 ("Read every denial before advancing"): resume a stopped step's `seq` with their
 words, rerun it fresh, or resolve it with `--resolves` and direct the change
 elsewhere. A stop commits nothing, and an interrupted review published nothing and
-is rerun, never resumed.
+is rerun, never resumed; a review the format check refused is rerun as above.
 
 The owner may revisit a finding a triage accepted by default, or the advancing exit
 it took (`docs/agents/change-workflow.md`, "Revisiting a default acceptance").
@@ -471,7 +533,11 @@ Open the pull request from the drafts archive cleanup wrote to the archived
 change's `reviews/pull-request.md`: from the change's branch into `dev`, titled
 with the merge commit message's subject, its body the pull request description.
 When a pull request from the branch already exists, open no second one; give its
-link. When the drafts say the branch carries another change that is not archived,
+link, and relay the notes a merge after the archive and archive cleanup appended to
+the drafts, for the owner to add to it. A merge after the archive that archive
+cleanup's first exit started reaches `done` before any pull request was opened:
+open it then, from the drafts as they stand.
+When the drafts say the branch carries another change that is not archived,
 the pull request would merge that change too: ask the owner before opening it.
 In the report, give the pull request's link and then the merge commit message, in
 a fenced block, for the owner to paste into the squash merge.
@@ -555,7 +621,11 @@ scripts/change-workflow note <change> round --sections '1,2;3' --by owner
 For a round recorded after the fact add `--after <highest-record-before-round>`;
 do not count that round's own records as preceding it. Recompute and run its
 sessions without another question about them. A round noted as it starts records
-`HEAD` on its line, and `make round-view` shows the round against that commit.
+`HEAD` on its line, and `make round-view` shows the round against that commit. A
+round recorded while the latest round is open, over sections it already names —
+a resumed or redirected session, a plan amended mid-round — continues it: the
+line keeps the open round's base and names it as `continues`, so the round's
+reading and review still cover its finished sections.
 
 No step may edit `.claude/`, so a task the plan gives you — an edit of the step
 table or the project's Claude Code settings — is yours: before starting the

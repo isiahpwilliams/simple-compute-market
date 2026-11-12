@@ -1,442 +1,347 @@
-"""Ordered SQLite migrations: schema_migrations tracking, idempotency,
-and adoption of a database that predates this migration system.
+"""The authority's migration chain, its command, and the startup check.
+
+The chain begins at its baselines and adopts no database: a fresh database is
+migrated, and every non-empty database it did not build is refused unchanged.
+A service root's startup only checks, refusing any database not exactly at the
+chain with a message naming the root's migration command.
+
+External boundary: file-backed SQLite in a temp directory, migrated through
+the engine as a root's migration command runs it. No application is started.
 """
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.pool import StaticPool
-
-from arkhai_api_authority.database import create_db_engine, run_migrations
-from arkhai_api_authority.migrations import (
-    SchemaDriftError,
-    apply_schema_migrations,
-    check_schema_version,
-)
-from arkhai_api_authority import migrations as migrations_module
-from arkhai_api_authority.models import Base
 from market_resource_pools.db import Base as PoolsBase
+from market_schema_migrations import (
+    Chain,
+    CheckState,
+    MigrationRefused,
+    migrate,
+    schema_snapshot,
+)
+from market_schema_migrations.sqlalchemy_adapter import SqlAlchemyMigrationConnection
 from market_site.db import Base as SiteBase
+from market_site.migrations import MIGRATIONS as SITE_MIGRATIONS
+from sqlalchemy import Engine, create_engine, inspect, text
 
-
-def _sqlite_memory_engine():
-    return create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-
-class TestRunMigrationsFreshBootstrap:
-    def test_creates_every_expected_table(self):
-        engine = _sqlite_memory_engine()
-        run_migrations(engine)
-
-        tables = set(inspect(engine).get_table_names())
-        columns = {
-            column["name"] for column in inspect(engine).get_columns("credit_grants")
-        }
-        assert columns == set(Base.metadata.tables["credit_grants"].columns.keys())
-        assert "negotiation_id" in columns
-        assert {"escrow_uid", "obligation_ref", "mechanism"}.isdisjoint(columns)
-        unique_columns = {
-            tuple(constraint["column_names"])
-            for constraint in inspect(engine).get_unique_constraints("credit_grants")
-        }
-        assert {("fulfillment_id",), ("negotiation_id",)} <= unique_columns
-        assert {
-            "api_keys",
-            "credit_grants",
-            "consumption_events",
-            "schema_migrations",
-            "capacity_buckets",
-            "capacity_reservations",
-        } <= tables
-
-    def test_records_baseline_migration(self):
-        # A fresh bootstrap adopts the existing create_all schema into
-        # durable migration versioning.
-        engine = _sqlite_memory_engine()
-        run_migrations(engine)
-
-        with engine.begin() as connection:
-            rows = connection.execute(
-                text("SELECT id FROM schema_migrations")
-            ).fetchall()
-        assert rows == [
-            ("20260731_001_apicredits_schema_baseline",),
-            ("20260811_002_canonical_owner_principals",),
-            ("20260815_003_fulfillment_grants",),
-            ("20260922_004_pool_advertisement_and_backing",),
-            ("20261005_005_reservation_release_requested_at",),
-            ("20261028_006_retired_reservation_states",),
-            ("20261106_007_reservation_activated_at",),
-            ("20261106_008_reservation_placement_key",),
-            ("20261109_009_grant_terms",),
-        ]
-
-    def test_a_reservation_table_from_before_release_timing_gains_the_column(self):
-        """The site ledger this service composes records when a reservation
-        began releasing; a table created before that column existed gains it."""
-        engine = _sqlite_memory_engine()
-        run_migrations(engine)
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE capacity_reservations DROP COLUMN release_requested_at")
-            )
-            connection.execute(
-                text(
-                    "DELETE FROM schema_migrations "
-                    "WHERE id = '20261005_005_reservation_release_requested_at'"
-                )
-            )
-
-        run_migrations(engine)
-
-        with engine.begin() as connection:
-            columns = {
-                row[1]
-                for row in connection.execute(
-                    text("PRAGMA table_info(capacity_reservations)")
-                ).fetchall()
-            }
-        assert "release_requested_at" in columns
-
-
-_ACTIVATION_MIGRATION_ID = "20261106_007_reservation_activated_at"
-
-_RESERVATION_COLUMNS = (
-    "capacity_reservation_id, units, state, offering_mode, hold_expires_at, "
-    "executor_target, lease_start_utc, lease_end_utc, release_requested_at, "
-    "released_at"
+from arkhai_api_authority import (
+    IncompatibleDatabase,
+    authority_chain,
+    check_database,
+    create_db_engine,
+    migrate_database,
+    require_migrated,
 )
+from arkhai_api_authority import migrate as migrate_command
+from arkhai_api_authority.migrations import GRANT_TERMS
+from arkhai_api_authority.models import Base
 
-# Quota grants are open-ended holds, so no row carries a lease end.
-_RESERVATIONS_BEFORE_ACTIVATION = (
-    ("r-leased", 1, "leased", "api_credits", None, "grant-leased",
-     "2026-11-01T00:00:00+00:00", None, None, None),
-    ("r-releasing", 2, "releasing", "api_credits", None, "grant-releasing",
-     "2026-10-01T00:00:00+00:00", None, "2026-11-01T00:00:05+00:00", None),
-    ("r-released", 1, "released", "api_credits", "2026-08-31T00:05:00+00:00",
-     None, "2026-09-01T00:00:00+00:00", None,
-     "2026-10-01T00:00:05+00:00", "2026-10-01T00:10:00+00:00"),
-)
+from tests.integration.profiles import CHAIN, COMMAND
+
+_AUTHORITY_TABLES = ("api_keys", "credit_grants", "consumption_events", "grant_terms")
+_UNKNOWN_ID = "20991231_001_from_a_newer_image"
 
 
-def _database_before_activation():
-    """A migrated database as it stood before the activation column, holding
-    leased, releasing and released reservations."""
-    engine = _sqlite_memory_engine()
-    run_migrations(engine)
-    with engine.begin() as connection:
-        connection.execute(
-            text("ALTER TABLE capacity_reservations DROP COLUMN activated_at_utc")
-        )
-        connection.execute(
-            text("DELETE FROM schema_migrations WHERE id = :id"),
-            {"id": _ACTIVATION_MIGRATION_ID},
-        )
-        for row in _RESERVATIONS_BEFORE_ACTIVATION:
-            connection.execute(
-                text(
-                    f"INSERT INTO capacity_reservations ({_RESERVATION_COLUMNS}) "
-                    "VALUES (:id, :units, :state, :mode, :hold, :target, "
-                    ":start, :end, :requested, :released)"
-                ),
-                dict(zip(
-                    ("id", "units", "state", "mode", "hold", "target", "start",
-                     "end", "requested", "released"),
-                    row,
-                )),
+def _engine(path: Path) -> Engine:
+    return create_db_engine(f"sqlite:///{path}", is_sqlite=True)
+
+
+def _migrated(path: Path) -> Path:
+    engine = _engine(path)
+    try:
+        migrate_database(engine, CHAIN)
+    finally:
+        engine.dispose()
+    return path
+
+
+def _snapshot(path: Path) -> dict:
+    connection = sqlite3.connect(path)
+    try:
+        return schema_snapshot(connection)
+    finally:
+        connection.close()
+
+
+def _recorded(path: Path) -> list[str]:
+    connection = sqlite3.connect(path)
+    try:
+        return [row[0] for row in connection.execute("SELECT id FROM schema_migrations")]
+    finally:
+        connection.close()
+
+
+def _execute(path: Path, *statements: str) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            for statement in statements:
+                connection.execute(statement)
+    finally:
+        connection.close()
+
+
+def _behind(path: Path) -> Path:
+    """A database its baselines built and no later migration reached."""
+    engine = _engine(path)
+    try:
+        with engine.connect() as connection:
+            migrate(
+                Chain(service=CHAIN.service, command=CHAIN.command, baselines=CHAIN.baselines),
+                SqlAlchemyMigrationConnection(connection),
             )
-    return engine
+    finally:
+        engine.dispose()
+    return path
 
 
-def _reservation_rows(engine) -> set[tuple]:
-    with engine.connect() as connection:
-        return {
-            tuple(row)
-            for row in connection.execute(text(
-                f"SELECT {_RESERVATION_COLUMNS}, activated_at_utc "
-                "FROM capacity_reservations"
-            ))
-        }
+class TestTheChain:
+    def test_the_site_ledgers_migrations_precede_the_authoritys_own(self):
+        assert CHAIN.migrations == (*SITE_MIGRATIONS, GRANT_TERMS)
+
+    def test_each_root_names_its_own_service_and_command(self):
+        other = authority_chain(service="another service", command="another-migrate")
+
+        assert (other.service, other.command) == ("another service", "another-migrate")
+        assert other.ids == CHAIN.ids
 
 
-class TestTheActivationColumn:
-    """The site ledger this service hosts maps a lease's activation instant on
-    the reservation row it shares with every quota grant."""
+class TestAFreshDatabase:
+    def test_migrates_to_the_chain_and_writes_no_row(self, tmp_path):
+        path = _migrated(tmp_path / "authority.db")
 
-    def test_existing_reservations_migrate_with_no_activation_recorded(self):
-        engine = _database_before_activation()
-
-        run_migrations(engine)
-
-        expected = {row + (None,) for row in _RESERVATIONS_BEFORE_ACTIVATION}
-        assert _reservation_rows(engine) == expected
-        check_schema_version(engine)
-
-        run_migrations(engine)
-
-        assert _reservation_rows(engine) == expected
-
-    def test_a_database_already_carrying_the_column_migrates_unchanged(self):
-        engine = _database_before_activation()
-        with engine.begin() as connection:
-            connection.execute(text(
-                "ALTER TABLE capacity_reservations ADD COLUMN activated_at_utc VARCHAR"
-            ))
-            connection.execute(text(
-                "UPDATE capacity_reservations "
-                "SET activated_at_utc = '2026-11-01T00:07:00+00:00' "
-                "WHERE capacity_reservation_id = 'r-leased'"
-            ))
-        before = _reservation_rows(engine)
-
-        run_migrations(engine)
-
-        assert _reservation_rows(engine) == before
-        columns = [
-            column["name"]
-            for column in inspect(engine).get_columns("capacity_reservations")
-        ]
-        assert columns.count("activated_at_utc") == 1
-
-
-_PLACEMENT_MIGRATION_ID = "20261106_008_reservation_placement_key"
-
-
-def _database_before_placement_keys():
-    """A migrated database as it stood before reserve took a placement key,
-    holding leased, releasing and released reservations."""
-    engine = _sqlite_memory_engine()
-    run_migrations(engine)
-    with engine.begin() as connection:
-        connection.execute(text("DROP INDEX ix_capacity_reservations_placement_key"))
-        connection.execute(
-            text("ALTER TABLE capacity_reservations DROP COLUMN placement_key")
-        )
-        connection.execute(
-            text("ALTER TABLE capacity_reservations DROP COLUMN placement_request")
-        )
-        connection.execute(
-            text("DELETE FROM schema_migrations WHERE id = :id"),
-            {"id": _PLACEMENT_MIGRATION_ID},
-        )
-        for row in _RESERVATIONS_BEFORE_ACTIVATION:
-            connection.execute(
-                text(
-                    f"INSERT INTO capacity_reservations ({_RESERVATION_COLUMNS}) "
-                    "VALUES (:id, :units, :state, :mode, :hold, :target, "
-                    ":start, :end, :requested, :released)"
-                ),
-                dict(zip(
-                    ("id", "units", "state", "mode", "hold", "target", "start",
-                     "end", "requested", "released"),
-                    row,
-                )),
-            )
-    return engine
-
-
-class TestThePlacementKey:
-    """The site ledger this service hosts maps a reserve's placement key, under
-    a unique index, on the row it shares with every quota grant."""
-
-    def test_existing_reservations_migrate_with_no_placement_key(self):
-        engine = _database_before_placement_keys()
-        expected = {row + (None, None) for row in _RESERVATIONS_BEFORE_ACTIVATION}
-
-        def rows() -> set[tuple]:
-            with engine.connect() as connection:
-                return {
-                    tuple(row)
-                    for row in connection.execute(text(
-                        f"SELECT {_RESERVATION_COLUMNS}, placement_key, "
-                        "placement_request FROM capacity_reservations"
-                    ))
-                }
-
-        run_migrations(engine)
-
-        assert rows() == expected
-        check_schema_version(engine)
-        indexes = {
-            index["name"]: index
-            for index in inspect(engine).get_indexes("capacity_reservations")
-        }
-        assert indexes["ix_capacity_reservations_placement_key"]["unique"]
-
-        run_migrations(engine)
-
-        assert rows() == expected
-
-
-class TestRunMigrationsIsIdempotent:
-    def test_running_twice_does_not_error_or_duplicate_bookkeeping(self):
-        engine = _sqlite_memory_engine()
-        run_migrations(engine)
-        run_migrations(engine)  # must not raise
-
-        with engine.begin() as connection:
-            count = connection.execute(
-                text("SELECT COUNT(*) FROM schema_migrations")
-            ).scalar()
-        assert count == 9
-
-
-class TestAdoptingAPreCreateAllOnlyDatabase:
-    """A database created by a create_all()-only startup (no
-    schema_migrations table at all) must be adopted cleanly -- not treated
-    as corrupt, and not silently skipped in a way that leaves it unable to
-    receive future migrations.
-    """
-
-    def test_adopts_a_database_with_no_schema_migrations_table(self):
-        engine = _sqlite_memory_engine()
-        # Simulate the pre-migration-system startup path directly,
-        # bypassing run_migrations entirely.
-        Base.metadata.create_all(bind=engine)
-        SiteBase.metadata.create_all(bind=engine)
-
-        assert "schema_migrations" not in set(inspect(engine).get_table_names())
-
-        # The real startup path, run against this old-shaped database.
-        run_migrations(engine)
-
-        tables = set(inspect(engine).get_table_names())
-        assert "schema_migrations" in tables
-        assert "api_keys" in tables  # pre-existing table untouched, not recreated
-
-    def test_adopts_a_database_with_existing_data_without_touching_it(self):
-        engine = _sqlite_memory_engine()
-        Base.metadata.create_all(bind=engine)
-        SiteBase.metadata.create_all(bind=engine)
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO api_keys "
-                    "(key_id, secret_hash, status, balance, created_at, updated_at) "
-                    "VALUES ('k1', 'hash1', 'active', 42, "
-                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                )
-            )
-
-        run_migrations(engine)
-
-        with engine.begin() as connection:
-            row = connection.execute(
-                text("SELECT balance FROM api_keys WHERE key_id = 'k1'")
-            ).fetchone()
-        assert row is not None
-        assert row[0] == 42
-
-    def test_migrates_wallet_owner_to_canonical_eip191_principal(self):
-        engine = _sqlite_memory_engine()
-        Base.metadata.create_all(bind=engine)
-        SiteBase.metadata.create_all(bind=engine)
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO api_keys "
-                    "(key_id, secret_hash, owner_scheme, owner_id, status, balance, "
-                    "created_at, updated_at) VALUES "
-                    "('k1', 'hash1', 'wallet', "
-                    "'0xABCDEF0000000000000000000000000000000001', "
-                    "'active', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                )
-            )
-
-        run_migrations(engine)
-
-        with engine.begin() as connection:
-            row = connection.execute(
-                text("SELECT owner_scheme, owner_id FROM api_keys WHERE key_id = 'k1'")
-            ).one()
-        assert row == (
-            "eip191",
-            "0xabcdef0000000000000000000000000000000001",
-        )
-
-    def test_incompatible_grant_schema_requires_explicit_reset(self):
-        engine = _sqlite_memory_engine()
-        run_migrations(engine)
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE credit_grants ADD COLUMN escrow_uid VARCHAR")
-            )
-
-        for check in (run_migrations, check_schema_version):
-            with pytest.raises(SchemaDriftError, match="explicitly reset"):
-                check(engine)
-        assert "escrow_uid" in {
-            column["name"] for column in inspect(engine).get_columns("credit_grants")
-        }
-
-    def test_malformed_owner_rolls_back_principal_migration(self):
-        engine = _sqlite_memory_engine()
-        Base.metadata.create_all(bind=engine)
-        SiteBase.metadata.create_all(bind=engine)
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO api_keys "
-                    "(key_id, secret_hash, owner_scheme, owner_id, status, balance, "
-                    "created_at, updated_at) VALUES "
-                    "('good', 'hash1', 'wallet', "
-                    "'0xABCDEF0000000000000000000000000000000001', "
-                    "'active', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
-                    "('bad', 'hash2', 'wallet', 'not-an-address', "
-                    "'active', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                )
-            )
-
-        with pytest.raises(SchemaDriftError):
-            run_migrations(engine)
-
-        with engine.begin() as connection:
-            rows = connection.execute(
-                text(
-                    "SELECT key_id, owner_scheme, owner_id FROM api_keys ORDER BY key_id"
-                )
-            ).fetchall()
-        assert rows == [
-            ("bad", "wallet", "not-an-address"),
-            (
-                "good",
-                "wallet",
-                "0xABCDEF0000000000000000000000000000000001",
-            ),
-        ]
-
-
-class TestCheckSchemaVersion:
-    """The fail-fast check a deployment with a separate migration step runs
-    before its service starts (see migrations.py's module docstring).
-    """
-
-    def test_passes_after_baseline_is_applied(self):
-        engine = _sqlite_memory_engine()
-        Base.metadata.create_all(bind=engine)
-        SiteBase.metadata.create_all(bind=engine)
-        apply_schema_migrations(engine)
-        check_schema_version(engine)
-
-    def test_raises_when_schema_migrations_table_is_entirely_missing(self):
-        engine = _sqlite_memory_engine()
-        Base.metadata.create_all(bind=engine)
-        # A single known migration stands in for the real chain, so the
-        # check's verdict does not depend on which migrations exist.
-        original = migrations_module._MIGRATIONS
-        migrations_module._MIGRATIONS = (
-            migrations_module.Migration("00000000_placeholder", lambda engine: None),
-        )
+        assert sorted(_recorded(path)) == sorted(CHAIN.ids)
+        engine = _engine(path)
         try:
-            with pytest.raises(SchemaDriftError):
-                check_schema_version(engine)
+            assert check_database(engine, CHAIN).compatible
+            with engine.connect() as connection:
+                for table in inspect(engine).get_table_names():
+                    if table == "schema_migrations":
+                        continue
+                    assert connection.execute(text(f"SELECT * FROM {table}")).all() == [], table
         finally:
-            migrations_module._MIGRATIONS = original
+            engine.dispose()
+
+    def test_the_chain_reproduces_the_authoritys_own_tables(self, tmp_path):
+        """The authority's baseline and migrations build its tables as its models do."""
+        migrated = _snapshot(_migrated(tmp_path / "authority.db"))
+        modelled = tmp_path / "modelled.db"
+        engine = create_engine(f"sqlite:///{modelled}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+
+        expected = _snapshot(modelled)
+        assert sorted(expected["tables"]) == sorted(_AUTHORITY_TABLES)
+        assert {t: migrated["tables"][t] for t in _AUTHORITY_TABLES} == expected["tables"]
+
+    def test_every_mapped_table_and_column_exists(self, tmp_path):
+        """Nothing but the chain creates schema, so every table and column the
+        three metadata sets map must be one the chain creates."""
+        engine = _engine(_migrated(tmp_path / "authority.db"))
+        try:
+            inspector = inspect(engine)
+            for metadata in (Base.metadata, PoolsBase.metadata, SiteBase.metadata):
+                for table in metadata.tables.values():
+                    columns = {c["name"] for c in inspector.get_columns(table.name)}
+                    assert set(table.columns.keys()) <= columns, table.name
+        finally:
+            engine.dispose()
+
+    def test_a_rerun_changes_nothing(self, tmp_path):
+        path = _migrated(tmp_path / "authority.db")
+        before = path.read_bytes()
+
+        engine = _engine(path)
+        try:
+            report = migrate_database(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        assert report.applied == ()
+        assert path.read_bytes() == before
+
+
+class TestAnExistingDatabase:
+    """No authority database from before the baseline is supported."""
+
+    def test_one_with_another_migration_history_is_refused_unchanged(self, tmp_path):
+        path = tmp_path / "authority.db"
+        engine = create_engine(f"sqlite:///{path}")
+        Base.metadata.create_all(engine)
+        PoolsBase.metadata.create_all(engine)
+        SiteBase.metadata.create_all(engine)
+        engine.dispose()
+        _execute(
+            path,
+            "CREATE TABLE schema_migrations (id VARCHAR PRIMARY KEY, "
+            "applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "INSERT INTO schema_migrations (id) VALUES ('another_history_001')",
+            "INSERT INTO api_keys (key_id, secret_hash, status, balance, created_at, "
+            "updated_at) VALUES ('k1', 'hash', 'active', 42, CURRENT_TIMESTAMP, "
+            "CURRENT_TIMESTAMP)",
+        )
+        before = path.read_bytes()
+
+        engine = _engine(path)
+        try:
+            assert check_database(engine, CHAIN).state is CheckState.UNSUPPORTED
+            with pytest.raises(MigrationRefused) as refused:
+                migrate_database(engine, CHAIN)
+            with pytest.raises(IncompatibleDatabase) as startup:
+                require_migrated(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        assert f"`{COMMAND}`" in str(refused.value)
+        assert "fresh database" in str(refused.value)
+        assert f"`{COMMAND}`" in str(startup.value)
+        assert path.read_bytes() == before
+
+    def test_tables_without_a_ledger_are_refused_unchanged(self, tmp_path):
+        path = tmp_path / "authority.db"
+        engine = create_engine(f"sqlite:///{path}")
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        before = path.read_bytes()
+
+        engine = _engine(path)
+        try:
+            assert check_database(engine, CHAIN).state is CheckState.UNSUPPORTED
+            with pytest.raises(MigrationRefused):
+                migrate_database(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        assert path.read_bytes() == before
+        assert "schema_migrations" not in _snapshot(path)["tables"]
+
+
+class TestTheStartupCheck:
+    def test_a_behind_database_is_refused_naming_the_pending_migrations(self, tmp_path):
+        path = _behind(tmp_path / "authority.db")
+        before = path.read_bytes()
+
+        engine = _engine(path)
+        try:
+            result = check_database(engine, CHAIN)
+            with pytest.raises(IncompatibleDatabase) as refused:
+                require_migrated(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        assert result.state is CheckState.BEHIND
+        assert result.pending == tuple(m.id for m in CHAIN.migrations)
+        assert f"`{COMMAND}`" in str(refused.value)
+        for pending in result.pending:
+            assert pending in str(refused.value)
+        assert path.read_bytes() == before
+
+    def test_an_ahead_database_is_refused_and_the_command_changes_nothing(self, tmp_path):
+        path = _migrated(tmp_path / "authority.db")
+        _execute(path, f"INSERT INTO schema_migrations (id) VALUES ('{_UNKNOWN_ID}')")
+        before = path.read_bytes()
+
+        engine = _engine(path)
+        try:
+            assert check_database(engine, CHAIN).state is CheckState.AHEAD
+            with pytest.raises(IncompatibleDatabase) as startup:
+                require_migrated(engine, CHAIN)
+            with pytest.raises(MigrationRefused) as command:
+                migrate_database(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        for message in (str(startup.value), str(command.value)):
+            assert _UNKNOWN_ID in message
+            assert f"`{COMMAND}`" in message
+        assert path.read_bytes() == before
+
+    def test_no_database_is_refused_and_none_is_created(self, tmp_path):
+        path = tmp_path / "missing" / "authority.db"
+
+        engine = _engine(path)
+        try:
+            assert check_database(engine, CHAIN).state is CheckState.ABSENT
+            with pytest.raises(IncompatibleDatabase) as refused:
+                require_migrated(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        assert f"`{COMMAND}`" in str(refused.value)
+        assert not path.parent.exists()
+
+    def test_a_migrated_database_passes_unchanged(self, tmp_path):
+        path = _migrated(tmp_path / "authority.db")
+        before = path.read_bytes()
+
+        engine = _engine(path)
+        try:
+            require_migrated(engine, CHAIN)
+        finally:
+            engine.dispose()
+
+        assert path.read_bytes() == before
+
+
+@pytest.fixture
+def command() -> Callable[..., int]:
+    """Run a root's migration command over ``database`` with the settings a root loads."""
+
+    def run(database: Path, *arguments: str) -> int:
+        settings = SimpleNamespace(database_url=f"sqlite:///{database}", log_level="info")
+        try:
+            migrate_command.main(CHAIN, lambda: settings, list(arguments))
+        except SystemExit as exit_:
+            return int(exit_.code or 0)
+        return 0
+
+    return run
+
+
+class TestTheCommand:
+    def test_check_reports_a_behind_database_and_changes_nothing(
+        self, tmp_path, command, capsys,
+    ):
+        path = _behind(tmp_path / "authority.db")
+        before = path.read_bytes()
+
+        assert command(path, "--check") == 1
+
+        output = capsys.readouterr()
+        assert "behind" in output.out
+        for migration in CHAIN.migrations:
+            assert migration.id in output.out
+        assert path.read_bytes() == before
+
+    def test_check_on_no_database_creates_none(self, tmp_path, command):
+        path = tmp_path / "authority.db"
+
+        assert command(path, "--check") == 1
+
+        assert not path.exists()
+
+    def test_check_passes_once_the_command_has_migrated(self, tmp_path, command):
+        path = tmp_path / "authority.db"
+
+        assert command(path) == 0
+        assert command(path) == 0
+        assert command(path, "--check") == 0
+
+    def test_the_command_refuses_an_ahead_database(self, tmp_path, command, capsys):
+        path = _migrated(tmp_path / "authority.db")
+        _execute(path, f"INSERT INTO schema_migrations (id) VALUES ('{_UNKNOWN_ID}')")
+        before = path.read_bytes()
+
+        assert command(path) == 1
+
+        assert _UNKNOWN_ID in capsys.readouterr().err
+        assert path.read_bytes() == before
 
 
 class TestCreateDbEngineIsSqliteOnly:
@@ -447,92 +352,3 @@ class TestCreateDbEngineIsSqliteOnly:
     def test_accepts_a_sqlite_url(self):
         engine = create_db_engine("sqlite:///:memory:", is_sqlite=True)
         assert engine is not None
-
-
-def test_failed_migration_is_not_recorded_and_prior_success_is_preserved(monkeypatch):
-    engine = _sqlite_memory_engine()
-    Base.metadata.create_all(bind=engine)
-    SiteBase.metadata.create_all(bind=engine)
-
-    calls: list[str] = []
-
-    def first(_engine):
-        calls.append("first")
-
-    def fail(_engine):
-        calls.append("fail")
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(
-        migrations_module,
-        "_MIGRATIONS",
-        (
-            migrations_module.Migration("001", first),
-            migrations_module.Migration("002", fail),
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="boom"):
-        migrations_module.apply_schema_migrations(engine)
-
-    with engine.begin() as connection:
-        rows = connection.execute(
-            text("SELECT id FROM schema_migrations ORDER BY id")
-        ).fetchall()
-
-    assert rows == [("001",)]
-    with pytest.raises(SchemaDriftError):
-        migrations_module.check_schema_version(engine)
-    assert calls == ["first", "fail"]
-
-
-class TestGrantTermsUpgrade:
-    """A database at the previous chain head gains ``grant_terms`` and keeps its grants unpinned."""
-
-    def _previous_head(self, monkeypatch):
-        engine = _sqlite_memory_engine()
-        previous = tuple(m for m in migrations_module._MIGRATIONS if m.id != "20261109_009_grant_terms")
-        Base.metadata.create_all(
-            bind=engine, tables=[t for t in Base.metadata.sorted_tables if t.name != "grant_terms"]
-        )
-        PoolsBase.metadata.create_all(bind=engine)
-        SiteBase.metadata.create_all(bind=engine)
-        with monkeypatch.context() as patched:
-            patched.setattr(migrations_module, "_MIGRATIONS", previous)
-            apply_schema_migrations(engine)
-        with engine.begin() as connection:
-            connection.execute(text(
-                "INSERT INTO api_keys (key_id, secret_hash, status, balance, created_at, updated_at) "
-                "VALUES ('ak_old', 'hash', 'active', 5, '2026-10-01', '2026-10-01')"
-            ))
-            connection.execute(text(
-                "INSERT INTO credit_grants (key_id, fulfillment_id, service, resource_id, quantity, reason, granted_at) "
-                "VALUES ('ak_old', 'api-credit-fulfillment.v1:old', 'weather-api', 'weather-quota', 5, 'issuance', '2026-10-01')"
-            ))
-        return engine, previous, migrations_module
-
-    def test_the_migration_creates_the_table_and_existing_grants_read_unpinned(self, monkeypatch):
-        engine, _, _ = self._previous_head(monkeypatch)
-        assert "grant_terms" not in inspect(engine).get_table_names()
-
-        # The chain alone, without create_all, so the step itself creates the table.
-        apply_schema_migrations(engine)
-        assert {c["name"] for c in inspect(engine).get_columns("grant_terms")} == set(
-            Base.metadata.tables["grant_terms"].columns.keys()
-        )
-        run_migrations(engine)
-
-        assert "grant_terms" in inspect(engine).get_table_names()
-        with engine.begin() as connection:
-            assert connection.execute(text("SELECT COUNT(*) FROM grant_terms")).scalar() == 0
-        check_schema_version(engine)
-
-    def test_the_previous_chain_still_validates_the_migrated_schema(self, monkeypatch):
-        engine, previous, migrations_module = self._previous_head(monkeypatch)
-        run_migrations(engine)
-
-        # The previous image checks the grant table's exact columns and its own
-        # chain head, both of which the new step leaves as they were.
-        monkeypatch.setattr(migrations_module, "_MIGRATIONS", previous)
-        check_schema_version(engine)
-        apply_schema_migrations(engine)

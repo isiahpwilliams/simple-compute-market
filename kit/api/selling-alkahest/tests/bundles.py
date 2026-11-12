@@ -19,6 +19,7 @@ from arkhai_api_selling.contributions import (
     SellingContributions,
 )
 from arkhai_api_selling.issuance import settlement_evidence
+from arkhai_api_selling.migrations import storefront_chain
 from arkhai_api_selling.persistence import StorefrontSQLiteClient
 from market_alkahest import ALKAHEST_MECHANISM_ID
 from market_core.schemas import Agreement, SettlementOption, derive_settlement_option_id
@@ -73,6 +74,13 @@ EXAMPLE = SellingContributions(
     consumption_rule=ConsumptionRule.FIXED_PER_REQUEST,
 )
 
+#: The family's chain under the example bundle's prefix.
+CHAIN = storefront_chain(
+    EXAMPLE.table_prefix,
+    service="the example storefront",
+    command="example-storefront-migrate",
+)
+
 
 def obligation() -> dict[str, Any]:
     """The escrow obligation an accepted deal's plan holds."""
@@ -117,7 +125,7 @@ async def accepted_deal(db: StorefrontSQLiteClient, *, obligation_ref: str) -> N
         buyer_principal=BUYER, seller_principal=SELLER.identity, owner_id="seller",
     )
     await db.commit_agreed_terms(
-        negotiation_id=NEGOTIATION, agreed_price=300, agreed_duration_seconds=0,
+        negotiation_id=NEGOTIATION, negotiated_scalar=300, agreed_duration_seconds=0,
         agreement_bytes=raw, accepted_at=ACCEPTED_AT, agreed_start_utc=ACCEPTED_AT,
     )
     await db.update_negotiation_thread_terminal(negotiation_id=NEGOTIATION, terminal_state="success")

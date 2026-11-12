@@ -1,15 +1,21 @@
-"""The authority's database: the engine, sessions, and the migrated schema."""
+"""The authority's database: the engine, sessions, and its state against a migration chain."""
 
 from __future__ import annotations
 
-from market_resource_pools.db import Base as PoolsBase
-from market_site.db import Base as SiteBase
-from sqlalchemy import Engine, create_engine
+from market_schema_migrations import (
+    Chain,
+    CheckResult,
+    MigrateReport,
+    migrate,
+    refusal_message,
+)
+from market_schema_migrations.sqlalchemy_adapter import (
+    SqlAlchemyMigrationConnection,
+    check_engine,
+)
+from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from arkhai_api_authority.migrations import apply_schema_migrations
-from arkhai_api_authority.models import Base
 
 
 def create_db_engine(database_url: str, is_sqlite: bool) -> Engine:
@@ -39,13 +45,43 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def run_migrations(engine: Engine) -> None:
-    """Create missing tables and apply the versioned migrations, idempotently.
+class IncompatibleDatabase(RuntimeError):
+    """The database is not exactly at the chain the service's image carries."""
 
-    ``create_all`` only creates missing tables; anything that alters an
-    existing one is a migration in the chain.
+    def __init__(self, result: CheckResult, chain: Chain[Connection]) -> None:
+        super().__init__(
+            refusal_message(result, service=chain.service, command=chain.command)
+        )
+        self.result = result
+
+
+def migrate_database(engine: Engine, chain: Chain[Connection]) -> MigrateReport:
+    """Bring the database to the chain's head, refusing one it did not build.
+
+    A service's migration command calls this, and nothing else does outside
+    tests: the application only checks. It takes only the database, so its
+    result depends on the code and the data already stored, never on the
+    service's configuration.
     """
-    Base.metadata.create_all(bind=engine)
-    PoolsBase.metadata.create_all(bind=engine)
-    SiteBase.metadata.create_all(bind=engine)
-    apply_schema_migrations(engine)
+    with engine.connect() as connection:
+        return migrate(chain, SqlAlchemyMigrationConnection(connection))
+
+
+def check_database(engine: Engine, chain: Chain[Connection]) -> CheckResult:
+    """The database's state against the chain, read without changing anything.
+
+    A file-backed database is read through a read-only connection, so a
+    missing file is reported absent and is not created.
+    """
+    return check_engine(chain, engine)
+
+
+def require_migrated(engine: Engine, chain: Chain[Connection]) -> None:
+    """Refuse a database not exactly at the chain, naming the migration command.
+
+    A service root calls this at startup before anything writes; it issues no
+    DDL.
+    """
+    result = check_database(engine, chain)
+    if not result.compatible:
+        raise IncompatibleDatabase(result, chain)

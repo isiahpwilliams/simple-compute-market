@@ -34,14 +34,12 @@
           "proposal": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/RoundProposal"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Proposal"
+            ]
           },
           "reason": {
             "anyOf": [
@@ -931,14 +929,12 @@
           "proposal": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/RoundProposal"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Proposal"
+            ]
           },
           "reason": {
             "anyOf": [
@@ -1252,17 +1248,6 @@
       "NegotiationDetailResponse": {
         "additionalProperties": true,
         "properties": {
-          "agreed_amount": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agreed Amount"
-          },
           "buyer_principal": {
             "anyOf": [
               {
@@ -1288,6 +1273,17 @@
             },
             "title": "Messages",
             "type": "array"
+          },
+          "negotiated_scalar": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negotiated Scalar"
           },
           "negotiation_id": {
             "title": "Negotiation Id",
@@ -1663,6 +1659,17 @@
           "status"
         ],
         "title": "RefundSettlementResponse",
+        "type": "object"
+      },
+      "RoundProposal": {
+        "additionalProperties": true,
+        "description": "Opaque proposal fields with one typed delivery-terms envelope.",
+        "properties": {
+          "provision_terms": {
+            "$ref": "#/components/schemas/ProvisionTerms"
+          }
+        },
+        "title": "RoundProposal",
         "type": "object"
       },
       "SettleResponse": {

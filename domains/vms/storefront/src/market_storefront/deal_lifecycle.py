@@ -41,7 +41,7 @@ from market_deal_servicing.end import EndService
 from market_deal_servicing.evidence import EvidenceSession, in_transaction, transaction
 from market_deal_servicing.ingress import VerifiedSiteEnd
 from market_deal_servicing.journal import atomic
-from market_deal_servicing.watch import WatchSession, create_schema as create_watch_schema
+from market_deal_servicing.watch import WatchSession
 from market_identity import Identity, canonical_json
 
 from market_storefront import container
@@ -74,8 +74,6 @@ class VmDealLifecycle:
         # client its own connection to the Agreement-pinned origin.
         self.mediation_transport = mediation_transport
         self.evidence = SQLiteEvidenceStore(self.path)
-        with transaction(self.path) as conn:
-            create_watch_schema(conn)
         self.clients = {}
         self.respondents = {}
         self.continuation = None
@@ -177,10 +175,20 @@ class VmDealLifecycle:
         credential = self.dispute_config.credential_for(authority)
         if credential is None:
             return False
+        # Usable means a client can be built from it: its token resolves and its
+        # CA bundle loads. One that cannot reports the deal for repair, as a
+        # missing one does, rather than failing every deal's servicing cycle. The
+        # deal's repair reason names the credential missing, so the log names why
+        # it is unusable: the exception's type, not its message, so no part of
+        # the credential reaches the log.
         try:
-            credential.resolve()
+            self.client(authority)
             return True
-        except ValueError:
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "Dispute credential for authority %s is unusable (%s); its CA bundle path is %r",
+                authority.identity, type(exc).__name__, credential.ca_bundle_path,
+            )
             return False
 
     def client(self, authority):
@@ -191,7 +199,7 @@ class VmDealLifecycle:
                 raise ValueError("Agreement authority credential is missing")
             self.clients[key] = MediationClient(
                 authority, MediationCredential(authority.identity, token=credential.resolve()),
-                transport=self.mediation_transport,
+                transport=self.mediation_transport, ca_bundle=credential.ca_bundle_path,
             )
         return self.clients[key]
 
@@ -371,7 +379,7 @@ class VmDealLifecycle:
         # Ingress holds its write transaction; this immutable binding read
         # must not open a competing writer while building a local claim.
         with sqlite3.connect(self.path) as conn:
-            binding = SellerSession(conn, initialize=False).read(negotiation_id).dispute_binding
+            binding = SellerSession(conn).read(negotiation_id).dispute_binding
         adapter = self.seller.disputes.resolve(binding) if binding else None
         if not isinstance(adapter, DeliveryEndClaims):
             return None

@@ -16,9 +16,9 @@ from __future__ import annotations
 import logging
 import os
 import warnings
-from pathlib import Path
 from typing import Any
 
+from arkhai_vms_negotiation.amounts import BASIS_POINTS, multiplier_floor
 from core_storefront.identity_config import IdentityConfig, resolve_storefront_signer
 from core_storefront.multi_registry_client import RegistryAuthorityTrust
 from dynaconf import Dynaconf
@@ -32,7 +32,6 @@ from market_alkahest import (
 from market_config.config_loader import (  # type: ignore[import-not-found]
     ChainConfig,
     chains_from_config,
-    storefront_config_files,
 )
 from market_config.registry_url import normalize_registry_url
 from market_config.setting_types import PositiveSeconds, SiteAuthorityUrl
@@ -43,6 +42,7 @@ from market_settlement_runtime import (
 )
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from ..settings_source import DEFAULTS_FILE, settings_source
 from .zerotier import BaseUrlResolutionError, resolve_base_url_best_effort
 
 logger = logging.getLogger(__name__)
@@ -50,22 +50,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AGENT_ID = "root_agent"
 IDENTITY_CREDENTIAL_ENV = "ARKHAI_IDENTITY_CREDENTIAL"
-_DEFAULTS_FILE = Path(__file__).resolve().parent.parent / "settings.toml"
+_DEFAULTS_FILE = DEFAULTS_FILE
 
 
 def _build_settings() -> Dynaconf:
-    overlays = [str(p) for p in storefront_config_files() if Path(p).exists()]
-    s = Dynaconf(
-        settings_file=[str(_DEFAULTS_FILE)],
-        includes=overlays,
-        envvar_prefix="STOREFRONT",
-        envvar_separator="__",
-        load_dotenv=False,
-        environments=False,
-        merge_enabled=True,
-    )
-
-    return s
+    return settings_source()
 
 
 def _coerce_chains_table(raw: Any) -> dict[str, dict[str, Any]]:
@@ -396,6 +385,27 @@ def source_confirmation_seconds(source: Dynaconf | None = None) -> float:
             f"intervals, which {reason}"
         )
     return window
+
+
+def negotiation_multiplier_floor(source: Dynaconf | None = None) -> int:
+    """`[negotiation].multiplier_floor_bps`: the lowest multiplier, in basis
+    points, the storefront accepts over a shape-priced listing's advertised
+    rates; 10,000 (the advertised rates themselves) unless stated.
+
+    Refused by key unless it is an integer from 0 to 10,000. A floor above the
+    advertised rates would make them a price the storefront refuses, so a buyer
+    reading them from the registry could never accept what was published.
+    """
+
+    active = settings if source is None else source
+    stated = active.get("negotiation.multiplier_floor_bps", BASIS_POINTS)
+    try:
+        return multiplier_floor({"multiplier_floor_bps": stated})
+    except ValueError:
+        raise ValueError(
+            "[negotiation].multiplier_floor_bps must be an integer from 0 to "
+            f"{BASIS_POINTS}: the advertised rates are the most a buyer is asked to pay"
+        ) from None
 
 
 def _positive_seconds(value: Any, *, key: str) -> float:

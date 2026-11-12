@@ -389,9 +389,16 @@ move through the route's evaluate twin or the loop's dry run, advances exactly
 one side effect, and measures that effect against expectations through typed
 clients, with no sleeps: the only wait is on a request the stage made, or for
 an instant the deal's Agreement fixes, such as its start, since no control
-moves the wall clock (`wait_until` in
+moves the storefronts', sites' or buyer's clock (`wait_until` in
 `e2e-tests/tests/e2e/roles/helpers/compute_deal_stages.py`); a stage waiting
-for an instant then advances what acts on it explicitly. What a
+for an instant then advances what acts on it explicitly. A decision a service
+derives from a record and a timestamp is driven by moving that service's
+perceived clock through a control instead. Today only the lane doubles have
+one: each reads wall time plus an offset that a control moves forward, a
+scenario advances both doubles together through the `lane_double_clock` fixture
+(`e2e-tests/tests/e2e/roles/helpers/lane_doubles.py`), whose finaliser resets
+both to wall time whatever the module's outcome, and no storefront step follows
+an advance within its module, since the storefront still reads wall time. What a
 stage produced goes into the shared deal state for the stages that depend on
 it, and whatever happened, the fixture's finaliser resumes the loops.
 
@@ -624,19 +631,16 @@ project of its own:
   sample app with no verify cache, so every request re-verifies its key and a
   top-up is visible to the next request; the cache's own behaviour, including no
   service call on a key known to be exhausted, is proven by the gate's
-  conformance trace. The lane mounts the engine socket into the test container
-  (`BUYER_MACHINE_DOCKER_SOCKET`), and its upgrade/rollback scenario
-  (`e2e_credits_service_rollback`,
-  `e2e-tests/tests/e2e/roles/scenarios/apicredits/test_credits_service_upgrade_rollback.py`)
-  runs last: through that socket it starts the previous release's pre-kit image
-  over a copy of the database the deal scenarios wrote, and the current image
-  over a database the pre-kit image wrote, and checks each reads the other's
-  grants and serves the live route surface.
+  conformance trace.
 
-The VM, bare-metal and API-credit lanes also run the payments double
-(`compose.payments-double.yml`), which each lane's payment storefront — Bob, the
-bare-metal storefront, the credits storefront — settles against; see
-[Private Service Dependencies](#private-service-dependencies).
+Each lane also runs the payments double and the mediation double
+(`compose.payments-double.yml`): its payment storefront — Bob, the bare-metal
+storefront, the credits storefront — settles against the first, and the lane's
+registries recommend the second as the dispute authority every payment deal
+names; see [Private Service Dependencies](#private-service-dependencies). The
+VM lane also runs six dispute controls scenarios, each on its own deal, that
+program both doubles through their controls
+([`e2e-tests/README.md`, "VM dispute controls"](../../e2e-tests/README.md#vm-dispute-controls)).
 A lane target names only its Compose files, its project, and the run's
 provisioning mode: every value its stack reads is in a committed overlay,
 registry or site profile, or secret overlay, and the runner takes the lane's
@@ -691,13 +695,19 @@ reported as not run against Helm.
 
 After the scenario pod, validation runs every storefront payments-check test pod
 the release's hooks render (`helm get hooks`, each pod named
-`<release>-…-payments-check`), each as its own step and likewise counted as
+`<release>-…-payments-check`), then every mediation-check test pod
+(`<release>-…-mediation-check`), each as its own step and likewise counted as
 passed only on its own exit status of 0; a pod with no exit status is stopped.
 Each pod's log is kept as evidence beside the scenario pod's, and a release
-that renders no check pod is warned, never passed. The check pod runs the
-storefront's `check-payments` against the release's payments double, so it
-shows the storefront's CA mount, derived `ca_bundle_path`, overlay key and
-service URL working together; the release serves no payment scenario.
+that renders no check pod of a kind is warned, never passed. The payments-check
+pod runs the storefront's `check-payments` against the release's payments
+double, so it shows the storefront's CA mount, derived `ca_bundle_path`, overlay
+key and service URL working together. The mediation-check pod runs the VM
+storefront's `check-mediation --origin` against the release's mediation double,
+so it shows the dispute credential copied into the runtime overlay, its
+rewritten `ca_bundle_path`, the Service name and the token working together; it
+asserts nothing about the read's answer. The release serves no payment or
+dispute scenario.
 
 A mock-provisioned deal proves the services compose into a working deal, not
 that a real resource was delivered. Bare metal's release-qualified deal
@@ -1051,6 +1061,62 @@ split into `unit/` (its own helper logic), `smoke/`, and `e2e/`. A Helm
 chart's render tests live in its own `tests/` directory (see "Chart Render
 Tests").
 
+## Migration Tests
+
+Each stateful service's migration chain is proven at the lowest level that can
+show it, against real SQLite files and never a mocked connection
+([`deployment-state`, "Migration and initialization boundary"](../../openspec/specs/deployment-state/architecture.md#migration-and-initialization-boundary)):
+
+- **The engine.** `kit/schema-migrations`' unit tests classify every result from
+  tables and recorded IDs and render each refusal; its library integration tests
+  run the engine over real files through both adapters — a fresh chain, a rerun,
+  adoption without running the baselines, ahead and unsupported databases refused
+  unchanged, a migration failing after DDL leaving no trace under every
+  transaction control, the read-only check creating no file — and prove that
+  `schema_snapshot` sees what a schema comparison must and ignores how a column
+  was added.
+- **The floor fixture.** Each service whose chain adopts a release's databases
+  commits that release's schema under its `tests/fixtures/v0_3_0_floor/`:
+  `schema.json` (the snapshot), the release's recorded IDs or revision, and
+  `ddl.sql`, generated by running the release's published packages on a fresh
+  database, as each fixture's README states. A fixture is regenerated only to
+  correct it against its release, or for a new floor
+  ([`RELEASING.md`](RELEASING.md#cutting-a-release)).
+- **The chain.** Each service's `tests/integration/test_migration_chain.py` (the
+  registry's `test_migrations.py`) shows that the baselines alone reproduce the
+  fixture's snapshot exactly; that a database built from `ddl.sql` with the floor
+  IDs is adopted, applying exactly the later migrations and keeping its rows, and
+  ends with the same snapshot and ledger as a fresh database; that a rerun changes
+  no byte; that a database missing a floor ID, or holding tables with no ledger,
+  is refused unchanged; and each later migration's rewrite. A test of a single
+  later migration starts from a `ddl.sql` database, the real upgrade path.
+- **The command and the startup check.** Each service's command is driven
+  through its entry point with its settings in the loader's environment layer:
+  `--check` exits unsuccessfully on a behind or missing database, listing what
+  differs and changing nothing; the command refuses an ahead database; two
+  configurations differing in anything but the database location and log level
+  give one schema and one set of rows; and the command imports none of the
+  application's configuration. The startup check is proven at the function the
+  application's startup calls, refusing each state with the command's name, and
+  through the application's own startup for an absent database.
+- **The store-open test.** Each storefront's `tests/integration/test_store_open.py`
+  starts the real application over a database its chain migrated, opens every
+  store it composes, and asserts the `schema_snapshot` before and after are
+  equal, so a table created when a store opens fails it.
+- **The init containers.** Each chart's render test asserts its one migration
+  init container ("Chart Render Tests").
+
+A service's migration test with no application — a real component against real
+storage — is library integration in the sense of the Integration Tests section,
+though the component is a service's chain rather than a kit library. A test that
+needs a migrated database for another subject migrates it through the service's
+chain, or, in a kit, through the kit's own baseline; a test that builds its
+tables with `create_all` instead proves nothing about the chain's schema.
+The end-to-end lanes start every service through its migration phase on a fresh
+database, so a passing pipeline shows each chain builds a schema its service runs
+on; adoption of a release's databases is proven only by the chain tests, since no
+lane holds one.
+
 ## Pool Offering-Mode Enforcement
 
 Pool offering-mode coverage follows the lowest-meaningful-level rule while
@@ -1069,10 +1135,6 @@ proving that no execution layer relies on another layer's earlier decision:
 - `kit/fulfillment` scheduler tests withdraw a declaration after reservation;
   orchestration tests withdraw it after provider input is prepared and assert
   no provider dispatch occurs.
-- Provisioning migration tests cover fresh bootstrap, a `default` pool stored
-  before offering modes (migration creates none), exact derivation from provider/playbook/delegate configuration,
-  idempotent rerun, narrowing, INFO evidence, malformed drift, single-proof
-  backfill, conflicting proof, unproved active rows, and terminal rows.
 - Advertisement and backing declarations follow the same split.
   `kit/resource-pools-contracts` unit tests own declaration shape, both cross-tag
   rules, the pool models' refusal to build an invalid write, and the resolver's
@@ -1082,10 +1144,8 @@ proving that no execution layer relies on another layer's earlier decision:
   stored-declaration check.
   Provisioning integration tests own server-side refusal through the typed
   client — status and stored state only, per the rejection-path rule — plus the
-  upgrade migration, the startup refusal, and every projected pool carrying both
-  declarations. The api family authority library's integration suite
-  (`kit/api/authority/tests/integration/test_pool_declarations_migration.py`)
-  owns the API-credits service's migration and startup refusal.
+  startup refusal and every projected pool carrying both declarations. The
+  API-credits service's integration suite owns its own startup refusal.
 - Provider and backing immutability follow the same split. `kit/resource-pools`
   unit tests own the pure stored-versus-proposed comparison; no database is
   needed to prove it. Its library integration suite owns preserved state on
@@ -1093,9 +1153,8 @@ proving that no execution layer relies on another layer's earlier decision:
   real persistence and a recording handler. Provisioning integration tests own
   the HTTP 400 and HTTP 422 statuses through the typed client — rejection-path
   bodies for malformed hints — and, against file-backed SQLite with the real
-  importer, a refused startup document leaving its digest unchanged, the
-  document-created default, interrupted first migration, and the VM provider
-  identity upgrade. No deployed scenario is owed for these single-authority
+  importer, a refused startup document leaving its digest unchanged and the
+  document-created default. No deployed scenario is owed for these single-authority
   transactions.
 - The deployed `e2e_pool_declared_modes` scenario sends an unsupported explicit
   mode for a real matching capacity resource and observes HTTP 409 plus no
@@ -1192,8 +1251,7 @@ scenarios at every level:
   dispatch;
 - VM storefront tests cover installed contribution wiring, exact public
   `offering_mode`, configured source selection, negotiation/settlement
-  adapters, selected-site capacity calls, restart recovery, and transactional
-  legacy migration;
+  adapters, selected-site capacity calls, and restart recovery;
 - bare-metal domain/storefront tests own only bare-metal codecs, publication
   semantics, and the production lifecycle hook supplied by that package;
 - deployment tests render one combined image/command/database, both explicit
@@ -1207,8 +1265,7 @@ scenarios at every level:
 Every cross-swap test asserts the unselected policy, repository mutation,
 capacity/provider call, result decoder, and teardown spy remain untouched.
 Restart fixtures route from recorded bindings even when current publication
-configuration changes. Migration tests compare source bytes on failed check or
-write and prove the successful rerun idempotent.
+configuration changes.
 
 ## Marketplace Identity Verification
 
@@ -1246,11 +1303,8 @@ manifest must fail startup rather than admit mixed identity precedence.
   site pins are enforced, signed responses are verified, and no body address,
   administrator key, private-key field, or missing-header fallback reaches a
   state mutation.
-- Migration tests cover populated legacy state as well as fresh bootstrap and
-  idempotent rerun. They assert stable publisher, listing, negotiation,
-  obligation, fulfillment, and operation identifiers, explicit buyer run-log
-  migration, complete rollback on malformed or conflicting owners, and
-  startup/readiness rejection of drift or mixed signature versions.
+- Migration tests cover explicit buyer run-log migration and startup/readiness
+  rejection of drift or mixed signature versions.
 - Composition tests exercise an Ed25519 Arkhai payment path with wallet, chain,
   RPC, balance, and gas configuration absent, and separately prove that a
   selected EVM effect resolves and validates only its adapter-owned inputs.
@@ -1496,11 +1550,24 @@ passing render is not deployment evidence, just as it is not deal evidence.
   those environments, so in CI these checks do not run; run them locally before a
   change to a chart or a loader is reviewed.
 - `helm/charts/storefront/tests/test_render.py` also asserts, over the defaults,
-  the local release, every rendering fixture, and a second agent, that no VM
-  storefront Deployment renders an init container or a `wait-for-` container and
-  that each carries a `startupProbe` on `/health`, as the bare-metal chart's does:
-  the storefront starts with its dependencies unreachable and reports them
-  degraded.
+  the local release, every rendering fixture, and a second agent, that each VM
+  storefront Deployment renders exactly one init container — `migrate`, running
+  `market-storefront-migrate` alone from the application's image and environment
+  over the data volume, without `entrypoint.sh` or ZeroTier — and no `wait-for-`
+  container, and that each carries a `startupProbe` on `/health`, as the
+  bare-metal chart's test asserts of `bare-metal-storefront-migrate`: the
+  storefront migrates its own database first, then starts with its dependencies
+  unreachable and reports them degraded.
+- `helm/charts/registry/tests/test_render.py` asserts, over the defaults, with
+  persistence disabled, with another mount path, and with a secret profile, that
+  the registry Deployment renders exactly one init container running
+  `registry-migrate` from the application's image, with its environment and
+  profile mounts but not its signer credential, over the application's data
+  volume, and that the application container states its own command; in the
+  umbrella with the `api-credits-registry` alias enabled both instances render the
+  same, and with it disabled nothing of the alias renders.
+  `helm/charts/provisioning/tests/test_render.py` asserts the same of
+  `compute-provisioning-migrate`.
 - `helm/tests/test_release_topology.py` asserts, over both topology releases,
   that no Pod annotated `helm.sh/hook: test` carries all of any Deployment's
   `matchLabels` or any Service's selector — every test pod carries
@@ -1517,11 +1584,16 @@ passing render is not deployment evidence, just as it is not deal evidence.
   storefront rendering with nothing for its removed settings; and the
   payments-check test pod running the storefront's own command with the
   Deployment's image, environment, and configuration mounts but no data volume,
-  probes, or ZeroTier device, rendered only with payments and an account.
-  `helm/charts/payments-lane-double/tests/test_render.py` asserts the double is
-  off by default, runs once behind the Service `payments-double` in the local
-  release and not at all in the bare-metal release, and serves a named TLS
-  Secret over the image's files.
+  probes, or ZeroTier device, rendered only with payments and an account. The
+  VM storefront chart's render test asserts the same of the mediation-check test
+  pod, which runs `market-storefront check-mediation --origin` with the CA mount
+  and the Secret overlay present and renders only when `tests.mediationOrigin`
+  names an origin; in the local release Bob's names the mediation double's.
+  `helm/charts/payments-lane-double/tests/test_render.py` and
+  `helm/charts/mediation-lane-double/tests/test_render.py` assert each double is
+  off by default, runs once behind its Service (`payments-double`,
+  `mediation-double`) in the local release and not at all in the bare-metal
+  release, and serves a named TLS Secret over the image's files.
 - `helm/tests/test_release_topology.py` also holds the local release's payments
   values to the double's committed fixtures, and asserts the registry chart
   renders its settings as the profile `config-production.env`, sets only
@@ -1533,7 +1605,9 @@ passing render is not deployment evidence, just as it is not deal evidence.
 - Release tooling (`make test-release-tooling`) reads back the secret overlays
   `topology-secrets` writes: the seller payments key in each storefront's
   runtime overlay, and Bob's `[[DisputeCredential]]` equal to his Compose
-  secret overlay's (`scripts/tests/test_change_build_and_helm_targets.py`).
+  secret overlay's but for its `ca_bundle_path`, which names the storefront
+  chart's CA file (`storefront.caBundleFile`) rather than the Compose mount
+  (`scripts/tests/test_change_build_and_helm_targets.py`).
 
 **How to write one:**
 
@@ -1613,7 +1687,26 @@ authentication, admission, read authorization, idempotency and error codes —
 unless there is a compelling reason to deviate, and states the deviation; a
 double that answers differently proves only that the client agrees with the
 double. Where it wraps a kit's engine it serves what that engine serves, and it
-narrows its claims rather than its behaviour.
+narrows its claims rather than its behaviour. A double takes its producer's
+decisions — a dispute authority's rulings, say — as scenario-programmed answers,
+as mock provisioning takes a job's outcome, and never re-implements the
+producer's decision logic: a rules engine held to the producer's traces would
+drift whenever the producer revises its rules, and a lane result proves the
+client's handling of a decision, not the decision's arithmetic, which stays the
+producer's to qualify.
+
+**The lane doubles' controls.** Both lane doubles serve one typed control
+contract, `tools/lane-double-controls`, which the doubles and the end-to-end
+harness import; its [README](../../tools/lane-double-controls/README.md) lists
+the rules, routes and refusals. Every control is a deterministic step: nothing
+delays, races or runs in the background. A transport fault never applies to a
+control route or `/health`, so a finaliser can always remove the rule that
+caused it, and it abandons a started response, so SCM's clients see a transport
+error, as they would a lost response, never an HTTP error status. A scenario
+installs its rules through the `lane_double_rules` fixture
+(`e2e-tests/tests/e2e/roles/helpers/lane_doubles.py`), whose finaliser deletes
+them and fails naming any rule a case still waited on. A control no scenario
+exercises is proven by its double's own suite through the typed client.
 
 **The lanes' payments target.** Every end-to-end lane runs the payments double,
 `tools/payments-lane-double`: an HTTPS service at `https://payments-double:8443`
@@ -1636,13 +1729,32 @@ runs its payment storefront's `check-payments` from the storefront's own
 container, an authenticated read of the seller's balance at the double, and a
 failed check fails lane setup by name before any scenario.
 
-The lanes' registries recommend one pinned dispute authority nobody can answer —
-its origin under `.invalid`, its record key without a usable private half, its
-account without a token at the double — which sellers and buyers take from the
-registry rather than from a `[[Dispute]]` entry of their own. The VM payment
-scenario's case and refund stages need an authority that accepts a filed case,
-`MEDIATION.SERVICE_URL`, blank by default, and report a blocked skip naming it;
-its commit and servicing stages run against the double.
+**The lanes' mediation target.** Every lane also runs the mediation double,
+`tools/mediation-lane-double`, at `https://mediation-double:8443` under the same
+lane CA: it reproduces the dispute authority's API mechanics and rules a case
+only when a rule says so
+([test-compatibility, "The in-lane mediation double"](../../openspec/specs/test-compatibility/architecture.md#the-in-lane-mediation-double);
+its [README](../../tools/mediation-lane-double/README.md) states its deviation
+from its producer). The lanes' registries recommend its identity, which sellers and
+buyers take from the registry rather than from a `[[Dispute]]` entry of their
+own. `config-payments-lane.yml`'s `mediation` section holds the target, its
+identity, `lane_owned: true`, the CA bundle path, the buyer's token, the
+variable the buyer's credential names it by, and the control token;
+`e2e-tests/tests/e2e/roles/helpers/mediation.py` fails setup by name on an
+unready lane-owned target and reports a blocked skip for an unready external
+one, as the payments helper does. The harness writes the buyer's
+`[[DisputeCredential]]`, with its `api_key_env` and `ca_bundle_path`, and hands
+the buyer's token to each `market` process under that variable, never into the
+runner's environment. Bob's storefront holds his dispute credential, with the
+lane CA as its `ca_bundle_path`, in his secret overlay. The lanes run no
+`check-mediation`: the VM payment scenario's case stages and the VM dispute
+scenarios prove the storefront's mediation access, and the local release's Helm
+test runs the check (["Chart Render Tests"](#chart-render-tests)).
+
+A payment scenario run against both lane-owned doubles logs the label *lane
+doubles* with each double's installed contract hashes, read from its status
+through the typed control client (the `lane_doubles_evidence` fixture); only a
+hosted target yields live evidence.
 
 **The payments helper.** Payment scenarios read their payments policy through
 `e2e-tests/tests/e2e/roles/helpers/payments.py`. A blank PAYMENTS.SERVICE_URL

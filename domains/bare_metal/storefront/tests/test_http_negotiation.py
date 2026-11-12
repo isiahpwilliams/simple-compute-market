@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from arkhai_bare_metal_storefront.domain_runtime import get_market_domain_contract
+from arkhai_bare_metal_storefront.migrations import migrate_storefront_database
 from arkhai_bare_metal_storefront.runtime import BareMetalStorefrontRuntime
 from arkhai_bare_metal_storefront.settlement_composition import (
     BareMetalStorefrontSettlementComposition,
@@ -129,6 +130,7 @@ async def _poll_sites(app) -> None:
 
 def _runtime(path: str) -> BareMetalStorefrontRuntime:
     domain = get_market_domain_contract()
+    migrate_storefront_database(path)
     return BareMetalStorefrontRuntime(
         db=SQLiteClient(path, domain=domain),
         domain=domain,
@@ -660,7 +662,7 @@ async def test_a_countering_seller_negotiates_over_rounds_to_acceptance(tmp_path
     assert accepted["action"] == "accept"
     thread, terms = await _accepted_records(runtime, opened["negotiation_id"])
     assert thread["terminal_state"] == "success"
-    assert int(thread["agreed_price"]) == countered
+    assert int(thread["negotiated_scalar"]) == countered
     assert terms is not None and terms.host_id == "machine-1"
     assert thread["settlement_plan"] is not None
     # A recheck at the opening and one before the buyer's accept, each reading
@@ -1379,6 +1381,7 @@ def _contact_runtime(path: str, site: SourceSite) -> BareMetalStorefrontRuntime:
     """A storefront settling by introduction alone, with a contact for its one
     site; the address is a reserved example domain, never a real mailbox."""
     domain = get_market_domain_contract()
+    migrate_storefront_database(path)
     return BareMetalStorefrontRuntime(
         db=SQLiteClient(path, domain=domain),
         domain=domain,

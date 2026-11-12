@@ -10,11 +10,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from arkhai_api.issuance import KeyDisposition, accepted_terms_digest, fulfillment_id, issuance_request
-from arkhai_api_authority import IssuanceError, KeysService, derive_key_id, initialize, run_migrations
+from arkhai_api_authority import IssuanceError, KeysService, derive_key_id, initialize, migrate_database
 from market_identity import Identity, IdentityScheme
 from market_site.ledger import CapacityLedgerService, UndeclaredOfferingModeError
 
-from tests.integration.profiles import CONFIG, LABEL, PROFILE, config_for
+from tests.integration.profiles import CHAIN, CONFIG, LABEL, PROFILE, config_for
 
 BUYER = {
     "buyer_scheme": "eip191",
@@ -92,7 +92,7 @@ def _composed(config=CONFIG) -> tuple[CapacityLedgerService, KeysService, object
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    run_migrations(engine)
+    migrate_database(engine, CHAIN)
     initialize(engine, config.profile)
     session_factory = sessionmaker(bind=engine)
     ledger = CapacityLedgerService(session_factory)

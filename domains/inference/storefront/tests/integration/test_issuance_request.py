@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from arkhai_api.issuance import accepted_terms_digest, issuance_request_digest
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_inference.label import INFERENCE_LABEL
 from arkhai_inference.listings import InferenceModelCard, accepted_terms
 
 from inference_storefront.container import storefront_sqlite_client
+from inference_storefront.migrate import CHAIN
 from inference_storefront.services.fulfillment_service import fulfill_inference_obligation
 from tests.cards import bound_card
 from tests.integration.issuance_authority import IssuanceRequest, ScriptedAuthority, evidence
@@ -15,6 +17,7 @@ from tests.integration.issuance_authority import IssuanceRequest, ScriptedAuthor
 async def test_the_request_pins_the_accepted_card_under_the_inference_label(tmp_path):
     card = bound_card()
     authority = ScriptedAuthority()
+    migrate_storefront_database(CHAIN, tmp_path / "storefront.db")
 
     result = await fulfill_inference_obligation(
         evidence=evidence(card),

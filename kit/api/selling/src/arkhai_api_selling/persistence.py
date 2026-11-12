@@ -3,7 +3,8 @@
 The settlement-evidence, issuance-progress, issuance-evidence, and private-result
 tables are named from the bundle's prefix. The purchase terms a thread records
 are the vocabulary's shape, the same for every domain, so their table carries
-no prefix.
+no prefix. The client issues no DDL: ``arkhai_api_selling.migrations`` owns the
+schema, which the storefront's migration command builds before it serves.
 """
 
 from __future__ import annotations
@@ -14,109 +15,37 @@ from datetime import datetime
 from typing import Any
 
 from core_storefront.sqlite_client import SQLiteClient as CoreSQLiteClient
-from core_storefront.sqlite_migrations import Migration, MigrationLike
 from market_core import SettlementEvidence
-from market_identity import Identity
-from market_settlement_runtime import settlement_migrations
 
 from arkhai_api_selling.contributions import SellingContributions
+from arkhai_api_selling.migrations import TERMS_TABLE
 from arkhai_api_selling.settlement_store import SettlementRepository
 
-ESCROW_SETTLEMENT_IDENTITY_MIGRATION = "20260810_001_escrow_settlement_identity"
-ISSUANCE_EVIDENCE_MIGRATION = "20260815_002_issuance_evidence"
 
-#: The purchase terms recorded for each thread: quantity and key target.
-TERMS_TABLE = "credit_deal_terms"
+def refuse_unbound_listings(db_path: str, contributions: SellingContributions) -> None:
+    """Refuse a database holding a listing with no durable binding.
 
-
-def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
-
-
-def _migrate_escrow_settlement_identity(conn: sqlite3.Connection) -> None:
-    """Bind each public settlement job to its exact accepted obligation."""
-    columns = _column_names(conn, "escrows")
-    if "obligation_ref" not in columns:
-        conn.execute("ALTER TABLE escrows ADD COLUMN obligation_ref TEXT")
-    if "obligation_index" not in columns:
-        conn.execute("ALTER TABLE escrows ADD COLUMN obligation_index INTEGER")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_escrows_obligation_ref "
-        "ON escrows(obligation_ref) WHERE obligation_ref IS NOT NULL"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_credit_escrows_negotiation_obligation "
-        "ON escrows(negotiation_id, obligation_index)"
-    )
-
-
-def _migrate_issuance_evidence(conn: sqlite3.Connection, contributions: SellingContributions) -> None:
-    evidence = contributions.table("settlement_evidence")
-    progress = contributions.table("issuance_progress")
-    issuance_evidence = contributions.table("issuance_evidence")
-    private_results = contributions.table("private_results")
-    conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {evidence} (
-          negotiation_id TEXT PRIMARY KEY,
-          mechanism TEXT NOT NULL,
-          agreement_digest TEXT NOT NULL,
-          settlement_ref TEXT UNIQUE,
-          status TEXT NOT NULL CHECK(status IN ('pending', 'verified', 'failed', 'refunding', 'refunded')),
-          evidence TEXT NOT NULL
+    Every capacity path reads a listing's durable binding, and none can be
+    derived for a listing recorded without one. The refusal concerns data, not
+    schema, so it runs at startup on a migrated database.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        unbound = conn.execute(
+            """
+            SELECT l.listing_id FROM listings l
+            LEFT JOIN storefront_listing_bindings b ON b.listing_id = l.listing_id
+            WHERE b.listing_id IS NULL
+            ORDER BY l.listing_id LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    if unbound is not None:
+        raise RuntimeError(
+            f"{contributions.refusal_noun} listing {unbound[0]!r} has no durable listing binding; "
+            "this storefront requires a fresh database"
         )
-    """)
-    conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {progress} (
-          negotiation_id TEXT PRIMARY KEY,
-          public_ref TEXT NOT NULL UNIQUE,
-          status TEXT NOT NULL CHECK(status IN ('provisioning', 'ready', 'failed')),
-          fulfillment_uid TEXT,
-          public_result TEXT NOT NULL DEFAULT '{{}}',
-          credentials_ref TEXT,
-          reason TEXT,
-          delivery_started_at TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        )
-    """)
-    conn.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {issuance_evidence} (
-          evidence_digest TEXT PRIMARY KEY,
-          fulfillment_id TEXT NOT NULL UNIQUE,
-          signed_evidence TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {private_results} (
-          credentials_ref TEXT PRIMARY KEY,
-          fulfillment_id TEXT NOT NULL UNIQUE,
-          owner_scheme TEXT NOT NULL,
-          owner_id TEXT NOT NULL,
-          key_id TEXT NOT NULL,
-          secret TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{contributions.table_prefix}_private_result_owner "
-        f"ON {private_results}(owner_scheme, owner_id, credentials_ref)"
-    )
-
-
-def migrations(contributions: SellingContributions) -> tuple[Migration, ...]:
-    """The storefront's own migration chain, its identifiers fixed whatever the prefix."""
-    return (
-        Migration(ESCROW_SETTLEMENT_IDENTITY_MIGRATION, _migrate_escrow_settlement_identity),
-        Migration(
-            ISSUANCE_EVIDENCE_MIGRATION,
-            lambda conn: _migrate_issuance_evidence(conn, contributions),
-        ),
-    )
 
 
 def write_credit_terms(
@@ -150,73 +79,13 @@ class StorefrontSQLiteClient(CoreSQLiteClient):
         "obligation_index",
     )
 
-    def __init__(
-        self,
-        db_path: str,
-        contributions: SellingContributions,
-        *,
-        local_listing_principal: Identity | None = None,
-        expected_legacy_sellers: tuple[str, ...] = (),
-    ) -> None:
-        # The core constructor migrates the database, which reads the bundle.
+    def __init__(self, db_path: str, contributions: SellingContributions) -> None:
+        super().__init__(db_path)
         self._contributions = contributions
-        super().__init__(
-            db_path,
-            local_listing_principal=local_listing_principal,
-            expected_legacy_sellers=expected_legacy_sellers,
-        )
 
     @property
     def contributions(self) -> SellingContributions:
         return self._contributions
-
-    def _domain_migrations(self) -> tuple[MigrationLike, ...]:
-        return (*settlement_migrations(), *migrations(self._contributions))
-
-    def _ensure_domain_tables(self, cur: sqlite3.Cursor) -> None:
-        cur.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {TERMS_TABLE} (
-              negotiation_id TEXT PRIMARY KEY,
-              quantity INTEGER NOT NULL,
-              key_mode TEXT NOT NULL DEFAULT 'new',
-              key_id TEXT,
-              created_at TEXT NOT NULL DEFAULT (STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))
-            )
-            """
-        )
-
-    def _ensure_domain_indexes(self, cur: sqlite3.Cursor) -> None:
-        noun = self._contributions.refusal_noun
-        for table, columns in {
-            self._contributions.table("settlement_evidence"): {
-                "negotiation_id", "mechanism", "agreement_digest", "settlement_ref", "status", "evidence",
-            },
-            self._contributions.table("issuance_progress"): {
-                "negotiation_id", "public_ref", "status", "fulfillment_uid", "public_result",
-                "credentials_ref", "delivery_started_at",
-            },
-        }.items():
-            actual = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})")}
-            if not columns <= actual:
-                raise RuntimeError(
-                    f"incompatible {noun} settlement schema; explicitly reset the database"
-                )
-        # A listing without a durable binding cannot be derived one, and every
-        # capacity path reads it, so such a database is refused.
-        unbound = cur.execute(
-            """
-            SELECT l.listing_id FROM listings l
-            LEFT JOIN storefront_listing_bindings b ON b.listing_id = l.listing_id
-            WHERE b.listing_id IS NULL
-            ORDER BY l.listing_id LIMIT 1
-            """
-        ).fetchone()
-        if unbound is not None:
-            raise RuntimeError(
-                f"{noun} listing {unbound[0]!r} has no durable listing binding; "
-                "this storefront requires a fresh database"
-            )
 
     def _settlement(self) -> SettlementRepository:
         return SettlementRepository(self.db_path, self._contributions)
@@ -363,10 +232,8 @@ class StorefrontSQLiteClient(CoreSQLiteClient):
 
 
 __all__ = [
-    "ESCROW_SETTLEMENT_IDENTITY_MIGRATION",
-    "ISSUANCE_EVIDENCE_MIGRATION",
     "TERMS_TABLE",
     "StorefrontSQLiteClient",
-    "migrations",
+    "refuse_unbound_listings",
     "write_credit_terms",
 ]

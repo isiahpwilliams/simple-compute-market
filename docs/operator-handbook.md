@@ -518,6 +518,33 @@ It prints one JSON line and exits 0 when the read succeeded:
 
 The line never contains the key.
 
+**A dispute authority is proven with `check-mediation`.** A VM storefront's
+`[[DisputeCredential]]` for an authority whose certificate chains to a private CA
+names the bundle as `ca_bundle_path`, a file the pod mounts; the chart's CA mount,
+`/etc/arkhai/ca/ca-bundle.pem`, serves when the same bundle covers it. Set the
+agent's `tests.mediationOrigin` to the authority's origin, and `helm test
+<release>` runs the agent's `<agent>-mediation-check` pod: `market-storefront
+check-mediation --origin <origin>`, one authenticated read of the authority's
+respondent listing with the credential whose `origin` is exactly that one. Rerun
+it after any change to the credential or its bundle, or run it in the running
+pod:
+
+```console
+kubectl exec deploy/<storefront deployment> -- market-storefront check-mediation --origin <authority origin>
+```
+
+It prints one JSON line, `{"check": "mediation", "outcome": …, "origin": …}`, and
+exits 0 when the read succeeded, whatever the listing held; 1 when a step failed,
+the line naming the `step` and a fixed-text `detail`; and 2 on a malformed origin.
+It files, rules and changes nothing, and never prints the token:
+
+| `step` | What failed | Look at |
+|---|---|---|
+| `configuration` | no credential, or more than one, names the origin; its identity or origin is refused; or its CA bundle cannot be loaded | the overlay's `[[DisputeCredential]]`, its `ca_bundle_path`, the pod's mounts |
+| `credential` | the variable a buyer-style `api_key_env` names is unset or empty | the overlay: a storefront states `api_key` |
+| `transport` | the authority could not be reached over a trusted connection, or answered outside its contract | the origin, the network path, the CA bundle |
+| `refused` | the authority refused the read; `code` is its error code | the token |
+
 ## Registry secret profile
 
 The registry chart takes the registry's secret settings — the bootstrap key
@@ -562,3 +589,129 @@ at render, naming `secretProfile`. To move off them:
 
 A bootstrap key seeds a key only into an empty table, so moving an existing
 registry changes no key it already holds.
+
+## Upgrading a deployment
+
+Every stateful service — compute provisioning, the VM, bare-metal and API-credit
+storefronts, the API-credit service, and the registry — migrates its database
+through its own command before its application starts, and its application
+refuses a database its command has not migrated
+(["Migrations at startup"](development/DEPLOYMENT_AND_CONFIG.md#migrations-at-startup)
+names each command and where it runs). A release can therefore fail to start a
+service; it never starts one on a database it does not understand.
+
+### Supported databases
+
+A database the marketplace v0.3.0 release built, or one a later release
+migrated, is upgraded in place: compute provisioning's, the VM and bare-metal
+storefronts', and the registry's. A database from before v0.3.0 is refused as
+unsupported, and so is every existing API-credit storefront or service database:
+those services start from a fresh database, and the state in the old one is not
+carried. An image older than the database's last migration refuses it as ahead.
+
+### The procedure
+
+For each service, in its own deployment:
+
+1. **Back up its database.** The backup is the only rollback: a migrated database
+   cannot be served by the image it was migrated from.
+2. **Preview the upgrade** with the new image's command and `--check`, over the
+   backup or the live database, for example
+   `compute-provisioning-migrate --check`. It changes nothing, exits 0 only for a
+   database already compatible, and lists what the upgrade will do: the pending
+   migration IDs, a v0.3.0 baseline to be adopted, or why the database is refused.
+   A database it reports as unsupported will not start under the new release;
+   decide before deploying whether that service starts fresh.
+3. **Deploy.** Under Helm the init container runs the command before the
+   application; under Compose the service's command runs it before the
+   application. A v0.3.0 database is adopted — its v0.3.0 records are replaced by
+   the baseline's, without running the baselines — and the migrations after the
+   baseline are applied. If the migration fails, the application does not start;
+   the init container's or the container's log names the migration that failed,
+   and the migrations before it stay applied.
+4. **Verify** with `--check`, which now exits 0, and the service's health.
+
+To roll back, deploy the earlier image over the backup taken in step 1, never
+over the migrated database.
+
+### What the upgrade from v0.3.0 changes
+
+- **Host connections.** Compute provisioning rewrites every host's `ssh`
+  connection stored at version 1 — which v0.3.0 itself wrote, and refuses, so that
+  every job dispatched to such a host failed before any playbook ran — to version
+  2, with the same address, user, port and key. A host whose stored fields version
+  2 refuses fails the migration naming it, and nothing is rewritten: correct that
+  host from the backup's values, or remove it, then upgrade again. After the
+  upgrade a host submission must state its connection's `version`; one stating
+  none is refused, as is version 1.
+- **Leases left `release_failed` on a version-1 host.** The migration repairs the
+  host, not a release that already failed on it: a fulfillment's teardown is one
+  job, and retry-release re-observes that failed job rather than running another.
+  A teardown that failed this way never ran, so the deal's guest or tenant account
+  is still on the host, and a force-release alone would return the capacity while
+  that workload still runs. For each provisioning lease `release_failed` at the
+  upgrade:
+  1. List the service's leases (`GET /api/v1/contract/leases`, with the `admin`
+     role) and read the lease's teardown job and its error. A job refused for its
+     host's connection version failed before any playbook ran.
+  2. Remove from the host what the domain's teardown would have removed: for a VM
+     lease the deal's guest and the artifacts and port forwards it created, for a
+     bare-metal lease the tenant's account and its working data.
+  3. Force-release the lease
+     (`POST /api/v1/contract/leases/<reservation>/force-release`) with a `reason`
+     and `evidence` saying what you removed and how you checked.
+
+  A create that failed on a version-1 host never ran either, so its compensating
+  teardown, which failed the same way, left nothing to remove: check the host
+  holds nothing of the deal, then force-release it.
+- **Registry listings.** Each storefront's publication pass closes, at every
+  configured registry it reaches, an open listing under its own principal and of
+  an offering mode it serves that it does not hold open — such as a superseded
+  listing an earlier release left open. A listing it holds open, including one
+  held while its site is unreachable, is never closed.
+- **Registries and storefronts upgrade together.** A registry keeps each
+  listing's whole published document with the seller's signed publication,
+  validates every publication against its listing schema, and takes a compute
+  listing's prices only in its top-level `pricing` object: it refuses a
+  storefront that still publishes an asking rate in the listing's capacity
+  description, or a rate structure beside `pricing`, naming the field's place in
+  `pricing`. A registry of an earlier release keeps only the fields it names, so
+  it drops a newer storefront's `pricing`. Upgrade a registry and every
+  storefront that publishes to it in the same window, wherever their releases
+  are deployed. A listing the registry already holds stays readable from its
+  earlier fields, with no seller publication evidence and outside every
+  asking-rate filter, until its storefront republishes it. The registry's
+  migration cannot be downgraded; roll back from the backup, as for every
+  service.
+- **Option identifiers.** The option envelope is a forward-only wire boundary: an
+  option's identifier is not stable across a release that changes the envelope.
+  Buyers re-read listings after such an upgrade; a closed listing at a registry
+  keeps its older shape as history, and nothing rewrites it.
+- **Open negotiations cross the upgrade one way.** A shape-priced VM listing
+  negotiates a basis-point multiplier over its rates rather than an amount, every
+  storefront stores that negotiated quantity under a renamed column, and a VM
+  storefront pins and prices each negotiation from the rates it last published
+  successfully. None of this is read by an earlier image. Before upgrading a VM
+  storefront, drain it:
+  1. Pause new negotiations (`POST /api/v1/admin/pause`, with the `admin` role).
+  2. Let open negotiation threads end — accepted, exited, or expired.
+  3. Settle the deals already accepted.
+  4. Take the backup (step 1 of the procedure).
+
+  A shape-priced thread left open does not carry across: the upgraded storefront
+  refuses its next round or acceptance — `rate_structure_unpublished` until the
+  listing's next successful publication records what it published, then
+  `rate_structure_changed_reopen` for having no rate pin — and the buyer
+  reopens. A shape-priced listing takes no new negotiation until that
+  publication has succeeded at every configured registry the listing was
+  published to before the upgrade: until then the others may still serve rates
+  the storefront did not record, and it refuses as `rate_structure_divergent`.
+  Registry convergence resends the listing to a registry whose last publish
+  failed; one whose last publish before the upgrade succeeded is sent the
+  listing again only when the listing next changes. Roll back only by deploying
+  the earlier image over that backup; a deal negotiated after the upgrade
+  cannot be carried back.
+- **Storefront tables.** A storefront creates the tables v0.3.0 created only when
+  a store first opened, where they are absent, and drops the inventory tables
+  v0.3.0 kept frozen, with their rows; inventory is declared at provisioning
+  ([`seller-quickstart.md`, "Upgrading from CSV inventory"](seller-quickstart.md#upgrading-from-csv-inventory)).

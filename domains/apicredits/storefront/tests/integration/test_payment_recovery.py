@@ -22,6 +22,8 @@ from apicredits_storefront.domain_runtime import get_market_domain_contract
 from apicredits_storefront.container import SELLER_STAGES
 from apicredits_storefront.settlement_models import ApiCreditsSettleRequest
 from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 from arkhai_apicredits.negotiation.terms import make_api_credits_provision_terms
 from arkhai_api.issuance import issuance_result_model
 from arkhai_apicredits.label import API_CREDITS_LABEL
@@ -59,6 +61,7 @@ class IssuanceBoundary:
 
 @pytest.fixture
 async def payment_context(tmp_path):
+    migrate_storefront_database(CHAIN, str(tmp_path / "storefront.db"))
     db = storefront_sqlite_client(str(tmp_path / "storefront.db"))
     payments = FakePaymentsClient(signer=SERVICE)
     kit_stage = servicing_stage(
@@ -113,7 +116,7 @@ async def payment_context(tmp_path):
         provision_terms=terms.model_dump(mode="json"),
     )
     await db.commit_agreed_terms(
-        negotiation_id=agreement.negotiation_id, agreed_price=100, agreed_duration_seconds=0,
+        negotiation_id=agreement.negotiation_id, negotiated_scalar=100, agreed_duration_seconds=0,
         agreement_bytes=agreement.model_dump_json(exclude_none=True).encode(),
         accepted_at=now, agreed_start_utc=now,
         settlement_data=stage.agreement_artifacts(wire, composition),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,8 +15,10 @@ from market_capacity_publication import (
     PublicationCandidate,
     PublicationRuntime,
     ReconciliationPlan,
+    RegistrySweep,
     backing_changed,
 )
+from market_identity import Identity
 from registry_client import ListingRequest, UpdateListingRequest
 
 from arkhai_api_selling.capacity import QuotaCapacity, Reconcile, SQLiteClientFactory
@@ -72,12 +74,34 @@ class RegistryPublication:
     registry_urls: tuple[str, ...]
     storefront_url: str
     client_factory: Callable[[], Any]
+    # The principal the storefront publishes under at every registry.
+    publisher: Callable[[], Identity]
+
+
+async def publication_candidate(
+    contributions: SellingContributions, db: Any, row: Mapping[str, Any]
+) -> PublicationCandidate[dict[str, Any]]:
+    """The stored listing ``row`` as the storefront publishes it, with its durable binding."""
+    listing_id = str(row.get("listing_id") or "")
+    binding = await listing_binding(db, listing_id)
+    if binding is None:
+        raise CapacityBindingError(
+            f"{contributions.refusal_noun} listing has no durable capacity binding"
+        )
+    return PublicationCandidate(str(row["listing_id"]), binding, dict(row))
 
 
 class QuotaPublicationHooks:
-    def __init__(self, contributions: SellingContributions, db: Any) -> None:
+    def __init__(
+        self,
+        contributions: SellingContributions,
+        db: Any,
+        *,
+        publisher: Callable[[], Identity],
+    ) -> None:
         self._contributions = contributions
         self._db = db
+        self._publisher = publisher
 
     def validate_candidate(self, candidate: PublicationCandidate[dict[str, Any]]) -> None:
         noun = self._contributions.refusal_noun
@@ -95,45 +119,16 @@ class QuotaPublicationHooks:
     async def binding_for_listing(self, listing_id: str) -> PublicationBinding | None:
         return await listing_binding(self._db, listing_id)
 
+    async def publication_candidate(
+        self, listing: dict[str, Any]
+    ) -> PublicationCandidate[dict[str, Any]]:
+        return await publication_candidate(self._contributions, self._db, listing)
 
-class _PublishableListings:
-    """The store as a registry repair reads it: a listing the publication hook refuses is absent.
+    def registry_publisher(self) -> Identity:
+        return self._publisher()
 
-    The kit's repair republishes whatever ``load_listing`` returns, without the
-    hook it runs on every other publish, so the hook runs here on the very
-    object the kit will send. A refused listing reads as absent, is not
-    republished, and stays diverged for the kit to report.
-    """
-
-    def __init__(self, db: Any, hooks: QuotaPublicationHooks) -> None:
-        self._db = db
-        self._hooks = hooks
-
-    async def load_listing(self, *, listing_id: str) -> dict[str, Any] | None:
-        listing = await self._db.load_listing(listing_id=listing_id)
-        if listing is None:
-            return None
-        try:
-            binding = await self._hooks.binding_for_listing(listing_id)
-            if binding is None:
-                raise CapacityBindingError(f"listing {listing_id!r} has no durable capacity binding")
-            self._hooks.validate_candidate(PublicationCandidate(listing_id, binding, listing))
-        except CapacityBindingError as exc:
-            logger.warning("[REGISTRY] listing %s is not republished: %s", listing_id, exc)
-            return None
-        return listing
-
-    async def update_listing(self, **fields: Any) -> Any:
-        return await self._db.update_listing(**fields)
-
-    async def load_publications(self, **query: Any) -> list[dict[str, Any]]:
-        return await self._db.load_publications(**query)
-
-    async def list_publication_divergence(self, **query: Any) -> list[dict[str, Any]]:
-        return await self._db.list_publication_divergence(**query)
-
-    async def upsert_publication(self, **record: Any) -> Any:
-        return await self._db.upsert_publication(**record)
+    def served_offering_modes(self) -> Collection[str]:
+        return (self._contributions.offering_mode,)
 
 
 async def all_listings(db: Any, *, status: str) -> list[dict[str, Any]]:
@@ -168,15 +163,12 @@ class QuotaPublication:
         self._registry = registry
 
     def runtime(self, db: Any) -> PublicationRuntime[dict[str, Any]]:
-        return self._runtime(db, QuotaPublicationHooks(self._contributions, db))
-
-    def _runtime(
-        self, repository: Any, hooks: QuotaPublicationHooks
-    ) -> PublicationRuntime[dict[str, Any]]:
         registry = self._registry()
         return PublicationRuntime(
-            repository=repository,
-            hooks=hooks,
+            repository=db,
+            hooks=QuotaPublicationHooks(
+                self._contributions, db, publisher=registry.publisher
+            ),
             enabled=registry.enabled,
             registry_urls=registry.registry_urls,
             registry_client_factory=registry.client_factory,
@@ -185,24 +177,15 @@ class QuotaPublication:
             storefront_url=registry.storefront_url,
         )
 
-    async def _candidate(
-        self, db: Any, row: Mapping[str, Any]
-    ) -> PublicationCandidate[dict[str, Any]]:
-        listing_id = str(row.get("listing_id") or "")
-        binding = await listing_binding(db, listing_id)
-        if binding is None:
-            raise CapacityBindingError(
-                f"{self._contributions.refusal_noun} listing has no durable capacity binding"
-            )
-        return PublicationCandidate(str(row["listing_id"]), binding, dict(row))
-
     def refusal(self, listing: Mapping[str, Any]) -> str | None:
         """Why the domain's publication guards refuse a stored listing, or None."""
         resource = domain_listing_resource(self._contributions, listing.get("listing_resource"))
         return None if resource is None else publication_refusal(self._contributions, resource)
 
     async def publish(self, db: Any, listing: Mapping[str, Any]) -> dict[str, Any]:
-        return await self.runtime(db).publish(await self._candidate(db, listing))
+        return await self.runtime(db).publish(
+            await publication_candidate(self._contributions, db, listing)
+        )
 
     async def close(self, db: Any, listing_id: Any) -> dict[str, Any]:
         """Close the listing as its seller."""
@@ -218,12 +201,40 @@ class QuotaPublication:
     async def converge(self, db: Any) -> dict[str, tuple[str, ...]]:
         """Repair every registry that missed a publish, close, or reopen.
 
-        An open listing the publication hook refuses as stored now is never
-        republished and is reported unrepaired; the report reads the store after
-        the repairs, so it holds what is still diverged, however it was repaired.
+        An open listing is republished as its publication candidate; one the
+        publication hook refuses now is never republished and is reported
+        unrepaired. The report reads the store after the repairs, so it holds
+        what is still diverged, however it was repaired.
         """
-        hooks = QuotaPublicationHooks(self._contributions, db)
-        return await self._runtime(_PublishableListings(db, hooks), hooks).converge()
+        return await self.runtime(db).converge()
+
+    async def retire_unheld(self, db: Any) -> RegistrySweep:
+        """Close at each registry the open listings of this offering mode the storefront does not hold open.
+
+        Nothing is kept of a pass but its log lines: a registry that could not
+        be read, or a close a registry refused, is found again by a later pass.
+        """
+        sweep = await self.runtime(db).retire_unheld()
+        for url in sweep.unreachable:
+            logger.warning(
+                "[REGISTRY] could not read open listings at %s; sweeping it next pass", url
+            )
+        for close in sweep.closes:
+            if close.status == "failed":
+                logger.warning(
+                    "[REGISTRY] could not close listing %s, which the storefront does "
+                    "not hold, at %s: %s",
+                    close.listing_id,
+                    close.registry_url,
+                    close.error,
+                )
+            else:
+                logger.info(
+                    "[REGISTRY] closed listing %s at %s: the storefront does not hold it",
+                    close.listing_id,
+                    close.registry_url,
+                )
+        return sweep
 
     async def _sources(
         self, db: Any, rows: list[dict[str, Any]]
@@ -337,7 +348,7 @@ class QuotaPublication:
         for listing_id in ids:
             row = await db.load_listing(listing_id=listing_id)
             if row is not None and self.refusal(row) is None:
-                candidates.append(await self._candidate(db, row))
+                candidates.append(await publication_candidate(self._contributions, db, row))
         result = await self.runtime(db).reconcile(ReconciliationPlan(reopen=tuple(candidates)))
         return list(result["reopened"])
 
@@ -354,6 +365,8 @@ class QuotaPublication:
             if delta is None or delta.kind == "released" or delta.kind in _MIXED:
                 await self.reopen_after_capacity_change(db, dict(context.availability))
             await self.converge(db)
+            # After convergence, so a listing it repairs is not also swept.
+            await self.retire_unheld(db)
 
         return reconcile
 

@@ -80,11 +80,13 @@ from market_storefront.utils.config import (
     get_evm_wallet_address,
     get_evm_wallet_private_key,
     get_service_peer_configs,
+    negotiation_multiplier_floor,
     resolve_marketplace_signer,
     settings,
     settlement_config_mapping,
     storefront_domain_registry,
 )
+from market_storefront.utils.migrations import require_compatible_storefront_database
 from market_storefront.utils.sqlite_client import get_sqlite_client
 
 from market_storefront.services.capacity_client import site_pool_projection
@@ -358,11 +360,17 @@ def _build_vm_services(
     # without it. An Alkahest section that is coherent but cannot settle makes
     # Alkahest unready instead. A retired address-book key is refused before
     # the release model resolves the section, which would refuse it only as
-    # an unknown key.
+    # an unknown key. A multiplier floor above the advertised rates is refused
+    # here too, rather than at the first shape-priced negotiation.
     admissibility_default = parse_configured_admissibility_default()
+    negotiation_multiplier_floor()
     refuse_retired_address_book_keys()
     require_coherent_release_model()
     seams.startup_refusal()
+    # Before anything opens the database: `market-storefront-migrate` builds
+    # it, and nothing here issues DDL, so a database not exactly at the chain
+    # is refused naming the command, and none is created.
+    require_compatible_storefront_database(settings.db_path)
     sqlite_client = get_sqlite_client(registry=registry)
     marketplace_signer = resolve_marketplace_signer()
     set_stage_event_db_path(sqlite_client.db_path)

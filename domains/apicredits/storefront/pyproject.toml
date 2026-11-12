@@ -8,7 +8,7 @@ dependencies = [
     "arkhai-kit-arkhai-mediation>=0.1.0",
     "arkhai-core>=0.4.0",
     "arkhai-api-client>=0.1.0",
-    "arkhai-api-selling>=0.6.0",
+    "arkhai-api-selling>=0.7.0",
     "arkhai-api-selling-alkahest>=0.2.0",
     "arkhai-api-selling-arkhai-payments>=0.1.0",
     "arkhai-apicredits-domain>=0.11.0",
@@ -17,7 +17,7 @@ dependencies = [
     "arkhai-kit-arkhai-payments>=0.6.0",
     "arkhai-kit-config>=0.5.0",
     "arkhai-kit-identity==0.4.0",
-    "arkhai-kit-settlement-runtime>=0.7.0",
+    "arkhai-kit-settlement-runtime>=0.8.0",
     "arkhai-kit-storefront==0.10.0",
     "arkhai-kit-negotiation-runtime==0.7.0",
     "alkahest-py==1.1.2",
@@ -35,6 +35,7 @@ dependencies = [
 
 [project.scripts]
 apicredits-storefront = "apicredits_storefront.cli:app"
+apicredits-storefront-migrate = "apicredits_storefront.migrate:main"
 
 [project.entry-points."market.storefront_domains"]
 apicredits = "apicredits_storefront.domain_runtime:APICREDITS_STOREFRONT_DOMAIN"
@@ -68,6 +69,13 @@ dev = [
     # The payment configuration, fake payments client, and receipts the payment
     # tests build. Test-only.
     "arkhai-kit-arkhai-payments>=0.3.0",
+    # The engine, check states, and schema snapshot the migration tests drive
+    # the storefront's chain through. Test-only.
+    "arkhai-kit-schema-migrations>=0.1.0",
+    # Validate published listings against the API-credit registry's listing
+    # schema, read from its filter specification.
+    "jsonschema>=4.0",
+    "pyyaml>=6.0",
 ]
 
 [tool.uv]

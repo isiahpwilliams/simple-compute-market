@@ -129,6 +129,13 @@ reads every domain-specific choice from the bundle:
 - **Lifecycle.** A mechanism's timer loops (`ContributedLoop`) and startup
   steps are contributed by its stage and registered by the storefront, so
   `selling`'s lifecycle names no mechanism.
+- **Schema.** `selling` owns the storefront's migration chain
+  (`arkhai_api_selling.migrations`): core storefront's baseline, the
+  settlement runtime's, and the family's own tables under the domain's table
+  prefix. A storefront root builds the chain from its prefix alone, named for
+  itself and its migration command, which applies it before the application
+  starts; startup only checks the database against it, and no client or store
+  issues DDL when opened.
 
 ## Service roots and the capacity profile
 
@@ -150,9 +157,11 @@ deliverable and advertisable modes, and its backing. The authority reads every
 such value from the profile, so two domains' deployments differ only in what
 their roots pass. The profile carries no resource type: the ledger does not
 filter reservations by type, and a resource's type is what its registration
-states. At startup the root runs the migration chain, then `initialize` seeds
-the profile's pool when absent and refuses any stored pool without valid
-declarations.
+states. The root's migration command applies the authority's chain, named for
+that root, before the application starts. At startup the root only checks the
+database against the chain, refusing one the command has not migrated, then
+`initialize` seeds the profile's pool when absent and refuses any stored pool
+without valid declarations.
 
 ## Mechanism stages
 
@@ -222,10 +231,13 @@ first two for every gate, and each gate's own tests pin the ordering.
 - A domain's issuance projection values — which identity enters the digested
   service and whether an endpoint is delivered — are that domain's design's.
   Only API credits composes the kit.
-- The authority's migration chain carries API credits' history: its first
-  identifier is `20260731_001_apicredits_schema_baseline`, and early steps
-  normalize API-credits data such as wallet owners. A new domain's deployment
-  starts at the same chain on its own database.
+- The authority's baseline migration is identified
+  `v0_3_0_baseline_apicredits_service` in every domain's database: the chain
+  is one, and each domain's deployment runs it on its own database. The chain
+  names no floor, so a database it did not build is refused.
+- The storefront chain's family baseline is likewise identified
+  `v0_3_0_baseline_apicredits_storefront` in every domain's database, whatever
+  the table prefix, and the chain names no floor.
 - `selling` depends on the core storefront, and `buying`, `buying-alkahest`,
   and `buying-arkhai-payments` on the core buyer, both role compositions. Each
   edge is an exception row in

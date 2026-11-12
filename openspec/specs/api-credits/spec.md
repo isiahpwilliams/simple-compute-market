@@ -261,37 +261,31 @@ issuance and settlement composition, the negotiation adapters, the quota listing
 binding and publication, the buyer flows, the mechanism stages, and the bearer
 gate — and MUST retain no domain-local implementation of any of them. Its
 runtime behaviour — wire shapes, authentication roles and operation names,
-refusal status codes and error bodies, digests, database schema and migration
-history, environment prefixes and settings keys, and its service's distribution
-name, image, entry point, and version response — MUST be unchanged by that
-composition, each held to a recorded baseline. The retirement of the
+refusal status codes and error bodies, digests, database schema, environment
+prefixes and settings keys, and its service's distribution name, image, entry
+point, and version response — MUST each be held to a recorded baseline. Its
+service and storefront databases MUST be built by the family libraries'
+migration chains through `apicredits-service-migrate` and
+`apicredits-storefront-migrate`, and a database those chains did not build MUST
+be refused. The retirement of the
 `arkhai-apicredits-middleware` Python distribution is a package and import
 break, not a behaviour change, and every repository consumer of it MUST import
 the gate library instead.
-
-#### Scenario: A grant issued before the kit is read after it
-
-- **WHEN** the family authority, composed by the API-credits service root, reads
-  a grant and its request digest written by the pre-kit service
-- **THEN** it recomputes the same fulfillment identity and digest and accepts an
-  exact retry without a second grant
 
 #### Scenario: A baseline is diffed
 
 - **WHEN** the service or storefront changes and the recorded baselines — route surface and OpenAPI
   document, authentication roles and operation names, refusal status codes and
-  error bodies, environment variables and settings keys, schema and migration
-  history, version response — are diffed against the service and storefront
+  error bodies, environment variables and settings keys, schema, version
+  response — are diffed against the service and storefront
 - **THEN** every diff is empty
 
-#### Scenario: Upgrade and rollback against a retained database
+#### Scenario: A database the chain did not build
 
-- **WHEN** the kit-composed service image starts over a copy of a pre-kit
-  database, and the pre-kit image then starts over a database the kit-composed
-  image has written
-- **THEN** both start, serve the same routes, and read every row, so upgrade
-  and rollback are each a change of image and configuration against the
-  retained database
+- **WHEN** a migrate command or an application startup meets a non-empty
+  database its chain did not build
+- **THEN** it is refused as unsupported, naming the command, and nothing is
+  applied
 
 #### Scenario: A domain-local copy is sought
 

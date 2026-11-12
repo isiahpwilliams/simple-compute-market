@@ -17,9 +17,9 @@ ENV UV_HTTP_RETRIES=10
 
 WORKDIR /app
 
-COPY core/registry/src ./src
-COPY core/registry/alembic ./alembic
-COPY core/registry/filter-spec.yaml ./
+# The two filter specifications a deployment names by path: the compute one,
+# which the wheel also carries as the registry's default, and API credits'.
+COPY core/registry/src/core_registry/filter-spec.yaml ./
 COPY domains/apicredits/registry/filter-spec.yaml ./filter-spec-apicredits.yaml
 COPY domains/inference/registry/filter-spec.yaml ./filter-spec-inference.yaml
 # The lock is used as committed: the project's pyproject and lock sit at the
@@ -31,8 +31,11 @@ COPY .dist/ /repo/.dist/
 COPY scripts/uv_project.py /repo/scripts/uv_project.py
 COPY core/registry/pyproject.toml core/registry/uv.lock /repo/core/registry/
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+# The project's own wheel installs the registry, its Alembic scripts, and its
+# console scripts, the migration command among them.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    python3 /repo/scripts/uv_project.py image --project /repo/core/registry -- --no-dev --no-install-project
+    python3 /repo/scripts/uv_project.py image --project /repo/core/registry -- --no-dev --no-install-project && \
+    python3 /repo/scripts/uv_project.py install-wheel --project /repo/core/registry
 
 # Stage 2: Lean runtime image
 FROM --platform=linux/amd64 python:${PYTHON_VERSION}-slim AS runtime
@@ -43,8 +46,6 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash appuser && \
     chown appuser:appuser /app /app/data
 
 COPY --from=builder --chown=appuser:appuser /app/.venv ./.venv
-COPY --from=builder --chown=appuser:appuser /app/src ./src
-COPY --from=builder --chown=appuser:appuser /app/alembic ./alembic
 COPY --from=builder --chown=appuser:appuser /app/filter-spec.yaml ./
 COPY --from=builder --chown=appuser:appuser /app/filter-spec-apicredits.yaml ./
 COPY --from=builder --chown=appuser:appuser /app/filter-spec-inference.yaml ./
@@ -59,4 +60,7 @@ EXPOSE ${PORT}
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
 
-CMD ["uvicorn", "core_registry.main:app", "--app-dir", "/app/src", "--host", "0.0.0.0", "--port", "8080"]
+# The migration command runs before the application, which refuses a database
+# it has not migrated. The Helm chart runs the command as an init container and
+# the application alone; Compose states this command.
+CMD ["sh", "-c", "registry-migrate && exec uvicorn core_registry.main:app --host 0.0.0.0 --port 8080"]

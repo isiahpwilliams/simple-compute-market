@@ -15,7 +15,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOUBLE_FIXTURES = REPO_ROOT / "tools/payments-lane-double/fixtures"
-LANE_CA = REPO_ROOT / "tools/payments-lane-double/tls/lane-ca.pem"
+LANE_CA = REPO_ROOT / "tools/lane-double-controls/tls/lane-ca.pem"
 REGISTRY_PROFILES = REPO_ROOT / "dev-env/registry"
 
 # Each stack: its compose project and its files, in the order e2e-tests/Makefile
@@ -44,6 +44,7 @@ STACKS = {
         (
             "compose.inference.yml",
             "compose.inference-local.yml",
+            "compose.payments-double.yml",
             "compose.inference-lane.yml",
         ),
     ),
@@ -163,7 +164,9 @@ def test_the_vm_lane_composes_no_api_credit_service() -> None:
 
 def test_the_api_credit_lane_composes_its_own_compute_registry() -> None:
     services = _render("apicredits")["services"]
-    assert set(services) == API_CREDIT_SERVICES | {"anvil", "compute-registry", "payments-double"}
+    assert set(services) == API_CREDIT_SERVICES | {
+        "anvil", "compute-registry", "payments-double", "mediation-double",
+    }
     registry = services["compute-registry"]
     environment = registry["environment"]
     assert environment["CONFIG_DIRECTORY"] == "/etc/arkhai/registry"
@@ -188,7 +191,9 @@ def test_the_api_credit_lane_composes_its_own_compute_registry() -> None:
 
 def test_the_inference_lane_composes_its_own_compute_and_api_credit_registries() -> None:
     services = _render("inference")["services"]
-    assert set(services) == INFERENCE_SERVICES | {"anvil", "compute-registry", "api-credits-registry"}
+    assert set(services) == INFERENCE_SERVICES | {
+        "anvil", "compute-registry", "api-credits-registry", "payments-double", "mediation-double",
+    }
     assert not set(services) & (VM_SERVICES | API_CREDIT_SERVICES - {"api-credits-registry"})
     for name, profile, credential in (
         ("compute-registry", "compute-registry", "registry-a.eip191"),
@@ -196,7 +201,7 @@ def test_the_inference_lane_composes_its_own_compute_and_api_credit_registries()
     ):
         registry = services[name]
         environment = registry["environment"]
-        assert environment["ACTIVE_PROFILES"] == profile
+        assert environment["ACTIVE_PROFILES"] == f"{profile},payments-lane"
         # The descriptor names the registry's address on the lane's network.
         assert environment.get("REGISTRY_DESCRIPTOR_BASE_URL", f"http://{name}:8080") == f"http://{name}:8080"
         assert not registry.get("ports")
@@ -205,7 +210,13 @@ def test_the_inference_lane_composes_its_own_compute_and_api_credit_registries()
         assert mounts["/run/secrets/arkhai/registry-identity/credential"] == str(
             REPO_ROOT / "dev-env/identities" / credential
         )
-    assert services["inference-registry"]["environment"]["ACTIVE_PROFILES"] == "inference-registry"
+    assert (
+        services["inference-registry"]["environment"]["ACTIVE_PROFILES"]
+        == "inference-registry,payments-lane"
+    )
+    double = services["mediation-double"]
+    assert not double.get("ports")
+    assert double["depends_on"]["payments-double"]["condition"] == "service_healthy"
     # Without its wallet key the storefront publishes and negotiates but cannot
     # settle; the key is in its secret overlay, not its environment.
     storefront = services["inference-storefront"]
@@ -316,11 +327,26 @@ PAYMENT_LANES = {
 
 
 @pytest.mark.parametrize("stack", sorted(PAYMENT_LANES))
+def test_each_lane_runs_the_mediation_double_after_the_payments_double(stack: str) -> None:
+    """The lane runs the mediation double with no host port, started once the
+    payments double it extends at answers, and healthy only on a probe that
+    trusts the lane CA alone."""
+    services = _render(stack)["services"]
+    double = services["mediation-double"]
+    assert double["image"] == "arkhai:mediation-lane-double"
+    assert not double.get("ports")
+    assert double["depends_on"]["payments-double"]["condition"] == "service_healthy"
+    probe = double["healthcheck"]["test"]
+    assert probe[probe.index("--cacert") + 1] == "/opt/mediation-lane-double/tls/lane-ca.pem"
+    assert probe[-1] == "https://localhost:8443/health"
+
+
+@pytest.mark.parametrize("stack", sorted(PAYMENT_LANES))
 def test_each_lane_settles_against_its_payments_double(stack: str) -> None:
     """The lane runs the double with no host port; its payment storefront mounts
     its lane configuration and the lane CA at the path that configuration trusts;
-    and its registries layer the lane profile recommending the pinned dispute
-    authority."""
+    and its registries layer the lane profile recommending the mediation
+    double."""
     services = _render(stack)["services"]
     storefront_name, configuration, settlement, registries = PAYMENT_LANES[stack]
     double = services["payments-double"]
@@ -346,6 +372,7 @@ def test_each_lane_settles_against_its_payments_double(stack: str) -> None:
 def test_the_full_stack_runs_no_payments_double() -> None:
     services = _render("full")["services"]
     assert "payments-double" not in services
+    assert "mediation-double" not in services
     for name, configuration in (
         ("bob-storefront", "domains/vms/storefront/storefront.bob.toml"),
         ("credits-storefront", "domains/apicredits/storefront/storefront.credits.toml"),
@@ -423,15 +450,15 @@ def test_a_lane_target_names_only_its_files_and_runner_profiles(target: str) -> 
 
 
 def test_the_inference_lane_target_names_only_its_files() -> None:
-    """The inference lane settles through Alkahest alone: it brings its stack up
-    from its Compose files with no environment file, layers no payments double,
-    and runs the runner under the default profile."""
+    """The inference lane brings its stack up from its Compose files with no
+    environment file, layers the lane doubles its registries recommend, and runs
+    the runner under the shared lane profile."""
     produced = _dry_run("test-e2e-inference")
     assert produced.returncode == 0, produced.stderr
     assert "--env-file" not in produced.stdout
-    assert "compose.payments-double.yml" not in produced.stdout
+    assert "-f compose.payments-double.yml -f compose.inference-lane.yml" in produced.stdout
     assert ": test-buyer-machine " in produced.stdout
-    assert "RUNNER_PROFILES" not in produced.stdout
+    assert "RUNNER_PROFILES=docker,payments-lane" in produced.stdout
     for operation in ("down", "logs"):
         stopped = _dry_run(f"e2e-inference-{operation}")
         assert stopped.returncode == 0, stopped.stderr
@@ -441,13 +468,15 @@ def test_the_inference_lane_target_names_only_its_files() -> None:
 
 def test_the_runner_reads_its_profiles_and_the_lane_ca_where_they_name_it() -> None:
     """test-buyer-machine selects the profiles it is given, and mounts the lane
-    CA at the path the shared payments profile trusts."""
-    payments = yaml.safe_load(
+    CA at the path the shared profile's payments and mediation sections both
+    trust."""
+    profile = yaml.safe_load(
         (REPO_ROOT / "e2e-tests/config/config-payments-lane.yml").read_text(encoding="utf-8")
-    )["payments"]
+    )
     produced = _dry_run("test-buyer-machine", RUNNER_PROFILES="docker,payments-lane,vms-lane")
     assert produced.returncode == 0, produced.stderr
     assert "-e ACTIVE_PROFILES=docker,payments-lane,vms-lane " in produced.stdout
-    assert f"{LANE_CA}:{payments['ca_bundle_path']}:ro" in produced.stdout
+    assert profile["mediation"]["ca_bundle_path"] == profile["payments"]["ca_bundle_path"]
+    assert f"{LANE_CA}:{profile['payments']['ca_bundle_path']}:ro" in produced.stdout
     assert "--env-file" not in produced.stdout
     assert "-e ACTIVE_PROFILES=docker " in _dry_run("test-buyer-machine").stdout

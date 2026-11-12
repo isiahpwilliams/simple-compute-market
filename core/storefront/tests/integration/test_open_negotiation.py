@@ -7,6 +7,7 @@ import sqlite3
 from datetime import UTC, datetime
 
 import pytest
+from core_database import core_database
 from market_core import DomainIdentity
 from market_identity import Identity, IdentityScheme
 
@@ -34,7 +35,7 @@ DOMAIN = StorefrontDomainBinding(
 
 
 async def _storefront(tmp_path) -> SQLiteClient:
-    client = SQLiteClient(str(tmp_path / "storefront.db"))
+    client = SQLiteClient(core_database(tmp_path / "storefront.db"))
     binding = StorefrontListingBinding.from_source_envelope(
         listing_id="listing-a",
         site_id="site-a",

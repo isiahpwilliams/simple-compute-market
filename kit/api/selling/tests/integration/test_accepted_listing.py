@@ -8,19 +8,21 @@ from core_storefront.sqlite_client import SQLiteClient
 from market_resource_pools import ResolvedPool
 from market_resource_pools_contracts.backing import BACKED
 
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.quota_listing import (
     QuotaPool,
     accepted_listing_resource,
     prepare_listing_binding,
     record_accepted_listing,
 )
-from tests.bundles import BUYER, CLAIMANT, DOMAIN, EXAMPLE
+from tests.bundles import BUYER, CLAIMANT, DOMAIN, EXAMPLE, example_chain
 
 
 ACCEPTED = {"product": "alpha", "quota": "quota-a", "url": "https://alpha.example"}
 
 
 async def _storefront(tmp_path) -> SQLiteClient:
+    migrate_storefront_database(example_chain(), tmp_path / "storefront.db")
     client = SQLiteClient(str(tmp_path / "storefront.db"))
     binding = prepare_listing_binding(
         EXAMPLE,

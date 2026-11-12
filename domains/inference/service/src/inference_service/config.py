@@ -1,14 +1,9 @@
-"""Dynaconf configuration and the inference deployment of the family authority.
+"""The service's settings and the inference deployment of the family authority.
 
-Precedence: INFERENCE_* env vars, then CONFIG_DIRECTORY's config-<profile>.yml
-(per ACTIVE_PROFILES), then config.yml, then settings.toml.
+The settings resolve as ``inference_service.settings_source`` describes.
 """
 
 from __future__ import annotations
-
-import os
-from pathlib import Path
-from typing import List
 
 from arkhai_api_authority import AuthorityConfig, CapacityProfile
 from arkhai_inference.label import INFERENCE_LABEL
@@ -17,29 +12,9 @@ from dynaconf import Dynaconf
 from market_resource_pools import DEFAULT_POOL_ID
 from market_resource_pools_contracts import BACKED
 
-_SRC_DIR = Path(__file__).parent
-_CONFIG_DIR = Path(os.environ.get("CONFIG_DIRECTORY", str(_SRC_DIR / "config")))
+from inference_service.settings_source import load_settings_source
 
-_raw_profiles: str = os.environ.get("ACTIVE_PROFILES", "")
-_active_profiles: List[str] = [p.strip() for p in _raw_profiles.split(",") if p.strip()]
-
-_includes: List[str] = []
-for _candidate in [_CONFIG_DIR / "config.yml"] + [
-    _CONFIG_DIR / f"config-{p}.yml" for p in _active_profiles
-]:
-    if _candidate.exists():
-        _includes.append(str(_candidate))
-
-_dynaconf = Dynaconf(
-    settings_file=[str(_SRC_DIR / "settings.toml")],
-    includes=_includes,
-    envvar_prefix="INFERENCE",
-    load_dotenv=True,
-    dotenv_files=[".env", ".env.local"],
-    envvar_separator="__",
-    environments=False,   # profiles are used instead of dynaconf environments
-    merge_enabled=True,
-)
+_dynaconf = load_settings_source()
 
 
 class Settings:

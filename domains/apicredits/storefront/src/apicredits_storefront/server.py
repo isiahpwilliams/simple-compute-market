@@ -21,7 +21,9 @@ from arkhai_api_selling.lifecycle import (
     stop_background_tasks,
 )
 from arkhai_api_selling.listings import ListingService
+from arkhai_api_selling.migrations import require_compatible_storefront_database
 from arkhai_api_selling.negotiation import build_negotiation_runtime
+from arkhai_api_selling.persistence import refuse_unbound_listings
 from arkhai_api_selling.quota_listing import build_listing_source_check, registration
 from arkhai_api_selling.system import SystemService
 from arkhai_api_selling.settlement_composition import (
@@ -63,6 +65,7 @@ from apicredits_storefront.container import (
     mechanism_startup_steps,
 )
 from apicredits_storefront.domain_runtime import get_market_domain_contract
+from apicredits_storefront.migrate import CHAIN
 from apicredits_storefront.services.fulfillment_service import (
     build_api_credit_failure_policy,
 )
@@ -333,10 +336,13 @@ def _build_api_credit_services(
             constructor=seams.alkahest_client_constructor,
             json_rpc=seams.alkahest_json_rpc,
         )
-    sqlite_client = get_sqlite_client(
-        local_listing_principal=marketplace_signer.identity,
-        expected_legacy_sellers=(BASE_URL_OVERRIDE,),
-    )
+    # Before anything opens the database: `apicredits-storefront-migrate`
+    # builds it, and nothing here issues DDL, so a database not exactly at the
+    # chain is refused naming the command, and none is created. The
+    # unbound-listing refusal reads data, so it runs once the check passes.
+    require_compatible_storefront_database(CHAIN, settings.db_path)
+    refuse_unbound_listings(settings.db_path, _container.SELLING_CONTRIBUTIONS)
+    sqlite_client = get_sqlite_client()
     set_stage_event_db_path(sqlite_client.db_path)
     failure_policy = build_api_credit_failure_policy()
     settlement_composition = build_api_credit_settlement_composition(

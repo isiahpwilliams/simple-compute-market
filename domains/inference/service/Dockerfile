@@ -18,8 +18,11 @@ COPY .dist/ /repo/.dist/
 COPY scripts/uv_project.py /repo/scripts/uv_project.py
 COPY domains/inference/service/pyproject.toml domains/inference/service/uv.lock /repo/domains/inference/service/
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+# The project's own wheel installs the service and its console scripts, the
+# migration command among them.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    python3 /repo/scripts/uv_project.py image --project /repo/domains/inference/service -- --no-dev --no-install-project
+    python3 /repo/scripts/uv_project.py image --project /repo/domains/inference/service -- --no-dev --no-install-project && \
+    python3 /repo/scripts/uv_project.py install-wheel --project /repo/domains/inference/service
 
 # Stage 2: lean runtime.
 FROM --platform=linux/amd64 python:${PYTHON_VERSION}-slim AS runtime
@@ -29,9 +32,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash appuser && \
     mkdir -p /app/data && chown -R appuser:appuser /app
 
 COPY --from=builder --chown=appuser:appuser /app/.venv ./.venv
-COPY --chown=appuser:appuser domains/inference/service/src ./src
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src"
 # Persist the SQLite DB on the named volume mounted at /app/data.
 ENV INFERENCE_DATABASE_URL="sqlite:////app/data/inference.db"
 VOLUME ["/app/data"]
@@ -46,4 +47,6 @@ EXPOSE ${PORT}
 HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=10s \
   CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ['INFERENCE_PORT'] + '/health')" || exit 1
 
-CMD ["sh", "-c", "exec uvicorn inference_service.main:app --app-dir /app/src --host 0.0.0.0 --port \"$INFERENCE_PORT\""]
+# The migration command runs before the application, which refuses a database
+# it has not migrated.
+CMD ["sh", "-c", "inference-service-migrate && exec uvicorn inference_service.main:app --host 0.0.0.0 --port \"$INFERENCE_PORT\""]

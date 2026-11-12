@@ -80,7 +80,7 @@ def test_the_accepted_artifacts_refuse_a_listing_authorizing_no_condition():
 def test_an_acceptance_the_kit_refuses_is_unfulfillable_before_anything_is_recorded():
     acceptance = SimpleNamespace(
         buyer_principal=BUYER, seller_principal=SELLER.identity, pinned_proposal=_proposal(),
-        agreed_amount=300, uses_scalar_amount=True,
+        negotiated_scalar=300, uses_scalar_amount=True,
         listing_record={"accepted_escrows": ACCEPTED_ESCROWS, "demands": []},
     )
     escrow = AlkahestEscrowAcceptance(lambda: PATHS)

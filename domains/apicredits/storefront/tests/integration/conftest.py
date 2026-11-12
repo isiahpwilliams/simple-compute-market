@@ -6,6 +6,8 @@ import market_policy.negotiation_thread as thread_module
 import pytest
 from apicredits_storefront import container, server
 from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 from market_policy.identity import Identity
 from market_policy.negotiation_thread import get_thread_store
 
@@ -33,6 +35,7 @@ def key_records(monkeypatch):
 
 @pytest.fixture
 async def db(tmp_path):
+    migrate_storefront_database(CHAIN, str(tmp_path / "credits-storefront.db"))
     client = storefront_sqlite_client(db_path=str(tmp_path / "credits-storefront.db"))
     thread_module._thread_store = None
     get_thread_store(

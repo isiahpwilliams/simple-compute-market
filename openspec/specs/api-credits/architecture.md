@@ -140,13 +140,12 @@ Each API-credits composition root composes the api family's libraries:
 - The domain library, `arkhai_apicredits`, keeps the listing schema, the kind
   bindings, and the label.
 
-The service tracks its schema evolution in a `schema_migrations` table. The
-authority library's migration chain runs in-process at application startup,
-before the service is ready to serve requests, followed by the library's
-initialization of the profile's pool. The service has no separate deployment
-step (no Kubernetes init container, no standalone migration CLI) to run
-migrations ahead of the application process — in-process startup migration is
-the current, non-provisional mechanism for the current deployment topology.
+The service tracks its schema evolution in a `schema_migrations` table. Its
+packaged command, `apicredits-service-migrate`, applies the authority
+library's migration chain before the application starts; the application only
+checks the database against the chain, refusing one the command has not
+migrated, and then runs the library's initialization of the profile's pool.
+See `docs/development/DEPLOYMENT_AND_CONFIG.md`, "Migrations at startup".
 
 Every API-credit package resolves its internal dependencies from built wheels,
 not repository-relative editable paths or `pythonpath` fallbacks — see

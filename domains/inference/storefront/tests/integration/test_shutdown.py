@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from arkhai_api_selling.migrations import migrate_storefront_database
+
 from inference_storefront import container, server
+from inference_storefront.migrate import CHAIN
 from tests.integration.conftest import app
 
 
@@ -28,6 +31,7 @@ async def test_shutdown_returns_once_every_background_loop_has_ended(storefront,
         tasks.update(loops.start_loops())
 
     monkeypatch.setattr(server, "_startup_tasks", start_one_loop)
+    migrate_storefront_database(CHAIN, storefront)
     served = app()
     async with served.router.lifespan_context(served):
         await asyncio.wait_for(started.wait(), 5)

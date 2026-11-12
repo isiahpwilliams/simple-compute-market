@@ -27,6 +27,8 @@ from market_identity import (
 )
 
 from arkhai_api_selling.auth import StorefrontAuth
+from arkhai_api_selling.migrations import migrate_storefront_database
+from tests.bundles import example_chain
 
 # Deterministic development keys for these tests only; never used on any network.
 ADMIN = Ed25519Signer(bytes.fromhex("44" * 32))
@@ -68,6 +70,7 @@ def storefront(tmp_path):
     dispatch, so an exact retry replays it; without, a retry finds a
     reservation and no outcome.
     """
+    migrate_storefront_database(example_chain(), tmp_path / "auth.db")
     db = SQLiteClient(db_path=str(tmp_path / "auth.db"))
     state = {"store": db, "signer": STOREFRONT, "admins": (ADMIN.identity, ROTATED_ADMIN.identity)}
     auth = StorefrontAuth(
@@ -216,6 +219,7 @@ class _Continue(BaseModel):
 @pytest.fixture
 def mutations(tmp_path):
     """A seller mutation and a buyer route over a clock the test advances."""
+    migrate_storefront_database(example_chain(), tmp_path / "mutations.db")
     db = SQLiteClient(db_path=str(tmp_path / "mutations.db"))
     clock = {"now": 1_800_000_000}
     auth = StorefrontAuth(

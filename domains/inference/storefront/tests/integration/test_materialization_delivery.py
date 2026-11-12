@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_inference.listings import InferenceRateCard
 from arkhai_inference.schema import InferenceMaterialization
 
 from inference_storefront.container import storefront_sqlite_client
+from inference_storefront.migrate import CHAIN
 from inference_storefront.services.fulfillment_service import fulfill_inference_obligation
 from tests.cards import bound_card
 from tests.integration.issuance_authority import ESCROW_UID, ScriptedAuthority, evidence
@@ -16,6 +18,7 @@ async def test_the_public_result_carries_the_card_in_force_at_acceptance(tmp_pat
     republished = bound_card()
     republished["rate_card"] = {**republished["rate_card"], "request_credits": 9}
     authority = ScriptedAuthority()
+    migrate_storefront_database(CHAIN, tmp_path / "storefront.db")
 
     # The seller has since republished at another rate; the evidence carries
     # the listing recorded at acceptance.

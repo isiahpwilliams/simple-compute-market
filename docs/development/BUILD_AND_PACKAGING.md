@@ -37,7 +37,8 @@ Internal distributions are built as wheels into the repository wheelhouse, `.dis
 `make dist`, and every project consumes them from there. A project never resolves a
 sibling through a source path, and never declares the wheelhouse itself: the tools that
 sync and lock pass it, relative to the project, so every lock records the same registry
-path.
+path. `make dist` builds the lanes' superset of the release set `make dist-release`
+builds, adding the wheels only tests depend on ([`RELEASING.md`](RELEASING.md)).
 
 A package is *internal* to a project when the project's `uv.lock` resolves it from the
 wheelhouse. A lock that resolves anything from another local directory is an error.
@@ -194,16 +195,6 @@ install the same way at its mirrored path: `tools/payments-lane-double`'s image 
 the project editable at `/repo/tools/payments-lane-double` from its source, skipping
 `install-wheel`, and its runtime stage copies the environment and `src/` to that same
 path.
-
-`build-apicredits-service-prekit` builds `arkhai:apicredits-service-prekit`, the
-previous API-credits service release that the end-to-end upgrade/rollback scenario runs
-beside the current image. It checks out the pinned `APICREDITS_SERVICE_PREKIT_COMMIT` as
-a detached worktree under `.worktrees/`, builds that commit's own wheelhouse and service
-image there, and removes the worktree whether or not the build succeeds; `.gitignore`
-and `.dockerignore` exclude `.worktrees/`, so it never enters a commit or a build
-context. The scenario starts both images through the engine socket that
-`BUYER_MACHINE_DOCKER_SOCKET` mounts into the test container (see
-[`e2e-tests/README.md`](../../e2e-tests/README.md)).
 
 ## Checks
 

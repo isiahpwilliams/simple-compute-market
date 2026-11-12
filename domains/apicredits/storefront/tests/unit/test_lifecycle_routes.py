@@ -41,6 +41,8 @@ from arkhai_api_selling.lifecycle import (
     capacity_site_loop_name,
 )
 from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 from apicredits_storefront.utils import config as storefront_config
 from tests._settings_overrides import settings_overrides
 
@@ -123,6 +125,7 @@ async def start_storefront(tmp_path, monkeypatch):
     Returns a factory taking the servicing interval and the capacity runtime;
     every other interval is far longer than any test waits.
     """
+    migrate_storefront_database(CHAIN, str(tmp_path / "lifecycle.db"))
     db = storefront_sqlite_client(db_path=str(tmp_path / "lifecycle.db"))
     obligations = _Obligations()
     monkeypatch.setattr(container, "resolved_sqlite_client", db)

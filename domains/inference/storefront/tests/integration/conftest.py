@@ -18,8 +18,10 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.publication import RegistryPublication
 from arkhai_api_selling.publish_route import ListingClient
+from core_storefront.multi_registry_client import RegistryListings
 from market_alkahest.dev_chain import anvil_address_book_path
 from market_config.config_loader import ChainConfig
 from market_identity import Ed25519Signer, TrustedIdentitySet
@@ -27,6 +29,7 @@ from storefront_client import StorefrontClient
 
 from inference_storefront import container, server
 from inference_storefront.domain_runtime import get_market_domain_contract
+from inference_storefront.migrate import CHAIN
 from inference_storefront.model_card import PublishFromQuotaRequest
 from inference_storefront.utils import config as storefront_config
 
@@ -132,6 +135,10 @@ class Registries:
         self.published.extend(payloads.values())
         return self._results(payloads)
 
+    async def list_publisher_listings_per_registry(self, _principal: Any) -> list[RegistryListings]:
+        """Each registry holds no listing the storefront does not."""
+        return [RegistryListings(url, ()) for url in self.urls]
+
     async def update_listing_per_registry(
         self, *, listing_id: str, payloads: dict[str, Any]
     ) -> list[dict[str, Any]]:
@@ -199,6 +206,7 @@ def registries(monkeypatch: pytest.MonkeyPatch) -> Registries:
             registry_urls=recorded.urls,
             storefront_url=storefront_config.BASE_URL_OVERRIDE,
             client_factory=lambda: recorded,
+            publisher=container._registry_publisher,
         ),
     )
     return recorded
@@ -226,12 +234,14 @@ class Clients:
 
 @asynccontextmanager
 async def running(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Clients]:
-    """The app through its lifespan, with the seller's typed listing client and a public one."""
+    """The app through its lifespan on the database its migration command built,
+    with the seller's typed listing client and a public one."""
 
     async def no_startup_tasks(*, domain: Any) -> None:
         return None
 
     monkeypatch.setattr(server, "_startup_tasks", no_startup_tasks)
+    migrate_storefront_database(CHAIN, storefront_config.settings.get("db_path"))
     served = app()
     async with served.router.lifespan_context(served):
         # Publishing waits for a reached chain, so the probe steps once.

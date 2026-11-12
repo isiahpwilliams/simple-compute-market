@@ -18,6 +18,8 @@ from apicredits_storefront.settlement_composition import (
     build_api_credit_settlement_composition,
 )
 from apicredits_storefront.container import storefront_sqlite_client
+from arkhai_api_selling.migrations import migrate_storefront_database
+from apicredits_storefront.migrate import CHAIN
 
 # Deterministic development keys; never use them on a public network.
 _SELLER = Ed25519Signer(b"\x22" * 32)
@@ -27,6 +29,7 @@ _BUYER = Ed25519Signer(b"\x23" * 32)
 async def test_a_failing_servicing_step_is_recorded_as_a_claims_event(
     tmp_path, caplog
 ) -> None:
+    migrate_storefront_database(CHAIN, tmp_path / "events.db")
     composition = build_api_credit_settlement_composition(
         domain=get_market_domain_contract(),
         sqlite_client=storefront_sqlite_client(str(tmp_path / "events.db")),

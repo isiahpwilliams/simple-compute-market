@@ -36,10 +36,12 @@ from storefront_client.settlement_routes import SETTLE_STATUS
 import apicredits_storefront.container as container
 import apicredits_storefront.server as server
 from apicredits_storefront.domain_runtime import get_market_domain_contract
+from arkhai_api_selling.migrations import migrate_storefront_database
 from arkhai_api_selling.lifecycle import (
     loop_controller,
 )
 from apicredits_storefront.container import storefront_sqlite_client
+from apicredits_storefront.migrate import CHAIN
 from apicredits_storefront.utils import config as storefront_config
 from tests._settings_overrides import settings_overrides
 
@@ -136,6 +138,7 @@ UNPROBED: dict[tuple[str, str], dict[str, Any]] = {
 class Probe:
 
     def __init__(self, db_path: Path, monkeypatch) -> None:
+        migrate_storefront_database(CHAIN, db_path)
         db = storefront_sqlite_client(db_path=str(db_path))
         monkeypatch.setattr(container, "resolved_sqlite_client", db)
         monkeypatch.setattr(container, "resolved_marketplace_signer", STOREFRONT_SIGNER)

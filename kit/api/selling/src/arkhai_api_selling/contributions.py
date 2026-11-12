@@ -20,6 +20,13 @@ _KIND = re.compile(r"^([a-z][a-z0-9_]*)\.v1$")
 _TABLE_PREFIX = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
+def family_table(table_prefix: str, name: str) -> str:
+    """A family table's name under a domain's prefix."""
+    if not _TABLE_PREFIX.fullmatch(table_prefix):
+        raise ValueError("table_prefix must be a lowercase SQL identifier")
+    return f"{table_prefix}_{name}"
+
+
 @dataclass(frozen=True)
 class IssuanceSubject:
     """What a listing sells, as the authority's issuance command names it.
@@ -131,4 +138,4 @@ class SellingContributions:
         return f"{self.table_prefix.replace('_', '-')}-credential.v1"
 
     def table(self, name: str) -> str:
-        return f"{self.table_prefix}_{name}"
+        return family_table(self.table_prefix, name)

@@ -36,6 +36,7 @@ from arkhai_bare_metal.fixtures.publication_view import (
     DEFAULT_GPU_MODEL,
     build_bare_metal_publication_view,
 )
+from core_storefront.multi_registry_client import RegistryListings
 from core_storefront.publication_runner import NoSettlementOption, PublicationPayload
 from market_alkahest import AlkahestChainProbe, ProbedChain
 from market_alkahest.alkahest import get_recipient_arbiter
@@ -54,9 +55,11 @@ from market_site_client.fixtures.resource_pools import (
     build_resource_pool_projection,
     build_resource_pool_row,
 )
+from registry_client.models import ListingSummary
 
 from arkhai_bare_metal_storefront.domain_runtime import get_market_domain_contract
 from arkhai_bare_metal_storefront.listing_source_check import build_listing_source_check
+from arkhai_bare_metal_storefront.migrations import migrate_storefront_database
 from arkhai_bare_metal_storefront.pool_overrides import compile_publication_clauses
 from arkhai_bare_metal_storefront.publication import BareMetalPublicationCycle
 from arkhai_bare_metal_storefront.publication_composition import (
@@ -214,13 +217,33 @@ class RecordingRegistries:
     """Stands where ``MultiRegistryClient`` wraps the registry, recording sends.
 
     ``failing`` holds ``(operation, url)`` pairs that fail until removed; an
-    update's operation is the status it sets.
+    update's operation is the status it sets. A read of the storefront's open
+    listings returns what a test planted with :meth:`plant`, and a close sent
+    for one removes it; ``unreachable`` makes the read fail.
     """
 
     def __init__(self) -> None:
         self.urls = [REGISTRY_URL]
         self.sent: list[tuple[str, str, str, dict[str, Any]]] = []
         self.failing: set[tuple[str, str]] = set()
+        self.planted: list[ListingSummary] = []
+        self.unreachable = False
+        self.publisher_reads: list[Any] = []
+
+    def plant(self, listing_id: str, *, offering_mode: str) -> None:
+        self.planted.append(
+            ListingSummary(
+                id=listing_id,
+                status="open",
+                listing_resource={"offering_mode": offering_mode},
+            )
+        )
+
+    async def list_publisher_listings_per_registry(self, principal):
+        self.publisher_reads.append(principal)
+        if self.unreachable:
+            return [RegistryListings(REGISTRY_URL, None, "unreachable")]
+        return [RegistryListings(REGISTRY_URL, tuple(self.planted))]
 
     def __call__(self) -> "RecordingRegistries":
         return self
@@ -250,7 +273,10 @@ class RecordingRegistries:
             body = request.to_dict()
             status = str(body["status"])
             self.sent.append((status, url, listing_id, body))
-            results.append(self._result(status, url))
+            result = self._result(status, url)
+            if result["success"] and status == "closed":
+                self.planted = [item for item in self.planted if item.id != listing_id]
+            results.append(result)
         return results
 
     def operations(self) -> list[tuple[str, str]]:
@@ -361,7 +387,9 @@ def actions(report: dict[str, Any], action: str) -> list[dict[str, Any]]:
 
 @pytest.fixture
 def db(tmp_path) -> SQLiteClient:
-    return SQLiteClient(str(tmp_path / "storefront.db"))
+    path = tmp_path / "storefront.db"
+    migrate_storefront_database(path)
+    return SQLiteClient(str(path))
 
 
 # -- pool declarations -----------------------------------------------------
@@ -934,6 +962,7 @@ class FailingWrites(SQLiteClient):
 
 
 async def test_a_new_listing_whose_local_write_fails_reaches_no_registry(tmp_path):
+    migrate_storefront_database(tmp_path / "storefront.db")
     db = FailingWrites(str(tmp_path / "storefront.db"))
     storefront = Storefront(db, {"site-a": Site(pool("pool-1", member("r1", "pool-1")))})
 
@@ -992,6 +1021,56 @@ async def test_a_registry_left_closed_by_a_failed_reopen_is_repaired_by_the_next
     assert storefront.registries.sent == []
 
 
+async def test_a_run_closes_registry_listings_the_storefront_does_not_hold(db):
+    """The registry is read under the storefront's principal. A bare-metal
+    listing it does not hold open closes there, one it holds stays open, and a
+    VM listing another storefront publishes under the same principal is left
+    alone; a preview closes nothing."""
+    storefront = Storefront(db, {"site-a": Site(pool("pool-1", member("r1", "pool-1")))})
+    await storefront.run()
+    held = storefront.listing("site-a", "pool-1", "r1")[0]
+    storefront.registries.plant("superseded-1", offering_mode="bare_metal")
+    storefront.registries.plant(held, offering_mode="bare_metal")
+    storefront.registries.plant("vm-1", offering_mode="vm")
+
+    preview = await storefront.run(dry_run=True)
+
+    assert storefront.registries.sent == []
+    assert actions(preview, "close") == [
+        {
+            "action": "close",
+            "listing_id": "superseded-1",
+            "registry": REGISTRY_URL,
+            "reason": "not_held",
+        }
+    ]
+
+    report = await storefront.run()
+
+    assert storefront.registries.operations() == [("closed", "superseded-1")]
+    assert [item["listing_id"] for item in actions(report, "close")] == ["superseded-1"]
+    assert [item.id for item in storefront.registries.planted] == [held, "vm-1"]
+    assert storefront.registries.publisher_reads[-1] == SELLER
+    assert storefront.listing("site-a", "pool-1", "r1") == (held, "open", None)
+
+
+async def test_an_unreachable_registry_is_swept_by_a_later_run(db):
+    storefront = Storefront(db, {"site-a": Site(pool("pool-1", member("r1", "pool-1")))})
+    await storefront.run()
+    storefront.registries.plant("superseded-1", offering_mode="bare_metal")
+    storefront.registries.unreachable = True
+
+    report = await storefront.run()
+
+    assert storefront.registries.sent == []
+    assert actions(report, "skip") == [
+        {"action": "skip", "registry": REGISTRY_URL, "reason": "registry_unreachable"}
+    ]
+    storefront.registries.unreachable = False
+    await storefront.run()
+    assert storefront.registries.operations() == [("closed", "superseded-1")]
+
+
 # -- an existing listing ---------------------------------------------------
 
 
@@ -1005,6 +1084,7 @@ async def test_a_sellers_close_is_left_closed(db):
         storefront.registries,
         registry_urls=(REGISTRY_URL,),
         storefront_url=STOREFRONT_URL,
+        publisher=SELLER,
     )
     await seller_close.close(
         BoundListing(listing_id, PublicationBinding("site-a", "bare_metal", "r1", BACKED)),
@@ -1310,16 +1390,27 @@ async def test_a_priced_machine_publishes_its_asking_rate(db):
 
     await storefront.run()
 
-    body = storefront.registries.sent[0][3]["listing_resource"]
-    assert body["asking_rate"] == {"amount": "12.50", "asset": "usd", "period": "hour"}
+    body = storefront.registries.sent[0][3]
+    # A price is a term of sale: published in the listing's pricing, never in
+    # the machine's description, though the storefront stores it beside the
+    # shape it prices.
+    assert body["pricing"] == {
+        "asking_rate": {"amount": "12.50", "asset": "usd", "period": "hour"},
+    }
+    assert "asking_rate" not in body["listing_resource"]
+    listing_id = storefront.listing("site-a", "pool-1", "r1")[0]
+    stored = await db.load_listing(listing_id=listing_id)
+    assert json.loads(stored["listing_resource"])["asking_rate"]["amount"] == "12.50"
 
 
-async def test_an_unpriced_machine_publishes_no_rate_field(db):
+async def test_an_unpriced_machine_publishes_no_pricing(db):
     storefront = Storefront(db, {"site-a": Site(pool("pool-1", member("r1", "pool-1")))})
 
     await storefront.run()
 
-    assert "asking_rate" not in storefront.registries.sent[0][3]["listing_resource"]
+    body = storefront.registries.sent[0][3]
+    assert "pricing" not in body
+    assert "asking_rate" not in body["listing_resource"]
 
 
 async def test_a_rate_change_or_removal_refreshes_in_place(db):
@@ -1330,16 +1421,18 @@ async def test_a_rate_change_or_removal_refreshes_in_place(db):
 
     site.serve(_priced(_rate("11.00")))
     changed = await storefront.run()
-    changed_body = storefront.registries.sent[0][3]["listing_resource"]
+    changed_body = storefront.registries.sent[0][3]
     site.serve(pool("pool-1", member("r1", "pool-1")))
     removed = await storefront.run()
-    removed_body = storefront.registries.sent[0][3]["listing_resource"]
+    removed_body = storefront.registries.sent[0][3]
 
     assert storefront.listing("site-a", "pool-1", "r1") == (listing_id, "open", None)
     assert [item["fields"] for item in actions(changed, "refresh")] == [["asking_rate"]]
     assert [item["fields"] for item in actions(removed, "refresh")] == [["asking_rate"]]
-    assert changed_body["asking_rate"]["amount"] == "11.00"
-    assert "asking_rate" not in removed_body
+    assert changed_body["pricing"]["asking_rate"]["amount"] == "11.00"
+    # The republication replaces the document whole, so the withdrawn price is
+    # gone rather than kept by a merge.
+    assert "pricing" not in removed_body
 
 
 async def test_an_unreadable_rate_holds_the_pool_and_keeps_its_listing(db):
@@ -1394,9 +1487,9 @@ async def test_an_override_rate_and_bound_reach_the_published_listing(db):
     report = await storefront.run()
 
     assert storefront.listing("site-a", "pool-1", "r1") == (listing_id, "open", None)
-    body = storefront.registries.sent[0][3]["listing_resource"]
-    assert body["asking_rate"]["amount"] == "9.00"
-    assert body["min_duration_seconds"] == 3600
+    body = storefront.registries.sent[0][3]
+    assert body["pricing"]["asking_rate"]["amount"] == "9.00"
+    assert body["listing_resource"]["min_duration_seconds"] == 3600
     assert sorted(actions(report, "refresh")[0]["fields"]) == [
         "asking_rate", "min_duration_seconds",
     ]

@@ -3,27 +3,27 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 from market_resource_pools import ResolvedPool
 from market_resource_pools_contracts.backing import BACKED
 
+from arkhai_api_selling.migrations import BASELINE_ID, baseline_tables
 from arkhai_api_selling.persistence import (
-    ESCROW_SETTLEMENT_IDENTITY_MIGRATION,
-    ISSUANCE_EVIDENCE_MIGRATION,
     TERMS_TABLE,
     StorefrontSQLiteClient,
-    migrations,
+    refuse_unbound_listings,
 )
 from arkhai_api_selling.quota_listing import QuotaPool, prepare_listing_binding
-from tests.bundles import BUYER, CLAIMANT, DOMAIN, EXAMPLE
+from tests.bundles import BUYER, CLAIMANT, DOMAIN, EXAMPLE, create_tables, example_chain
 
 RESOURCE = {"product": "alpha", "quota": "quota-a", "offering_mode": "example"}
 
 
 def _client(tmp_path) -> StorefrontSQLiteClient:
-    return StorefrontSQLiteClient(str(tmp_path / "storefront.db"), EXAMPLE)
+    return create_tables(tmp_path / "storefront.db")
 
 
 async def _bound_listing(client: StorefrontSQLiteClient, listing_id: str = "L-1") -> None:
@@ -62,23 +62,23 @@ def _applied(client: StorefrontSQLiteClient) -> set[str]:
         return {str(value) for row in conn.execute("SELECT * FROM schema_migrations") for value in row}
 
 
-def test_the_tables_are_named_from_the_prefix_and_the_migrations_keep_their_identifiers(tmp_path):
+def test_the_tables_are_named_from_the_prefix_and_the_baseline_keeps_its_identifier(tmp_path):
     client = _client(tmp_path)
 
     tables = _tables(client)
-    assert {
+    assert baseline_tables("example") == {
         "example_settlement_evidence",
         "example_issuance_progress",
         "example_issuance_evidence",
         "example_private_results",
         TERMS_TABLE,
-    } <= tables
+    }
+    assert baseline_tables("example") <= tables
     assert not any(table.startswith("api_credit") for table in tables)
-    assert [migration.id for migration in migrations(EXAMPLE)] == [
-        ESCROW_SETTLEMENT_IDENTITY_MIGRATION,
-        ISSUANCE_EVIDENCE_MIGRATION,
-    ]
-    assert {ESCROW_SETTLEMENT_IDENTITY_MIGRATION, ISSUANCE_EVIDENCE_MIGRATION} <= _applied(client)
+    chain = example_chain()
+    assert chain.baseline_ids[-1] == BASELINE_ID
+    assert example_chain(replace(EXAMPLE, table_prefix="other")).ids == chain.ids
+    assert _applied(client) >= set(chain.ids)
     with sqlite3.connect(client.db_path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(escrows)")}
     assert {"obligation_ref", "obligation_index"} <= columns
@@ -114,7 +114,7 @@ async def test_a_listing_without_a_binding_refuses_the_database_naming_the_noun(
     )
 
     with pytest.raises(RuntimeError, match=r"^credit listing 'L-unbound' has no durable listing binding"):
-        _client(tmp_path)
+        refuse_unbound_listings(client.db_path, EXAMPLE)
 
 
 def _opening(negotiation_id: str = "neg-1") -> tuple[dict, dict]:

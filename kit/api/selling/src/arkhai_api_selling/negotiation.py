@@ -55,8 +55,8 @@ from market_policy.negotiation_middleware import (
     their_last_proposal,
 )
 from market_policy.scalar_policies import (
-    _amount_from_proposal,
     _loads_json_list,
+    amount_from_proposal,
     make_escrow_kind_dispatch_middleware,
     pinned_proposal,
     proposal_uses_scalar_amount,
@@ -223,7 +223,7 @@ def make_round_zero_guard(
         )
         uses_scalar_amount = proposal_uses_scalar_amount(listing, proposal_for_scalar)
         context.intermediate["uses_scalar_amount"] = uses_scalar_amount
-        if uses_scalar_amount and _amount_from_proposal(proposal_for_scalar) is None:
+        if uses_scalar_amount and amount_from_proposal(proposal_for_scalar) is None:
             return _reject(
                 "missing_amount: buyer's escrow proposal has no fields.amount", context
             )
@@ -642,7 +642,7 @@ def _agreement(
 
 
 def _amount(proposal: Mapping[str, Any] | None) -> int | None:
-    value = _amount_from_proposal(proposal)
+    value = amount_from_proposal(proposal)
     return int(value) if value is not None else None
 
 
@@ -945,7 +945,9 @@ def _with_agreement(
             if isinstance(artifacts.get("settlement_selection"), Mapping)
             else None
         ),
-        amount=acceptance.agreed_amount,
+        # API-family listings are priced flat: the negotiated scalar is the
+        # absolute amount the buyer pays.
+        amount=acceptance.negotiated_scalar,
         asset=asset,
         duration_seconds=acceptance.agreement.duration_seconds,
         start_utc=acceptance.agreement.start_utc,
@@ -993,6 +995,7 @@ async def _validate_continuation(
     _listing_record: Mapping[str, Any],
     terms: NegotiationTerms,
     thread: Mapping[str, Any],
+    _revised_terms: NegotiationTerms | None,
 ) -> None:
     negotiation_id = thread.get("negotiation_id")
     if not isinstance(negotiation_id, str) or not negotiation_id:
@@ -1077,7 +1080,7 @@ def acceptance_artifacts(
             dispatch,
             selection=selection,
             option=option,
-            agreed_amount=acceptance.agreed_amount,
+            agreed_amount=acceptance.negotiated_scalar,
             buyer_principal=acceptance.buyer_principal,
             seller_principal=acceptance.seller_principal,
             listing=acceptance.listing_record,

@@ -21,14 +21,18 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
+from pathlib import Path
 
 import pytest
+import yaml
+from jsonschema import Draft202012Validator
 from arkhai_vms_listings.listing_shapes import resolve_shape
 from market_alkahest.alkahest import get_recipient_arbiter
 from market_alkahest.dev_chain import anvil_address_book_path
 from market_pool_overrides import PoolOverrideClient
 from market_settlement_runtime import ReadinessBlocker
 
+import market_storefront.container as container
 from market_storefront import lifecycle
 from market_storefront.startup import _start_lifecycle_loops
 from market_storefront.utils import config as storefront_config
@@ -894,6 +898,81 @@ async def test_a_registry_that_missed_a_close_is_repaired_by_the_next_cycle(
     assert (await _cycle(world))["counts"] == {}
 
 
+async def test_a_cycle_closes_registry_listings_the_storefront_does_not_hold(
+    registry_world,
+):
+    """Each registry is read under the storefront's own principal. A VM listing
+    the storefront does not hold open is closed at each registry holding it; a
+    listing it holds open stays open, and so does a bare-metal listing under the
+    same principal, which the bare-metal storefront publishes though this one
+    composes the domain; a preview closes nothing."""
+    world = registry_world
+    world.pools.append(pool("broker-a", backing="unbacked"))
+    await _cycle(world)
+    (held,) = await _listings(world)
+    registry_a, registry_b = world.registries.urls
+    world.registries.plant(registry_a, "unknown-vm", offering_mode="vm")
+    world.registries.plant(registry_b, "unknown-vm", offering_mode="vm")
+    world.registries.plant(registry_b, "bare-metal-1", offering_mode="bare_metal")
+    world.registries.plant(registry_a, held, offering_mode="vm")
+    world.registries.sent.clear()
+
+    preview = await _cycle(world, dry_run=True)
+
+    swept = [
+        (a["listing_id"], a["registry"])
+        for a in preview["actions"]
+        if a["action"] == "close" and a["reason"] == "not_held"
+    ]
+    assert sorted(swept) == [("unknown-vm", registry_a), ("unknown-vm", registry_b)]
+    assert world.registries.sent == []
+
+    result = await _cycle(world)
+
+    assert result["counts"] == {"close": 2}
+    assert [(op, url, listing, body) for op, url, listing, body in world.registries.sent] == [
+        ("update", registry_a, "unknown-vm", {"status": "closed"}),
+        ("update", registry_b, "unknown-vm", {"status": "closed"}),
+    ]
+    assert [item.id for item in world.registries.planted[registry_a]] == [held]
+    assert [item.id for item in world.registries.planted[registry_b]] == ["bare-metal-1"]
+    assert world.registries.publisher_reads[-1] == (
+        container.resolved_marketplace_signer.identity
+    )
+    assert (await _listing(world, held))["status"] == "open"
+    assert (await _cycle(world))["counts"] == {}
+
+
+async def test_a_listing_held_through_a_site_outage_stays_open_at_the_registry(tmp_path):
+    """Restarted while its site cannot be reached, the storefront holds the
+    site's listing open with no projection to read; the sweep leaves that
+    listing open at the registry and still closes one it does not hold."""
+    async with publication_app(
+        tmp_path, mechanism_fulfillment=_UNBACKED_PUBLISHABLE
+    ) as world:
+        world.pools.append(pool("broker-a", backing="unbacked"))
+        await _cycle(world)
+        (held,) = await _listings(world)
+
+    async with publication_app(
+        tmp_path, mechanism_fulfillment=_UNBACKED_PUBLISHABLE, unreachable_sites=(SITE,)
+    ) as world:
+        registry_a, _registry_b = world.registries.urls
+        world.registries.plant(registry_a, held, offering_mode="vm")
+        world.registries.plant(registry_a, "unknown-vm", offering_mode="vm")
+
+        result = await _cycle(world)
+
+        assert {
+            (a.get("site_id"), a.get("reason")) for a in result["actions"] if a["action"] == "hold"
+        } == {(SITE, "site_projection_unknown")}
+        assert [(op, listing) for op, _url, listing, _ in world.registries.sent] == [
+            ("update", "unknown-vm")
+        ]
+        assert [item.id for item in world.registries.planted[registry_a]] == [held]
+        assert (await _listing(world, held))["status"] == "open"
+
+
 async def test_a_listing_every_registry_refused_is_published_once_they_answer(registry_world):
     """A storefront with a candidate to publish while every registry refuses
     records the listing, reports it unconverged at each registry, and closes
@@ -1156,7 +1235,7 @@ async def test_a_shape_without_gpus_publishes_no_gpu_field_and_refreshes_without
     published = world.registries.to("publish", listing_id)
     assert len(published) == len(world.registries.urls)
     body = published[0][1]["listing_resource"]
-    assert body == listing["listing_resource"]
+    assert body == {key: value for key, value in listing["listing_resource"].items() if value is not None}
     assert (body["vcpu_count"], body["ram_gb"]) == (16, 64)
     assert "gpu_count" not in body and "gpu_model" not in body
     assert all(other["listing_resource"] == body for _, other in published)
@@ -1486,10 +1565,89 @@ async def test_shape_priced_listings_publish_composed_rates_and_record_their_str
         assert (await _listing(world, listing_id))["rate_structure"] == {
             "gpu": _gpu_rates("80")["gpu"]["H100"]["rates"]
         }
-        # A registry receives the composed rate and never the structure.
+        # The composed rate and its resolved family structure travel together,
+        # the structure in the listing's pricing and never in its capacity.
         for _, body in world.registries.to("publish", listing_id):
+            assert body["pricing"] == {
+                "rate_structure": {"gpu": _gpu_rates("80")["gpu"]["H100"]["rates"]}
+            }
             assert "rate_structure" not in body
             assert body["accepted_escrows"] == row["accepted_escrows"]
+
+
+#: The compute registry's own listing schema, as the registry validates a
+#: publication against it.
+_COMPUTE_SPEC = (
+    Path(__file__).resolve().parents[5] / "core/registry/src/core_registry/filter-spec.yaml"
+)
+_PRICED_SHAPE = {"gpu": {"count": 1, "model": "H100"}, "cpu": {"count": 8},
+                 "memory": {"gib": 32}, "storage": {"gib": 100}}
+
+
+def _compute_schema_errors(body: dict) -> list[str]:
+    shape = yaml.safe_load(_COMPUTE_SPEC.read_text())["listing_shape"]
+    return [
+        f"{list(error.absolute_path)}: {error.message}"
+        for error in Draft202012Validator(shape).iter_errors(body)
+    ]
+
+
+async def test_every_publication_path_sends_a_document_the_compute_registry_admits(
+    registry_world,
+):
+    """A shape-priced listing with a declared asking rate: its first publication,
+    which one registry refuses, and the repair the next cycle makes there
+    through the domain's publication candidate each send a document the compute
+    registry's schema admits, both prices in its ``pricing`` and none in its
+    capacity description."""
+    world = registry_world
+    asset = settlement_clause()["asset"]
+
+    def family(rate: str) -> dict:
+        return {"rates": [{"asset": asset, "rate": rate, "per": "hour"}]}
+
+    world.set_settlement_clauses([_rateless_clause()])
+    world.pools.append(
+        pool(
+            "broker-a",
+            backing="unbacked",
+            capacity={"gpu_count": 2, "vcpu_count": 16, "ram_gb": 64, "disk_gb": 200},
+            listing_shapes={"vm": [_PRICED_SHAPE]},
+            asking_rates={"vm": [
+                {"shape": _PRICED_SHAPE, "amount": "2.10", "asset": "usd", "period": "hour"}
+            ]},
+            pricing={
+                "gpu": {"H100": family("80")},
+                "cpu": family("5"),
+                "memory": family("1"),
+                "storage": family("1"),
+            },
+        )
+    )
+    registry_a, registry_b = world.registries.urls
+    world.registries.failing = {("publish", registry_b)}
+
+    await _cycle(world)
+    (listing_id,) = await _listings(world)
+    (first,) = [body for url, body in world.registries.to("publish", listing_id) if url == registry_a]
+    world.registries.failing.clear()
+    world.registries.sent.clear()
+    repaired = await _cycle(world)
+
+    assert repaired["counts"] == {"converge": 1}
+    (repair,) = [body for url, body in world.registries.to("publish", listing_id) if url == registry_b]
+    for body in (first, repair):
+        assert _compute_schema_errors(body) == []
+        assert body["pricing"]["asking_rate"] == {
+            "amount": "2.10", "asset": "usd", "period": "hour",
+        }
+        assert set(body["pricing"]["rate_structure"]) == {"cpu", "gpu", "memory", "storage"}
+        assert "asking_rate" not in body["listing_resource"]
+        assert "rate_structure" not in body
+    assert repair == first
+    # The storefront's own view keeps the rate beside the shape it prices.
+    stored = await _listing(world, listing_id)
+    assert stored["listing_resource"]["asking_rate"]["amount"] == "2.10"
 
 
 async def test_a_family_rate_change_refreshes_shape_priced_listings_in_place(world):

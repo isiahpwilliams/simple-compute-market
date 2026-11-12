@@ -101,7 +101,7 @@ class AlkahestEscrowAcceptance:
             return authorized_escrow_proposal_at_amount(
                 proposal=acceptance.pinned_proposal,
                 listing=acceptance.listing_record,
-                agreed_amount=acceptance.agreed_amount,
+                agreed_amount=acceptance.negotiated_scalar,
                 uses_scalar_amount=acceptance.uses_scalar_amount,
             )
         except ReleaseConditionError as exc:
@@ -113,7 +113,7 @@ class AlkahestEscrowAcceptance:
                 buyer_principal=acceptance.buyer_principal,
                 seller_principal=acceptance.seller_principal,
                 proposal=acceptance.pinned_proposal,
-                agreed_amount=acceptance.agreed_amount,
+                agreed_amount=acceptance.negotiated_scalar,
                 uses_scalar_amount=acceptance.uses_scalar_amount,
                 listing=acceptance.listing_record,
                 chain_config_paths=self._chain_config_paths(),
